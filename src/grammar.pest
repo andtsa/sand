@@ -1,0 +1,60 @@
+WHITESPACE = _{ " " | "\t" | "\n" }
+
+program = { function+ }
+
+function = { "def" ~ identifier ~ "(" ~ parameter ~ ")" ~ ":" ~ type_ ~ ":=" ~ "{" ~ line ~ "}" }
+
+parameter = { ( identifier ~ ":" ~ type_ ~ ("," ~ identifier ~ ":" ~ type_)* )? }
+
+type_ = { "Int"
+        | "Bool"
+        }
+
+line = { ifline+ }
+
+ifline = { declaration
+        | assignment
+        | ifstatement
+        | "return" ~ expression
+        }
+
+declaration = { "var" ~ identifier ~ ":" ~ type_ ~ ("=" ~ expression)? }
+
+assignment = { identifier ~ "=" ~ expression }
+
+ifstatement = { "if" ~ conditions ~ "then" ~ "{" ~ ifline+ ~ "}" ~ ( "else" ~ "{" ~ ifline+ ~ "}")? }
+
+conditions = { or_condition }
+
+or_condition = { and_condition ~ ( "or" ~ and_condition )* }
+
+and_condition = { condition ~ ( "and" ~ condition )* }
+
+condition = { "not" ~ condition
+            | "(" ~ conditions ~ ")"
+            | "true" | "false"
+            | expression ~ comp ~ expression
+            }
+
+comp = { "=="
+        | "<"
+        | ">"
+        | ">="
+        | "<="
+        }
+
+expression = { factor ~ (("+" | "-") ~ factor )* }
+
+factor = { term ~ (("*" | "/") ~ term)* }
+
+term = { functioncall
+    | number
+    | identifier
+    | "(" ~ expression ~ ")"
+    }
+
+functioncall = { identifier ~ "(" ~ ( expression ~ ("," ~ expression)* )? ~ ")" }
+
+identifier = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC)* }
+
+number = @{ ASCII_DIGIT+ }
