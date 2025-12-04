@@ -1,6 +1,9 @@
 use pest::Parser;
 use pest_derive::Parser;
 
+pub mod lang;
+pub mod parse;
+
 #[derive(Parser)]
 #[grammar = "grammar.pest"]
 struct MathParser;
@@ -14,20 +17,23 @@ fn print_pairs(pairs: pest::iterators::Pairs<Rule>, indent: usize) {
     }
 }
 
-fn main() {
+        // a = (((a) * 2) - c) * ( a / b ));
+//
+fn main() -> anyhow::Result<()> {
     let input = "\
     def main(a: Int, b: Int): Int := { \
-        var c: Int = 2
-        a = a * 2 - c * ( a / b )
-        if a>2 and true then { \
-            return a \
-        } else { \
-            return b\
-        } \
+        let c: Int = 2;
+        let d: Bool = !c;
+        a =  a > 2 & true;
+        if a > 2 & true then { \
+            a;\
+        } else {\
+            b;\
+        };\
     }";
 
-    let pairs = MathParser::parse(Rule::program, input)
-        .expect("Failed to parse input");
+    let pairs = MathParser::parse(Rule::program, input)?;
 
     print_pairs(pairs, 0);
+    Ok(())
 }

@@ -1,60 +1,97 @@
-WHITESPACE = _{ " " | "\t" | "\n" }
+// language definition
+WHITESPACE = _{ " " | "\t" | "\n" | "\r" }
 
-program = { function+ }
+// primitive tokens
+type_ = {
+    "Int"
+  | "Bool"
+  | "Unit" // equivalent to rust (), python None, (sort of) java null
+}
 
-function = { "def" ~ identifier ~ "(" ~ parameter ~ ")" ~ ":" ~ type_ ~ ":=" ~ "{" ~ line ~ "}" }
+identifier = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
 
-parameter = { ( identifier ~ ":" ~ type_ ~ ("," ~ identifier ~ ":" ~ type_)* )? }
+number = @{ ASCII_DIGIT+ }
 
-type_ = { "Int"
-        | "Bool"
-        }
+integer = { ("+" | "-")? ~ number }
 
-line = { ifline+ }
+boolean = { "true" | "false" }
 
-ifline = { declaration
-        | assignment
-        | ifstatement
-        | "return" ~ expression
-        }
+binary_operand = _{ add | subtract | multiply | divide | power | and | or | xor }
 
-declaration = { "var" ~ identifier ~ ":" ~ type_ ~ ("=" ~ expression)? }
+comp = {
+    gt
+  | lt
+  | eq
+  | ge
+  | le
+}
+
+unary_operand = { subtract | negate }
+
+add      = { "+" }
+subtract = { "-" }
+multiply = { "*" }
+divide   = { "/" }
+pow      = { "^" }
+negate   = { "!" }
+and      = { "&" }
+or       = { "|" }
+xor      = { "⊕" }
+gt       = { ">" }
+lt       = { "<" }
+eq       = { "==" }
+ge       = { ">=" }
+le       = { "<=" }
+
+// language is built aruind expressions,
+ifstatement = {
+    "if" ~ expression ~ "then" ~ "{" ~ statement* ~ "}" ~ ("else" ~ "{" ~ statement* ~ "}")?
+}
+
+function_call = { identifier ~ "(" ~ (expression ~ ("," ~ expression)*)? ~ ")" }
+
+// precedence chaining
+expression     = { logic_or }
+logic_or       = { logic_xor ~ (or ~ logic_xor)* }
+logic_xor      = { logic_and ~ (xor ~ logic_and)* }
+logic_and      = { equality ~ (and ~ equality)* }
+equality       = { comparison ~ (eq ~ comparison)* }
+comparison     = { additive ~ (comp ~ additive)* }
+additive       = { multiplicative ~ (add ~ multiplicative)* }
+multiplicative = { power ~ (multiply ~ power)* }
+power          = { unary ~ (pow ~ unary)* }
+unary          = { (unary_operand ~ unary) | primary }
+
+primary = {
+    ("(" ~ expression ~ ")")
+  | ifstatement
+  | function_call
+  | integer
+  | boolean
+  | identifier
+}
+
+// variables
+declaration = { "let" ~ identifier ~ ":" ~ type_ ~ "=" ~ expression }
+
+// left here for later:
+// constant = { "const" ~ declaration }
+// mutable = { "mut" ~ declaration }
 
 assignment = { identifier ~ "=" ~ expression }
 
-ifstatement = { "if" ~ conditions ~ "then" ~ "{" ~ ifline+ ~ "}" ~ ( "else" ~ "{" ~ ifline+ ~ "}")? }
+// statements are the imperative elements of the language
+statement = {
+    ((declaration | assignment | expression) ~ ";")
+}
 
-conditions = { or_condition }
+// functions are highest-order tokens
+parameter  = { identifier ~ ":" ~ type_ }
+parameters = { parameter ~ ("," ~ parameter)* ~ ","? }
 
-or_condition = { and_condition ~ ( "or" ~ and_condition )* }
+function = { "def" ~ identifier ~ "(" ~ parameters ~ ")" ~ ":" ~ type_ ~ ":=" ~ "{" ~ statement* ~ "}" }
 
-and_condition = { condition ~ ( "and" ~ condition )* }
-
-condition = { "not" ~ condition
-            | "(" ~ conditions ~ ")"
-            | "true" | "false"
-            | expression ~ comp ~ expression
-            }
-
-comp = { "=="
-        | "<"
-        | ">"
-        | ">="
-        | "<="
-        }
-
-expression = { factor ~ (("+" | "-") ~ factor )* }
-
-factor = { term ~ (("*" | "/") ~ term)* }
-
-term = { functioncall
-    | number
-    | identifier
-    | "(" ~ expression ~ ")"
-    }
-
-functioncall = { identifier ~ "(" ~ ( expression ~ ("," ~ expression)* )? ~ ")" }
-
-identifier = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC)* }
-
-number = @{ ASCII_DIGIT+ }
+// programs are built from functions
+// since at least once function must be present to parse,
+// the evaluation just has to find the main function
+program = { function+ }
