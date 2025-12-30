@@ -1,6 +1,7 @@
 //! rust types for the language
 
-pub struct Program(Vec<Function>);
+#[derive(Debug, Clone)]
+pub struct Program(pub Vec<Function>);
 
 #[derive(Debug, Clone, Copy)]
 pub enum Ty {
@@ -9,18 +10,21 @@ pub enum Ty {
     Unit,
 }
 
+#[derive(Debug, Clone)]
 pub struct Parameter {
     pub name: String,
     pub ty: Ty,
 }
 
+#[derive(Debug, Clone)]
 pub struct Function {
     pub name: String,
     pub parameters: Vec<Parameter>,
     pub ret_type: Ty,
-    pub body: Vec<Statement>,
+    pub body: Expression,
 }
 
+#[derive(Debug, Clone)]
 pub enum Statement {
     Declaration {
         name: String,
@@ -36,11 +40,12 @@ pub enum Statement {
     Expr(Expression),
 }
 
+#[derive(Debug, Clone)]
 pub enum Expression {
     If {
         cond: Box<Expression>,
         t: Box<Expression>,
-        f: Option<Box<Expression>>,
+        f: Box<Expression>,
     },
     BinOp {
         left: Box<Expression>,
@@ -59,6 +64,10 @@ pub enum Expression {
     Int(i32),
     Bool(bool),
     Unit,
+    Block {
+        statements: Vec<Statement>,
+        expr: Option<Box<Expression>>,
+    },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -79,6 +88,7 @@ pub enum CompOp {
     Ge,
     Le,
     Eq,
+    Ne,
     Gt,
     Lt,
 }
