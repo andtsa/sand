@@ -47,6 +47,10 @@ pub enum Expression {
         t: Box<Expression>,
         f: Box<Expression>,
     },
+    While {
+        cond: Box<Expression>,
+        body: Box<Expression>,
+    },
     BinOp {
         left: Box<Expression>,
         op: Bop,

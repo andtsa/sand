@@ -21,13 +21,17 @@ fn main() -> anyhow::Result<()> {
         let d: Bool = !c;
         a =  a > 2 & true;
         if a > 2 & true then { \
-            a\
+            while d | false do { \
+                a = a + 1; \
+                d = !d; \
+            }; \
+            a \
         } else {\
             b\
         };\
         \
     }";
-    let src = r#"
+    let _src = r#"
         def main(x: Int, y: Int): Int := {
             let z: Int = x + y * 2;
             z
@@ -35,7 +39,7 @@ fn main() -> anyhow::Result<()> {
         
     "#;
 
-    let program = Program::parse(src)?;
+    let program = Program::parse(_input)?;
     println!("{:#?}", program);
 
     Ok(())

@@ -43,12 +43,17 @@ ifstatement = {
     "if" ~ expression ~ "then" ~ expression ~ ("else" ~ expression)?
 }
 
+whileloop = {
+    "while" ~ expression ~ "do" ~ expression
+}
+
 function_call = { identifier ~ "(" ~ (expression ~ ("," ~ expression)*)? ~ ")" }
 
 // precedence chaining
 primary = {
     ("(" ~ expression ~ ")")
   | ifstatement
+  | whileloop
   | function_call
   | number
   | boolean

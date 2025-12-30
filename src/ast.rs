@@ -414,7 +414,33 @@ fn build_unary(pair: Pair<Rule>) -> Result<Expression, AstError> {
     assert_eq!(pair.as_rule(), Rule::unary);
     let mut inner = pair.into_inner();
     let first = inner.next().missing("unary expr")?;
+
     match first.as_rule() {
+        // case where pest returns the operator wrapped in unary_operand
+        Rule::unary_operand => {
+            // unary_operand contains a single child: subtract | negate
+            let op_pair = first.into_inner().next().missing("unary operator")?;
+            match op_pair.as_rule() {
+                Rule::subtract => {
+                    let rhs = build_unary(inner.next().missing("subtract rhs")?)?;
+                    Ok(Expression::UnOp {
+                        op: Uop::Neg,
+                        right: Box::new(rhs),
+                    })
+                }
+                Rule::negate => {
+                    let rhs = build_unary(inner.next().missing("negate rhs")?)?;
+                    Ok(Expression::UnOp {
+                        op: Uop::Not,
+                        right: Box::new(rhs),
+                    })
+                }
+                other => Err(AstError::UnexpectedRule {
+                    expected: "subtract | negate",
+                    got: other,
+                }),
+            }
+        }
         Rule::subtract => {
             let rhs = build_unary(inner.next().missing("subtract rhs")?)?;
             Ok(Expression::UnOp {
@@ -429,6 +455,8 @@ fn build_unary(pair: Pair<Rule>) -> Result<Expression, AstError> {
                 right: Box::new(rhs),
             })
         }
+
+        // otherwise it's a primary/parenthesized expression
         _ => build_primary(first),
     }
 }
@@ -471,6 +499,7 @@ fn build_primary(pair: Pair<Rule>) -> Result<Expression, AstError> {
     match inner.as_rule() {
         Rule::expression => build_expr(inner), // parenthesized expression
         Rule::ifstatement => build_if(inner),
+        Rule::whileloop => build_while(inner),
         Rule::function_call => build_call(inner),
         Rule::number => {
             let s = inner.as_str().to_string();
@@ -514,6 +543,22 @@ fn build_if(pair: Pair<Rule>) -> Result<Expression, AstError> {
         cond: Box::new(cond),
         t: Box::new(then_e),
         f: Box::new(else_e),
+    })
+}
+
+fn build_while(pair: Pair<Rule>) -> Result<Expression, AstError> {
+    assert_eq!(pair.as_rule(), Rule::whileloop);
+    // grammar: while ~ expression ~ do ~ expression
+    let mut inner = pair.into_inner();
+    let cond_pair = inner.next().missing("while condition")?;
+    let body_pair = inner.next().missing("while body")?;
+
+    let cond = build_expr(cond_pair)?;
+    let body = build_expr(body_pair)?;
+
+    Ok(Expression::While {
+        cond: Box::new(cond),
+        body: Box::new(body),
     })
 }
 
