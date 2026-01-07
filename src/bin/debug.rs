@@ -1,9 +1,5 @@
-use crate::lang::Program;
-use crate::parse::Rule;
-
-pub mod ast;
-pub mod lang;
-pub mod parse;
+use untitled::lang::Program;
+use untitled::parse::Rule;
 
 fn _print_pairs(pairs: pest::iterators::Pairs<Rule>, indent: usize) {
     let indent_str = "  ".repeat(indent);
@@ -18,16 +14,17 @@ fn main() -> anyhow::Result<()> {
     let _input = "\
     def main(a: Int, b: Int): Int := { \
         let c: Int = 2;
-        let d: Bool = !c;
-        a =  a > 2 & true;
-        if a > 2 & true then { \
+        let d: Bool = !(c == 1);
+        let a: Int = -(1); \
+        if a < 2 & true then { \
             while d | false do { \
                 a = a + 1; \
                 d = !d; \
+                println(123, a, d); \
             }; \
             a \
         } else {\
-            b\
+            d\
         };\
         \
     }";
@@ -39,8 +36,22 @@ fn main() -> anyhow::Result<()> {
         
     "#;
 
-    let program = Program::parse(_input)?;
+    let _test = r#"
+        def main(): Int := {
+            let a: Int = 10;
+            let b: Int = 20;
+            while a < b do {
+                a = a + 1;
+                println(a - b);
+            };
+            a
+        }
+        "#;
+
+    let program = Program::parse(_test)?;
     println!("{:#?}", program);
 
+    let eval = program.interpret()?;
+    println!("Program evaluated to: {:?}", eval);
     Ok(())
 }

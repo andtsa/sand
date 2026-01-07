@@ -1,5 +1,4 @@
 //! parse the pest tokens into an AST
-//!
 
 use pest_derive::Parser;
 

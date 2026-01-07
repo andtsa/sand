@@ -1,13 +1,16 @@
 //! build an AST from the Pair tree
+#![allow(clippy::result_large_err)]
 
-use crate::lang::*;
-use crate::parse::{LangParser, Rule};
 use pest::Parser;
 use pest::error::Error;
 use pest::iterators::Pair;
-
 use thiserror::Error;
 
+use crate::lang::*;
+use crate::parse::LangParser;
+use crate::parse::Rule;
+
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Error)]
 pub enum AstError {
     #[error("parse error: {0}")]
