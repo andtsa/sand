@@ -2,9 +2,9 @@
 //! interactions
 
 use crate::AnnotatedExpression;
-use crate::lang::Program;
+use crate::lang::Expr;
 
-pub fn annotate(ast: &Program) -> anyhow::Result<Vec<AnnotatedExpression>> {
-    println!("{ast:?}");
+pub fn annotate(exprs: Vec<Expr>) -> anyhow::Result<Vec<AnnotatedExpression>> {
+    println!("{exprs:?}");
     todo!()
 }

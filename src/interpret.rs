@@ -78,6 +78,12 @@ impl Env {
     }
 }
 
+impl Expr {
+    pub fn evaluate(&self, env: &EnvRef) -> anyhow::Result<Expression> {
+        self.expr.evaluate(env)
+    }
+}
+
 impl Expression {
     /// evaluate the expression and return the resulting expression
     pub fn evaluate(&self, env: &EnvRef) -> anyhow::Result<Expression> {

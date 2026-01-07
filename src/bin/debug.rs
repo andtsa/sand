@@ -48,6 +48,23 @@ fn main() -> anyhow::Result<()> {
         }
         "#;
 
+    let _test_2 = r#"
+        def main(): Int := {
+            let a: Int = 9;
+            let x: Int = {
+                let y: Int = 4;
+                a = a + y;
+                let z: Int = 3;
+                y * z / a
+            };
+
+            let f = 5 * 4 / a;
+
+            5 * 4 / a
+            
+        }
+    "#;
+
     let program = Program::parse(_test)?;
     println!("{:#?}", program);
 
