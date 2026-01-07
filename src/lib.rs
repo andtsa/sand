@@ -2,9 +2,11 @@
 
 use std::collections::BTreeMap;
 
+use crate::annotate::annotate;
 use crate::lang::Expression;
 use crate::lang::Program;
 
+pub mod annotate;
 pub mod ast;
 pub mod interpret;
 pub mod lang;
@@ -40,7 +42,7 @@ pub fn analyse(program: &str) -> anyhow::Result<ProgramAnnotations> {
     // we should also consider the order of evaluation, such that expressions later
     // in the vector do not affect earlier ones - this similar to a control flow
     // graph, but for our very much linear program.
-    let expressions: Vec<AnnotatedExpression>;
+    let expressions: Vec<AnnotatedExpression> = annotate(&ast)?;
 
     // we start building program annotations
     let mut annotations = ProgramAnnotations::default();
