@@ -66,7 +66,7 @@ pub enum Expression {
         args: Vec<Expr>,
     },
     Var(String),
-    Int(i32),
+    Int(i64),
     Bool(bool),
     Unit,
     Block {

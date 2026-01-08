@@ -4,6 +4,18 @@ version = "0.1.0"
 edition = "2024"
 default-run = "debug"
 
+# integration tests under tests/ directory
+[[test]]
+name = "fib"
+path = "tests/examples/fib.rs"
+
+[[test]]
+name = "fact"
+path = "tests/examples/fact.rs"
+
+[[test]]
+name = "parse"
+path = "tests/fail_parse.rs"
 
 [dependencies]
 anyhow = "1"

@@ -1,6 +1,6 @@
 // language definition
 WHITESPACE = _{ " " | "\t" | "\n" | "\r" }
-COMMENT = _{ ("/*" ~ (!"*/" ~ ANY)* ~ "*/") | ("//" ~ (!"\n" ~ ANY)*) }
+COMMENT    = _{ ("/*" ~ (!"*/" ~ ANY)* ~ "*/") | ("//" ~ (!"\n" ~ ANY)*) }
 
 // primitive tokens
 type_ = {
@@ -35,8 +35,8 @@ gt       = { ">" }
 lt       = { "<" }
 ne       = { "≠" | "!=" }
 eq       = { "==" }
-ge       = { ">=" }
-le       = { "<=" }
+ge       = { ">=" | "≥" }
+le       = { "<=" | "≤" }
 
 // language is built around expressions,
 ifstatement = {
@@ -61,15 +61,15 @@ primary = {
   | ("{" ~ statement* ~ expression? ~ "}")
 }
 
-unary = { (unary_operand ~ unary) | primary }
-power = { unary ~ (pow ~ power)? }
-mul_div = { power ~ ( (multiply | divide) ~ power )* } 
-add_sub = { mul_div ~ ( (add | subtract) ~ mul_div )* } 
-comparison = { add_sub ~ ( (gt | lt | ge | le) ~ add_sub )* }
-equality = { comparison ~ ( (eq | ne) ~ comparison )* }
-logic_and = { equality ~ (and ~ equality)* }
-logic_xor = { logic_and ~ (xor ~ logic_and)* }
-logic_or = { logic_xor ~ (or ~ logic_xor)* }
+unary      = { (unary_operand ~ unary) | primary }
+power      = { unary ~ (pow ~ power)? }
+mul_div    = { power ~ ((multiply | divide) ~ power)* }
+add_sub    = { mul_div ~ ((add | subtract) ~ mul_div)* }
+comparison = { add_sub ~ ((gt | lt | ge | le) ~ add_sub)* }
+equality   = { comparison ~ ((eq | ne) ~ comparison)* }
+logic_and  = { equality ~ (and ~ equality)* }
+logic_xor  = { logic_and ~ (xor ~ logic_and)* }
+logic_or   = { logic_xor ~ (or ~ logic_xor)* }
 expression = { logic_or }
 
 // variables
