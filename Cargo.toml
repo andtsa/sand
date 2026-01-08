@@ -2,10 +2,13 @@
 name = "untitled"
 version = "0.1.0"
 edition = "2024"
+default-run = "debug"
+
 
 [dependencies]
 anyhow = "1"
 pest = "2.8.4"
 pest_derive = "2.8.4"
+petgraph = "0.8.3"
 take-if = "1.0.0"
 thiserror = "2"

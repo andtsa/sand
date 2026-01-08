@@ -3,7 +3,7 @@
 #[derive(Debug, Clone)]
 pub struct Program(pub Vec<Function>);
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Ty {
     Int,
     Bool,
@@ -21,48 +21,49 @@ pub struct Function {
     pub name: String,
     pub parameters: Vec<Parameter>,
     pub ret_type: Ty,
-    pub body: Expression,
+    pub body: Expr,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Statement {
-    Declaration {
-        name: String,
-        ty: Ty,
-        val: Expression,
-    },
+    Declaration { name: String, ty: Ty, val: Expr },
 
-    Assignment {
-        name: String,
-        val: Expression,
-    },
+    Assignment { name: String, val: Expr },
 
-    Expr(Expression),
+    Expr(Expr),
 }
 
-#[derive(Debug, Clone)]
+/// `Expr` wraps an `Expression` and carries start/end positions (line,col)
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Expr {
+    pub expr: Expression,
+    pub start: (usize, usize),
+    pub end: (usize, usize),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Expression {
     If {
-        cond: Box<Expression>,
-        t: Box<Expression>,
-        f: Box<Expression>,
+        cond: Box<Expr>,
+        t: Box<Expr>,
+        f: Box<Expr>,
     },
     While {
-        cond: Box<Expression>,
-        body: Box<Expression>,
+        cond: Box<Expr>,
+        body: Box<Expr>,
     },
     BinOp {
-        left: Box<Expression>,
+        left: Box<Expr>,
         op: Bop,
-        right: Box<Expression>,
+        right: Box<Expr>,
     },
     UnOp {
         op: Uop,
-        right: Box<Expression>,
+        right: Box<Expr>,
     },
     Call {
         fn_name: String,
-        args: Vec<Expression>,
+        args: Vec<Expr>,
     },
     Var(String),
     Int(i32),
@@ -70,11 +71,11 @@ pub enum Expression {
     Unit,
     Block {
         statements: Vec<Statement>,
-        expr: Option<Box<Expression>>,
+        expr: Option<Box<Expr>>,
     },
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Bop {
     Plus,
     Minus,
@@ -87,7 +88,7 @@ pub enum Bop {
     Comp(CompOp),
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CompOp {
     Ge,
     Le,
@@ -97,7 +98,7 @@ pub enum CompOp {
     Lt,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Uop {
     Neg,
     Not,
