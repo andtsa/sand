@@ -37,6 +37,9 @@ fn main() -> anyhow::Result<()> {
     "#;
 
     let _test = r#"
+        def println(x: Int, y: Int): Int := {
+            x + y
+        }
         def main(): Int := {
             let a: Int = 10;
             let b: Int = 20;
@@ -58,17 +61,54 @@ fn main() -> anyhow::Result<()> {
                 y * z / a
             };
 
-            let f = 5 * 4 / a;
+            let f: Int = 5 * 4 / a;
 
             5 * 4 / a
             
         }
     "#;
 
-    let program = Program::parse(_test)?;
+    let _test_3 = r#"
+    def shadow(): Int := {
+        let shadow: Int = 2;
+        shadow
+    }
+    def main(): Int := {
+    let a: Int = 1;
+    let x: Int = {
+        a = a + 1;
+        let a: Int = 5;
+        a = a + a;
+        a + shadow()
+    };
+    a = 3;
+    x
+    }"#;
+
+    let _test_4 = r#"
+    def main(): Int := {
+        let a: Int = 1;
+        let x: Int = {
+            let x: Int = {
+                let x: Int = {
+                    let x: Int = 3;
+                    x + a
+                };
+                x
+            };
+            x
+        };
+        x
+    }"#;
+
+    let program = Program::parse(_test_4)?;
     println!("{:#?}", program);
 
-    let eval = program.interpret()?;
-    println!("Program evaluated to: {:?}", eval);
+    let uniquified = Program::uniquify(&program);
+    println!("{:#?}", uniquified);
+
+    let eval_u = uniquified.interpret()?;
+    let eval_p = program.interpret()?;
+    println!("Program evaluated to: {:?}\nUniquified evaluated to: {:?}", eval_p, eval_u);
     Ok(())
 }
