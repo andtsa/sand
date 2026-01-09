@@ -1,0 +1,16 @@
+
+def factorial(n: Int): Int := {
+    if n ≤ 1 then {
+        1
+    } else {
+        n * factorial(n - 1)
+    }
+}
+
+def main(): Int := {
+    let num: Int = 9;
+    let result: Int = factorial(num);
+    println(result);
+    
+    result
+}

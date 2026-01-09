@@ -578,7 +578,7 @@ fn build_primary(pair: Pair<Rule>, src: &str) -> Result<Expr, AstError> {
         Rule::number => {
             let s = inner.as_str().to_string();
             let v = s
-                .parse::<i32>()
+                .parse::<i64>()
                 .map_err(|_| AstError::InvalidInteger(s.clone()))?;
             let span = inner.as_span();
             let (start_line, start_col) = span.start_pos().line_col();

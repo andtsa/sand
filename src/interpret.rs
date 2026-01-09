@@ -22,7 +22,7 @@ impl Program {
         // empty environment
         let env = Env::new();
         // just evaluate the body of the main function
-        main_fn.body.evaluate(&env)
+        self.evaluate(&main_fn.body.expr, &env)
     }
 }
 
@@ -79,20 +79,20 @@ impl Env {
 }
 
 impl Expr {
-    pub fn evaluate(&self, env: &EnvRef) -> anyhow::Result<Expression> {
-        self.expr.evaluate(env)
+    pub fn evaluate(&self, prog: &Program, env: &EnvRef) -> anyhow::Result<Expression> {
+        prog.evaluate(&self.expr, env)
     }
 }
 
-impl Expression {
+impl Program {
     /// evaluate the expression and return the resulting expression
-    pub fn evaluate(&self, env: &EnvRef) -> anyhow::Result<Expression> {
-        match self {
+    pub fn evaluate(&self, expr: &Expression, env: &EnvRef) -> anyhow::Result<Expression> {
+        match expr {
             Expression::If { cond, t, f } => {
-                let cond_val = cond.evaluate(env)?;
+                let cond_val = cond.evaluate(self, env)?;
                 match cond_val {
-                    Expression::Bool(true) => t.evaluate(env),
-                    Expression::Bool(false) => f.evaluate(env),
+                    Expression::Bool(true) => t.evaluate(self, env),
+                    Expression::Bool(false) => f.evaluate(self, env),
                     e => Err(anyhow!(
                         "condition {cond:?} must evaluate to a boolean, got {e:?}"
                     )),
@@ -101,10 +101,10 @@ impl Expression {
             Expression::While { cond, body } => {
                 let mut result = Expression::Unit;
                 loop {
-                    let cond_val = cond.evaluate(env)?;
+                    let cond_val = cond.evaluate(self, env)?;
                     match cond_val {
                         Expression::Bool(true) => {
-                            result = body.evaluate(env)?;
+                            result = body.evaluate(self, env)?;
                         }
                         Expression::Bool(false) => break,
                         e => {
@@ -117,8 +117,8 @@ impl Expression {
                 Ok(result)
             }
             Expression::BinOp { left, op, right } => {
-                let left_val = left.evaluate(env)?;
-                let right_val = right.evaluate(env)?;
+                let left_val = left.evaluate(self, env)?;
+                let right_val = right.evaluate(self, env)?;
                 match (left_val, right_val, op) {
                     (Expression::Int(l), Expression::Int(r), Bop::Plus) => {
                         Ok(Expression::Int(l + r))
@@ -152,7 +152,7 @@ impl Expression {
                 }
             }
             Expression::UnOp { op, right } => {
-                let val = right.evaluate(env)?;
+                let val = right.evaluate(self, env)?;
                 match (val, op) {
                     (Expression::Bool(b), Uop::Not) => Ok(Expression::Bool(!b)),
                     (Expression::Int(n), Uop::Neg) => Ok(Expression::Int(-n)),
@@ -179,37 +179,67 @@ impl Expression {
                 for stmt in statements {
                     match stmt {
                         Statement::Declaration { name, ty: _, val } => {
-                            let evaluated_val = val.evaluate(&local_env)?;
+                            let evaluated_val = val.evaluate(self, &local_env)?;
                             local_env
                                 .borrow_mut()
                                 .add_variable(name.clone(), evaluated_val);
                         }
                         Statement::Assignment { name, val } => {
-                            let evaluated_val = val.evaluate(&local_env)?;
+                            let evaluated_val = val.evaluate(self, &local_env)?;
                             local_env.borrow_mut().assign(name.clone(), evaluated_val)?;
                         }
                         Statement::Expr(e) => {
-                            ret_expr = e.evaluate(&local_env)?;
+                            ret_expr = e.evaluate(self, &local_env)?;
                         }
                     }
                 }
                 if let Some(e) = expr {
-                    e.evaluate(&local_env)
+                    e.evaluate(self, &local_env)
                 } else {
                     Ok(ret_expr)
                 }
             }
             Expression::Call { fn_name, args } => {
-                // for now only println
-                if fn_name == "println" {
-                    for arg in args {
-                        let val = arg.evaluate(env)?;
-                        print!("{:?}", val);
+                match fn_name.as_str() {
+                    "println" => {
+                        for arg in args {
+                            let val = arg.evaluate(self, env)?;
+                            print!("{:?} ", val);
+                        }
+                        println!();
+                        Ok(Expression::Unit)
                     }
-                    println!();
-                    Ok(Expression::Unit)
-                } else {
-                    Err(anyhow!("undefined function: {}", fn_name))
+                    x if self.0.iter().any(|f| f.name == x) => {
+                        // user-defined function call
+                        let function = self
+                            .0
+                            .iter()
+                            .find(|f| f.name == x)
+                            .ok_or_else(|| anyhow!("function not found: {}", x))?;
+
+                        if args.len() != function.parameters.len() {
+                            return Err(anyhow!(
+                                "function {} expects {} arguments, got {}",
+                                x,
+                                function.parameters.len(),
+                                args.len()
+                            ));
+                        }
+
+                        let local_env = Env::new();
+
+                        // evaluate arguments and bind to parameters
+                        for (param, arg) in function.parameters.iter().zip(args.iter()) {
+                            let arg_val = arg.evaluate(self, env)?;
+                            local_env
+                                .borrow_mut()
+                                .add_variable(param.name.clone(), arg_val);
+                        }
+
+                        // evaluate function body
+                        function.body.evaluate(self, &local_env)
+                    }
+                    _ => Err(anyhow!("undefined function: {}", fn_name)),
                 }
             }
         }
