@@ -4,16 +4,21 @@ use petgraph::graph::NodeIndex;
 use petgraph::Directed;
 use petgraph::Graph;
 use petgraph::csr::DefaultIx;
+use anyhow::{anyhow, Context};
 
 use crate::lang::{Expr, Expression, Program, Statement};
 
 pub fn construct_cfg(ast: &Program) -> anyhow::Result<Graph<Expr, (), Directed, DefaultIx>> {
     let mut graph = Graph::<Expr, (), Directed, DefaultIx>::new();
 
-    if let Some(function) = ast.0.first() {
-        let _entry = build_cfg_expr(&mut graph, &function.body, None)?;
-    }
+    let main_function = ast.0.iter()
+        .find(|f| f.name == "main")
+        .ok_or_else(|| anyhow!("No main function found in program"))?;
 
+
+    let _entry = build_cfg_expr(&mut graph, &main_function.body, None)
+        .context("Failed to build cfg for main function")?;
+    
     Ok(graph)
 }
 
