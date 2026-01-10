@@ -1,15 +1,18 @@
 //! Tests for the uniquify pass of the compiler
-use untitled::lang::*;
 use std::collections::HashSet;
 
-// ----------------------------------------------- Helper ------------------------------------------------------
+use untitled::lang::*;
 
-/// Checks that all variable and function names in the provided program AST are unique.
-/// It does so by traversing all blocks and collecting all declared names in a HashSet.
-/// # Arguments
+// ----------------------------------------------- Helper
+// ------------------------------------------------------
+
+/// Checks that all variable and function names in the provided program AST are
+/// unique. It does so by traversing all blocks and collecting all declared
+/// names in a HashSet. # Arguments
 /// * 'prog' - The Program AST to check
 /// # Returns
-/// 'Ok(())' if all names are unique; otherwise, 'Err(name)' for the first duplicate it finds.
+/// 'Ok(())' if all names are unique; otherwise, 'Err(name)' for the first
+/// duplicate it finds.
 fn assert_unique(prog: &Program) -> Result<(), String> {
     let mut seen: HashSet<String> = HashSet::new();
 
@@ -24,8 +27,8 @@ fn assert_unique(prog: &Program) -> Result<(), String> {
     Ok(())
 }
 
-/// Recursively checks an expression AST for uniqueness of all declared identifiers.
-/// # Arguments
+/// Recursively checks an expression AST for uniqueness of all declared
+/// identifiers. # Arguments
 /// * 'expr' - The expression to traverse.
 /// * 'seen' - The set of already encountered names.
 /// # Returns
@@ -58,7 +61,10 @@ fn check_expr(expr: &Expr, seen: &mut HashSet<String>) -> Result<(), String> {
             }
         }
 
-        Expression::Block { statements, expr: inner_expr } => {
+        Expression::Block {
+            statements,
+            expr: inner_expr,
+        } => {
             for stmt in statements {
                 check_stmt(stmt, seen)?;
             }
@@ -71,8 +77,8 @@ fn check_expr(expr: &Expr, seen: &mut HashSet<String>) -> Result<(), String> {
     Ok(())
 }
 
-/// Recursively checks a statement AST for uniqueness of all declared identifiers.
-/// # Arguments
+/// Recursively checks a statement AST for uniqueness of all declared
+/// identifiers. # Arguments
 /// * 'stmt' - The statement to traverse.
 /// * 'seen' - The set of already encountered names.
 /// # Returns
@@ -86,16 +92,14 @@ fn check_stmt(stmt: &Statement, seen: &mut HashSet<String>) -> Result<(), String
             check_expr(val, seen)
         }
 
-        Statement::Assignment { val, .. } => {
-            check_expr(val, seen)
-        }
+        Statement::Assignment { val, .. } => check_expr(val, seen),
 
         Statement::Expr(e) => check_expr(e, seen),
     }
 }
 
-/// Compares the behavior of the original and uniquified programs by interpreting both
-/// and expecting that they produce the same result.
+/// Compares the behavior of the original and uniquified programs by
+/// interpreting both and expecting that they produce the same result.
 /// # Arguments
 /// * 'original' - The original program AST.
 /// * 'uniquified' - The program AST after being passed through uniquify.
@@ -105,7 +109,8 @@ fn assert_sound(original: &Program, uniquified: &Program) {
     assert_eq!(value1, value2);
 }
 
-// ----------------------------------------------- Helper ------------------------------------------------------
+// ----------------------------------------------- Helper
+// ------------------------------------------------------
 
 /// Soundness test on a very simple program.
 #[test]

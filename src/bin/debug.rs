@@ -109,6 +109,9 @@ fn main() -> anyhow::Result<()> {
 
     let eval_u = uniquified.interpret()?;
     let eval_p = program.interpret()?;
-    println!("Program evaluated to: {:?}\nUniquified evaluated to: {:?}", eval_p, eval_u);
+    println!(
+        "Program evaluated to: {:?}\nUniquified evaluated to: {:?}",
+        eval_p, eval_u
+    );
     Ok(())
 }

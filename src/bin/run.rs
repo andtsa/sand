@@ -1,5 +1,4 @@
 //! run a program
-//!
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();

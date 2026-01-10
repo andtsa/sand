@@ -1,4 +1,5 @@
 //! helper methods for integration tests
+#![allow(dead_code)]
 
 use untitled::lang::Expression;
 

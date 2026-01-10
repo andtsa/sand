@@ -2,16 +2,19 @@
 //!
 //! takes a program AST and ensures all variable and function names are unique
 use std::collections::HashMap;
+
 use crate::lang::*;
 
+// ----------------------------------------------- Helper
+// ------------------------------------------------------
 
-// ----------------------------------------------- Helper ------------------------------------------------------
-
-/// A helper struct that captures the active scopes for all identifiers at the program's various levels
-/// and offers the functionality to keep track of and rename them.
+/// A helper struct that captures the active scopes for all identifiers at the
+/// program's various levels and offers the functionality to keep track of and
+/// rename them.
 struct Context {
-    /// Each scope is represented as a HashMap from original names to renamed names
-    /// and are stored in a stack-like vector, where the last element is the current scope.
+    /// Each scope is represented as a HashMap from original names to renamed
+    /// names and are stored in a stack-like vector, where the last element
+    /// is the current scope.
     scopes: Vec<HashMap<String, String>>,
 
     /// A global counter used for generating unique names across the program.
@@ -19,9 +22,8 @@ struct Context {
 }
 
 impl Context {
-
-    /// Create a new Context, initialize its counter to zero, and push on it an empty HashMap.
-    /// # Returns
+    /// Create a new Context, initialize its counter to zero, and push on it an
+    /// empty HashMap. # Returns
     /// An initialized empty Context.
     fn new() -> Self {
         Self {
@@ -30,8 +32,8 @@ impl Context {
         }
     }
 
-    /// Generates a new unique name for a given identifier by appending to it the current counter
-    /// # Arguments
+    /// Generates a new unique name for a given identifier by appending to it
+    /// the current counter # Arguments
     /// * 'name' - The identifier to be renamed
     /// # Returns
     /// The string containing the identifier's new name
@@ -41,18 +43,20 @@ impl Context {
         format!("{}_{}", name, id)
     }
 
-    /// Pushes a new empty scope onto the scope stack when entering a new block or function.
+    /// Pushes a new empty scope onto the scope stack when entering a new block
+    /// or function.
     fn enter_scope(&mut self) {
         self.scopes.push(HashMap::new());
     }
 
-    /// Pops the top scope from the scope stack when exiting a block or function.
+    /// Pops the top scope from the scope stack when exiting a block or
+    /// function.
     fn exit_scope(&mut self) {
         self.scopes.pop();
     }
 
-    /// Binds a given identifier to a newly generated unique name and stores it in the current scope.
-    /// # Arguments
+    /// Binds a given identifier to a newly generated unique name and stores it
+    /// in the current scope. # Arguments
     /// * 'name' - The original identifier to bind.
     /// # Returns
     /// The newly generated unique identifier as a string.
@@ -65,9 +69,9 @@ impl Context {
         new_name
     }
 
-    /// Binds an identifier without renaming it - currently only used for not renaming the "main"
-    /// function, as it is assumed that all programs have only one main defined.
-    /// # Arguments
+    /// Binds an identifier without renaming it - currently only used for not
+    /// renaming the "main" function, as it is assumed that all programs
+    /// have only one main defined. # Arguments
     /// * 'name' - The identifier to bind without renaming.
     /// # Returns
     /// The same identifier string.
@@ -79,15 +83,15 @@ impl Context {
         name.to_string()
     }
 
-    /// Looks up the unique name associated with an identifier in the scope stack from the innermost
-    /// to the outermost scope.
+    /// Looks up the unique name associated with an identifier in the scope
+    /// stack from the innermost to the outermost scope.
     /// # Arguments
     /// * 'name' - The original identifier to look up.
     /// # Returns
     /// The currently active unique name for that identifier.
     /// # Panics
-    /// If the identifier is not bound in any active scope (e.g. using a variable defined in an inner
-    /// block, outside of that block).
+    /// If the identifier is not bound in any active scope (e.g. using a
+    /// variable defined in an inner block, outside of that block).
     fn lookup(&self, name: &str) -> String {
         for scope in self.scopes.iter().rev() {
             if let Some(n) = scope.get(name) {
@@ -98,14 +102,15 @@ impl Context {
     }
 }
 
-// ----------------------------------------------- Helper ------------------------------------------------------
+// ----------------------------------------------- Helper
+// ------------------------------------------------------
 
 /// Offers the uniquify pass publicly via Program::uniquify
 impl Program {
-
-    /// Produces a version of the program where all variable and function names are unique.
-    /// # Returns
-    /// A new Program AST with all its names uniquified but with the same functionality.
+    /// Produces a version of the program where all variable and function names
+    /// are unique. # Returns
+    /// A new Program AST with all its names uniquified but with the same
+    /// functionality.
     pub fn uniquify(&self) -> Self {
         let mut u = Context::new();
 
@@ -127,7 +132,8 @@ impl Program {
 /// # Returns
 /// A new Function`AST with all identifiers uniquely renamed.
 fn uniquify_function(f: &Function, u: &mut Context) -> Function {
-    let name = if f.name == "main" { // Retaining 'main' works well with the interpreter
+    let name = if f.name == "main" {
+        // Retaining 'main' works well with the interpreter
         u.bind_without_rename(&f.name)
     } else {
         u.bind(&f.name)
@@ -201,10 +207,7 @@ fn uniquify_expr(e: &Expr, u: &mut Context) -> Expr {
         Expression::Block { statements, expr } => {
             u.enter_scope();
 
-            let statements = statements
-                .iter()
-                .map(|s| uniquify_stmt(s, u))
-                .collect();
+            let statements = statements.iter().map(|s| uniquify_stmt(s, u)).collect();
             let expr = expr.as_ref().map(|e| Box::new(uniquify_expr(e, u)));
 
             u.exit_scope();
@@ -219,7 +222,6 @@ fn uniquify_expr(e: &Expr, u: &mut Context) -> Expr {
         end: e.end,
     }
 }
-
 
 /// Recursively traverses and uniquifies a statement AST.
 /// # Arguments

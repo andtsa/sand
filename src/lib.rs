@@ -14,6 +14,7 @@ pub mod interactions;
 pub mod interpret;
 pub mod lang;
 pub mod parse;
+pub mod reserved;
 pub mod uniquify;
 
 #[derive(Debug, Clone, Default)]
