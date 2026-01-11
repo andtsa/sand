@@ -14,7 +14,10 @@ use untitled::reserved::RESERVED_FUNCTION_NAMES;
 /// 'Ok(())' if all names are unique; otherwise, 'Err(name)' for the first
 /// duplicate it finds.
 fn assert_unique(prog: &Program) -> Result<(), String> {
-    let mut seen_funs: HashSet<String> = RESERVED_FUNCTION_NAMES.iter().map(|s| s.to_string()).collect();
+    let mut seen_funs: HashSet<String> = RESERVED_FUNCTION_NAMES
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
 
     for func in &prog.0 {
         if !RESERVED_FUNCTION_NAMES.contains(&func.name.as_str()) {
@@ -26,7 +29,10 @@ fn assert_unique(prog: &Program) -> Result<(), String> {
         let mut local_seen_vars = HashSet::new();
         for param in &func.parameters {
             if !local_seen_vars.insert(param.name.clone()) {
-                return Err(format!("Duplicate parameter name in function {}: {}", func.name, param.name));
+                return Err(format!(
+                    "Duplicate parameter name in function {}: {}",
+                    func.name, param.name
+                ));
             }
         }
 
