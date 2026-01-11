@@ -1,4 +1,3 @@
-
 use untitled::lang::Program;
 
 #[test]

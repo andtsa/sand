@@ -9,6 +9,7 @@ use thiserror::Error;
 use crate::lang::*;
 use crate::parse::LangParser;
 use crate::parse::Rule;
+use crate::reserved::RESERVED_FUNCTION_NAMES;
 
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Error)]
@@ -24,6 +25,9 @@ pub enum AstError {
 
     #[error("invalid integer literal: {0}")]
     InvalidInteger(String),
+
+    #[error("invalid name: {0}")]
+    InvalidName(String),
 }
 
 trait AstExt<T> {
@@ -107,6 +111,11 @@ fn build_function(pair: Pair<Rule>, src: &str) -> Result<Function, AstError> {
         });
     }
     let name = name_pair.as_str().to_string();
+
+    // make sure we aren't redefining internal functions
+    if RESERVED_FUNCTION_NAMES.contains(&name.as_str()) {
+        return Err(AstError::InvalidName(name));
+    }
 
     // collect optional parameters (parameter or parameters)
     let mut parameters = Vec::new();
