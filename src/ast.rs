@@ -26,8 +26,8 @@ pub enum AstError {
     #[error("invalid integer literal: {0}")]
     InvalidInteger(String),
 
-    #[error("invalid function name: {0}")]
-    InvalidFunctionName(String),
+    #[error("invalid name: {0}")]
+    InvalidName(String),
 }
 
 trait AstExt<T> {
@@ -114,7 +114,7 @@ fn build_function(pair: Pair<Rule>, src: &str) -> Result<Function, AstError> {
 
     // make sure we aren't redefining internal functions
     if RESERVED_FUNCTION_NAMES.contains(&name.as_str()) {
-        return Err(AstError::InvalidFunctionName(name));
+        return Err(AstError::InvalidName(name));
     }
 
     // collect optional parameters (parameter or parameters)

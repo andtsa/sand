@@ -40,7 +40,7 @@ pub fn analyse(program: &str) -> anyhow::Result<ProgramAnnotations> {
     let ast = Program::parse(program)?;
 
     // then uniquify all variable and function names
-    let ast = ast.uniquify();
+    let ast = ast.uniquify()?;
 
     // create the "control flow graph" - the order in which expressions are
     // evaluated. for example:

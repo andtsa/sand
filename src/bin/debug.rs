@@ -104,7 +104,7 @@ fn main() -> anyhow::Result<()> {
     let program = Program::parse(_test_4)?;
     println!("{:#?}", program);
 
-    let uniquified = Program::uniquify(&program);
+    let uniquified = Program::uniquify(&program)?;
     println!("{:#?}", uniquified);
 
     let eval_u = uniquified.interpret()?;

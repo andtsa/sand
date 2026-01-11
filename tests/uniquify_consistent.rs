@@ -13,7 +13,7 @@ fn uniquify_consistent() -> anyhow::Result<()> {
 
         let result_a = program.interpret()?;
 
-        let result_b = program.uniquify().interpret()?;
+        let result_b = program.uniquify()?.interpret()?;
 
         assert_eq!(result_a, result_b);
     }

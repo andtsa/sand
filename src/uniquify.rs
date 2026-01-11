@@ -1,10 +1,13 @@
 //! the uniquify pass of the compiler
 //!
 //! takes a program AST and ensures all variable and function names are unique
-use std::collections::HashMap;
+use std::collections::BTreeMap;
+
+use anyhow::anyhow;
 
 use crate::lang::*;
 use crate::reserved::RESERVED_FUNCTION_NAMES;
+use crate::reserved::assert_unique;
 // ----------------------------------------------- Helper
 // ------------------------------------------------------
 
@@ -12,14 +15,14 @@ use crate::reserved::RESERVED_FUNCTION_NAMES;
 /// program's various levels and offers the functionality to keep track of and
 /// rename them.
 struct Context {
-    /// Each scope is represented as a HashMap from original names to renamed
+    /// Each scope is represented as a BTreeMap from original names to renamed
     /// names and are stored in a stack-like vector, where the last element
     /// is the current scope.
-    var_scopes: Vec<HashMap<String, String>>,
+    var_scopes: Vec<BTreeMap<String, String>>,
 
     /// Function and variable names live in different namespaces in order to
     /// allow function name shadowing without problems
-    fun_scopes: HashMap<String, String>,
+    fun_scopes: BTreeMap<String, String>,
 
     /// A global counter used for generating unique names across the program.
     counter: usize,
@@ -27,18 +30,18 @@ struct Context {
 
 impl Context {
     /// Create a new Context, initialize its counter to zero, and push two empty
-    /// HashMaps as the variable and function scopes.
+    /// BTreeMaps as the variable and function scopes.
     /// # Returns
     /// An initialized empty Context.
     fn new() -> Self {
-        let mut global = HashMap::new();
+        let mut global = BTreeMap::new();
 
         for &name in RESERVED_FUNCTION_NAMES.iter() {
             global.insert(name.to_string(), name.to_string());
         }
 
         Self {
-            var_scopes: vec![HashMap::new()],
+            var_scopes: vec![BTreeMap::new()],
             fun_scopes: global,
             counter: 0,
         }
@@ -59,7 +62,7 @@ impl Context {
     /// Pushes a new empty scope onto the scope stack when entering a new block
     /// or function.
     fn enter_scope(&mut self) {
-        self.var_scopes.push(HashMap::new());
+        self.var_scopes.push(BTreeMap::new());
     }
 
     /// Pops the top scope from the scope stack when exiting a block or
@@ -143,7 +146,7 @@ impl Program {
     /// # Returns
     /// A new Program AST with all its names uniquified but with the same
     /// functionality.
-    pub fn uniquify(&self) -> Self {
+    pub fn uniquify(&self) -> anyhow::Result<Self> {
         let mut u = Context::new();
 
         // First, bind all function names
@@ -159,7 +162,9 @@ impl Program {
             .map(|f| uniquify_function(f, &mut u))
             .collect();
 
-        Program(functions)
+        let ast = Program(functions);
+        assert_unique(&ast).map_err(|e| anyhow!("{e}"))?;
+        Ok(ast)
     }
 }
 
