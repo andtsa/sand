@@ -16,6 +16,7 @@ pub mod lang;
 pub mod parse;
 pub mod reserved;
 pub mod uniquify;
+mod traits;
 
 #[derive(Debug, Clone, Default)]
 pub struct ProgramAnnotations {
