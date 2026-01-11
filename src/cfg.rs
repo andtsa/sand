@@ -5,8 +5,22 @@ use petgraph::Directed;
 use petgraph::Graph;
 use petgraph::csr::DefaultIx;
 use anyhow::{anyhow, Context};
+use std::collections::HashMap;
 
 use crate::lang::{Expr, Expression, Program, Statement};
+
+#[derive(Debug, Clone)]
+pub enum CfgNode {
+    Expr(Expr),
+    FunctionEntry(String),
+    FunctionExit(String),
+}
+
+pub struct Cfg {
+    pub graph: Graph<CfgNode, (), Directed>,
+    pub function_entries: HashMap<String, NodeIndex>,
+    pub function_exits: HashMap<String, NodeIndex>,
+}
 
 pub fn construct_cfg(ast: &Program) -> anyhow::Result<Graph<Expr, (), Directed, DefaultIx>> {
     let mut graph = Graph::<Expr, (), Directed, DefaultIx>::new();
