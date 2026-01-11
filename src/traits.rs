@@ -1,6 +1,7 @@
 use std::fmt;
-use crate::lang::*;
+
 use crate::cfg::CfgNode;
+use crate::lang::*;
 
 impl fmt::Display for Expr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -29,8 +30,16 @@ impl fmt::Display for Expression {
             Expression::UnOp { op, right } => {
                 write!(f, "({}{})", op, right.expr)
             }
-            Expression::If {cond, t, f: else_branch } => {
-                write!(f, "(if {} then {} else {})", cond.expr, t.expr, else_branch.expr)
+            Expression::If {
+                cond,
+                t,
+                f: else_branch,
+            } => {
+                write!(
+                    f,
+                    "(if {} then {} else {})",
+                    cond.expr, t.expr, else_branch.expr
+                )
             }
             Expression::While { cond, body } => {
                 write!(f, "(while {} do {})", cond.expr, body.expr)
@@ -62,7 +71,7 @@ impl fmt::Display for Expression {
 impl fmt::Display for Statement {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Statement::Declaration { name, ty, val} => {
+            Statement::Declaration { name, ty, val } => {
                 write!(f, "let {}: {} = {}", name, ty, val.expr)
             }
             Statement::Assignment { name, val } => {

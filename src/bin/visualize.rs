@@ -1,5 +1,7 @@
 use std::fs;
-use petgraph::dot::{Dot, Config};
+
+use petgraph::dot::Config;
+use petgraph::dot::Dot;
 use untitled::cfg;
 use untitled::lang::Program;
 
