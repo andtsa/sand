@@ -1,5 +1,6 @@
 use std::fmt;
 use crate::lang::*;
+use crate::cfg::CfgNode;
 
 impl fmt::Display for Expr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -118,6 +119,16 @@ impl fmt::Display for Ty {
             Ty::Int => write!(f, "Int"),
             Ty::Bool => write!(f, "Bool"),
             Ty::Unit => write!(f, "Unit"),
+        }
+    }
+}
+
+impl fmt::Display for CfgNode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CfgNode::Expr(expr) => write!(f, "{}", expr),
+            CfgNode::FunctionEntry(name) => write!(f, "{}", name),
+            CfgNode::FunctionExit(name) => write!(f, "{}", name),
         }
     }
 }

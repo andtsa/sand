@@ -14,7 +14,15 @@ fn main() -> anyhow::Result<()> {
     let ast = Program::parse(&src)?;
     let cfg = cfg::construct_cfg(&ast)?;
 
-    let dot = format!("{:?}", Dot::with_config(&cfg, &[Config::EdgeNoLabel]));
+    let dot = format!(
+        "{:?}",
+        Dot::with_attr_getters(
+            &cfg,
+            &[Config::EdgeNoLabel],
+            &|_, _| String::new(),
+            &|_, (_, node)| format!("label=\"{}\"", node)
+        )
+    );
 
     fs::write("cfg.dot", &dot)?;
     println!("CFG saved to cfg.dot");

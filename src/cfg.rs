@@ -72,7 +72,7 @@ fn build_cfg_expr(
             let else_entry = build_cfg_expr(graph, f, next, function_entries, function_exits)?;
 
             graph.add_edge(cond_node, then_entry, ());
-            graph.add_edge(then_entry, else_entry, ());
+            graph.add_edge(cond_node, else_entry, ());
 
             Ok(cond_node)
         }
