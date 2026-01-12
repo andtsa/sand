@@ -11,7 +11,6 @@ use crate::interactions::find_interactions;
 use crate::lang::Expr;
 use crate::lang::Program;
 
-pub mod annotate;
 pub mod ast;
 pub mod cfg;
 pub mod interactions;
