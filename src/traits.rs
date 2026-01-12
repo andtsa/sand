@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::cfg::CfgNode;
+use crate::AnnotatedExpression;
 use crate::lang::*;
 
 impl fmt::Display for Expr {
@@ -143,12 +143,27 @@ impl fmt::Display for Ty {
     }
 }
 
-impl fmt::Display for CfgNode {
+impl fmt::Display for AnnotatedExpression {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            CfgNode::Expr(expr) => write!(f, "{}", expr),
-            CfgNode::FunctionEntry(name) => write!(f, "{}", name),
-            CfgNode::FunctionExit(name) => write!(f, "{}", name),
+        write!(f, "{}", self.expr)?;
+
+        if !self.depends_on.is_empty() || !self.mutates.is_empty() {
+            write!(f, " [")?;
+
+            if !self.depends_on.is_empty() {
+                write!(f, "deps: {}", self.depends_on.join(", "))?;
+            }
+
+            if !self.mutates.is_empty() {
+                if !self.depends_on.is_empty() {
+                    write!(f, "; ")?;
+                }
+                write!(f, "muts: {}", self.mutates.join(", "))?;
+            }
+
+            write!(f, "]")?;
         }
+
+        Ok(())
     }
 }

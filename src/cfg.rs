@@ -7,31 +7,50 @@ use petgraph::Directed;
 use petgraph::Graph;
 use petgraph::graph::NodeIndex;
 
+use crate::annotate::{get_dependencies};
+
 use crate::lang::Expr;
 use crate::lang::Expression;
 use crate::lang::Function;
 use crate::lang::Program;
 use crate::lang::Statement;
+use crate::AnnotatedExpression;
 
-#[derive(Debug, Clone)]
-pub enum CfgNode {
-    Expr(Expr),
-    FunctionEntry(String),
-    FunctionExit(String),
-}
 
-pub fn construct_cfg(ast: &Program) -> Result<Graph<CfgNode, (), Directed>> {
-    let mut graph = Graph::<CfgNode, (), Directed>::new();
+pub fn construct_cfg(ast: &Program) -> Result<Graph<AnnotatedExpression, (), Directed>> {
+    let mut graph = Graph::<AnnotatedExpression, (), Directed>::new();
     let mut function_entries = HashMap::new();
     let mut function_exits = HashMap::new();
 
+    // Add entry and exit nodes for every function
     for func in &ast.0 {
-        let entry = graph.add_node(CfgNode::FunctionEntry(func.name.clone()));
-        let exit = graph.add_node(CfgNode::FunctionExit(func.name.clone()));
+        let entry_annotated = AnnotatedExpression {
+            expr: Expr {
+                expr: Expression::Unit,
+                start: (0, 0),
+                end: (0, 0),
+            },
+            depends_on: vec![],
+            mutates: vec![],
+        };
+        let entry = graph.add_node(entry_annotated);
+
+        let exit_annotated = AnnotatedExpression {
+            expr: Expr {
+                expr: Expression::Unit,
+                start: (0, 0),
+                end: (0, 0),
+            },
+            depends_on: vec![],
+            mutates: vec![],
+        };
+        let exit = graph.add_node(exit_annotated);
+
         function_entries.insert(func.name.clone(), entry);
         function_exits.insert(func.name.clone(), exit);
     }
 
+    // Create cfg for each function and connect them if needed
     for func in &ast.0 {
         let entry = function_entries[&func.name];
         let exit = function_exits[&func.name];
@@ -50,7 +69,7 @@ pub fn construct_cfg(ast: &Program) -> Result<Graph<CfgNode, (), Directed>> {
 }
 
 pub fn build_cfg_func(
-    graph: &mut Graph<CfgNode, (), Directed>,
+    graph: &mut Graph<AnnotatedExpression, (), Directed>,
     func: &Function,
     entry: NodeIndex,
     exit: NodeIndex,
@@ -58,14 +77,13 @@ pub fn build_cfg_func(
     function_exits: &HashMap<String, NodeIndex>,
 ) -> Result<()> {
     let body_entry = build_cfg_expr(graph, &func.body, exit, function_entries, function_exits)?;
-
     graph.add_edge(entry, body_entry, ());
 
     Ok(())
 }
 
 fn build_cfg_expr(
-    graph: &mut Graph<CfgNode, (), Directed>,
+    graph: &mut Graph<AnnotatedExpression, (), Directed>,
     expr: &Expr,
     next: NodeIndex,
     function_entries: &HashMap<String, NodeIndex>,
@@ -73,7 +91,12 @@ fn build_cfg_expr(
 ) -> Result<NodeIndex> {
     match &expr.expr {
         Expression::If { cond, t, f } => {
-            let cond_node = graph.add_node(CfgNode::Expr(cond.as_ref().clone()));
+            let cond_annotated = AnnotatedExpression {
+                expr: cond.as_ref().clone(),
+                depends_on: get_dependencies(cond),
+                mutates: vec![],
+            };
+            let cond_node = graph.add_node(cond_annotated);
             let then_entry = build_cfg_expr(graph, t, next, function_entries, function_exits)?;
             let else_entry = build_cfg_expr(graph, f, next, function_entries, function_exits)?;
 
@@ -83,7 +106,12 @@ fn build_cfg_expr(
             Ok(cond_node)
         }
         Expression::While { cond, body } => {
-            let cond_node = graph.add_node(CfgNode::Expr(cond.as_ref().clone()));
+            let cond_annotated = AnnotatedExpression {
+                expr: cond.as_ref().clone(),
+                depends_on: get_dependencies(cond),
+                mutates: vec![],
+            };
+            let cond_node = graph.add_node(cond_annotated);
             let body_entry =
                 build_cfg_expr(graph, body, cond_node, function_entries, function_exits)?;
 
@@ -109,19 +137,26 @@ fn build_cfg_expr(
             }
 
             for stmt in statements.iter().rev() {
-                let stmt_expr = match stmt {
-                    Statement::Declaration { val, .. } => val,
-                    Statement::Assignment { val, .. } => val,
-                    Statement::Expr(e) => e,
+                let (stmt_expr, mutations) = match stmt {
+                    Statement::Declaration { name, val, .. } => {
+                        (val, vec![name.clone()])
+                    },
+                    Statement::Assignment { name, val } => {
+                        (val, vec![name.clone()])
+                    },
+                    Statement::Expr(e) => {
+                        (e, vec![])
+                    },
+                };
+                let annotated = AnnotatedExpression {
+                    expr: stmt_expr.clone(),
+                    depends_on: get_dependencies(stmt_expr),
+                    mutates: mutations,
                 };
 
-                current_node = build_cfg_expr(
-                    graph,
-                    stmt_expr,
-                    current_node,
-                    function_entries,
-                    function_exits,
-                )?;
+                let stmt_node = graph.add_node(annotated);
+                graph.add_edge(stmt_node, current_node, ());
+                current_node = stmt_node;
             }
 
             Ok(current_node)
@@ -129,21 +164,27 @@ fn build_cfg_expr(
         Expression::Call { fn_name, args } => {
             let mut current_node = next;
 
-            let return_node = graph.add_node(CfgNode::Expr(expr.clone()));
+            let call_annotated = AnnotatedExpression {
+                expr: expr.clone(),
+                depends_on: get_dependencies(expr),
+                mutates: vec![],
+            };
+            let call_node = graph.add_node(call_annotated);
+
 
             if let Some(&callee_entry) = function_entries.get(fn_name) {
                 let callee_exit = function_exits[fn_name];
 
-                graph.add_edge(return_node, callee_entry, ());
-                graph.add_edge(callee_exit, current_node, ());
+                graph.add_edge(call_node, callee_entry, ());
+                graph.add_edge(callee_exit, next, ());
 
-                current_node = return_node;
             } else {
-                graph.add_edge(return_node, current_node, ());
-                current_node = return_node;
+                graph.add_edge(call_node, next, ());
             }
 
-            for arg in args {
+            current_node = call_node;
+
+            for arg in args.iter().rev() {
                 current_node =
                     build_cfg_expr(graph, arg, current_node, function_entries, function_exits)?;
             }
@@ -151,7 +192,12 @@ fn build_cfg_expr(
             Ok(current_node)
         }
         _ => {
-            let node = graph.add_node(CfgNode::Expr(expr.clone()));
+            let annotated = AnnotatedExpression {
+                expr: expr.clone(),
+                depends_on: get_dependencies(expr),
+                mutates: vec![],
+            };
+            let node = graph.add_node(annotated);
             graph.add_edge(node, next, ());
             Ok(node)
         }
