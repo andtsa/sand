@@ -21,6 +21,7 @@ pub mod parse;
 pub mod reserved;
 pub mod traits;
 pub mod uniquify;
+pub mod annotate;
 
 pub type TupleSpan = ((usize, usize), (usize, usize));
 #[derive(Debug, Clone, Default)]
