@@ -56,7 +56,7 @@ pub fn collect_dependencies(expr: &Expression, dependencies: &mut HashSet<String
     }
 }
 
-pub fn get_mutations(stmt: &Statement) -> Vec<String> {
+pub fn get_mutations_stmt(stmt: &Statement) -> Vec<String> {
     match stmt {
         Statement::Declaration { name, .. } => vec![name.clone()],
         Statement::Assignment { name, .. } => vec![name.clone()],

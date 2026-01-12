@@ -20,6 +20,7 @@ pub mod parse;
 pub mod reserved;
 pub mod uniquify;
 pub mod annotate;
+pub mod traits;
 
 pub type TupleSpan = ((usize, usize), (usize, usize));
 #[derive(Debug, Clone, Default)]
@@ -70,8 +71,9 @@ pub fn analyse(program: &str) -> anyhow::Result<ProgramAnnotations> {
     // additionally, the control flow graph should branch for conditionals and
     // loops, and indicate indirection for function calls.
 
-    // let cfg = cfg::construct_cfg(&ast)?; /!\ temporarily commented out
-    let cfg = Graph::<AnnotatedExpression, (), Directed>::new();
+    // /!\ temporarily commented out
+    let cfg = cfg::construct_cfg(&ast)?;
+    // let cfg = Graph::<AnnotatedExpression, (), Directed>::new();
 
     // we iterate through the above vector,
     // and for every expression we count how many times it appeared,
