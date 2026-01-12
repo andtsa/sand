@@ -15,6 +15,7 @@ pub mod interpret;
 pub mod lang;
 pub mod parse;
 pub mod reserved;
+mod traits;
 pub mod uniquify;
 
 #[derive(Debug, Clone, Default)]
@@ -70,7 +71,10 @@ pub fn analyse(program: &str) -> anyhow::Result<ProgramAnnotations> {
     let order: Vec<Expr> = petgraph::algo::toposort(&cfg, None)
         .map_err(|e| anyhow!("cycle in cfg: {e:?}"))?
         .into_iter()
-        .map(|node_idx| cfg.node_weight(node_idx).unwrap().clone())
+        .filter_map(|node_idx| match cfg.node_weight(node_idx).unwrap() {
+            cfg::CfgNode::Expr(expr) => Some(expr.clone()),
+            cfg::CfgNode::FunctionEntry(_) | cfg::CfgNode::FunctionExit(_) => None,
+        })
         .collect();
 
     // for every expression in the AST, find variable interactions.
