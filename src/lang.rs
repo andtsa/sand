@@ -1,5 +1,8 @@
 //! rust types for the language
 
+use std::hash::Hash;
+use std::hash::Hasher;
+
 #[derive(Debug, Clone)]
 pub struct Program(pub Vec<Function>);
 
@@ -24,7 +27,7 @@ pub struct Function {
     pub body: Expr,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone)]
 pub enum Statement {
     Declaration { name: String, ty: Ty, val: Expr },
 
@@ -32,16 +35,77 @@ pub enum Statement {
 
     Expr(Expr),
 }
+impl PartialEq for Statement {
+    fn eq(&self, other: &Self) -> bool {
+        use Statement::*;
+        match (self, other) {
+            (
+                Declaration {
+                    name: n1,
+                    ty: t1,
+                    val: v1,
+                },
+                Declaration {
+                    name: n2,
+                    ty: t2,
+                    val: v2,
+                },
+            ) => n1 == n2 && t1 == t2 && v1 == v2,
+
+            (Assignment { name: n1, val: v1 }, Assignment { name: n2, val: v2 }) => {
+                n1 == n2 && v1 == v2
+            }
+
+            (Expr(e1), Expr(e2)) => e1 == e2,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for Statement {}
+
+impl Hash for Statement {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        use Statement::*;
+        std::mem::discriminant(self).hash(state);
+        match self {
+            Declaration { name, ty, val } => {
+                name.hash(state);
+                ty.hash(state);
+                val.hash(state);
+            }
+            Assignment { name, val } => {
+                name.hash(state);
+                val.hash(state);
+            }
+            Expr(e) => e.hash(state),
+        }
+    }
+}
 
 /// `Expr` wraps an `Expression` and carries start/end positions (line,col)
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone)]
 pub struct Expr {
     pub expr: Expression,
     pub start: (usize, usize),
     pub end: (usize, usize),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+impl PartialEq for Expr {
+    fn eq(&self, other: &Self) -> bool {
+        self.expr == other.expr
+    }
+}
+
+impl Hash for Expr {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.expr.hash(state);
+    }
+}
+
+impl Eq for Expr {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Expression {
     If {
         cond: Box<Expr>,
