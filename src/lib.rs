@@ -1,8 +1,12 @@
 //! analysis logic
 
-use anyhow::anyhow;
+use std::collections::HashMap;
+use std::collections::HashSet;
 
-use crate::annotate::annotate;
+use petgraph::Directed;
+use petgraph::Graph;
+use petgraph::graph::NodeIndex;
+
 use crate::interactions::find_interactions;
 use crate::lang::Expr;
 use crate::lang::Program;
@@ -19,15 +23,17 @@ pub mod reserved;
 pub mod traits;
 pub mod uniquify;
 
+pub type TupleSpan = ((usize, usize), (usize, usize));
 #[derive(Debug, Clone, Default)]
 pub struct ProgramAnnotations {
-    /// each `Expr` contains metadata on where it appears in the code,
-    /// so we need to store all the instances of repeated expressions
-    /// in order to visualise them later
-    pub repeated_expressions: Vec<Vec<Expr>>,
+    /// Map from each expression to all its occurrences in the source code
+    pub expr_occurrences: HashMap<Expr, Vec<TupleSpan>>,
+
+    /// Available-expressions set at each CFG node
+    pub available_at: HashMap<NodeIndex, HashSet<Expr>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub struct AnnotatedExpression {
     pub expr: Expr,
     /// which variables does this expression depend on
@@ -65,27 +71,14 @@ pub fn analyse(program: &str) -> anyhow::Result<ProgramAnnotations> {
     //
     // additionally, the control flow graph should branch for conditionals and
     // loops, and indicate indirection for function calls.
-    let cfg = cfg::construct_cfg(&ast)?;
-
-    // to annotate the program,
-    // we need to use the topological ordering of the CFG
-    let order: Vec<Expr> = petgraph::algo::toposort(&cfg, None)
-        .map_err(|e| anyhow!("cycle in cfg: {e:?}"))?
-        .into_iter()
-        .filter_map(|node_idx| match cfg.node_weight(node_idx).unwrap() {
-            cfg::CfgNode::Expr(expr) => Some(expr.clone()),
-            cfg::CfgNode::FunctionEntry(_) | cfg::CfgNode::FunctionExit(_) => None,
-        })
-        .collect();
-
-    // for every expression in the AST, find variable interactions.
-    let expressions: Vec<AnnotatedExpression> = annotate(order)?;
+    // let cfg = cfg::construct_cfg(&ast)?; /!\ temporarily commented out
+    let cfg = Graph::<AnnotatedExpression, (), Directed>::new();
 
     // we iterate through the above vector,
     // and for every expression we count how many times it appeared,
     // keeping track of whether the variables it depends on are in the
     // same state as the other instances of the expression.
-    let annotations: ProgramAnnotations = find_interactions(expressions)?;
+    let annotations: ProgramAnnotations = find_interactions(cfg)?;
 
     Ok(annotations)
 }

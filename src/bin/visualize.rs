@@ -22,7 +22,7 @@ fn main() -> anyhow::Result<()> {
             &cfg,
             &[Config::EdgeNoLabel],
             &|_, _| String::new(),
-            &|_, (_, node)| format!("label=\"{}\"", node)
+            &|_, (_, node)| format!("label=\"{}\"", "") // /!\ used to print node, but wouldn't compile for me
         )
     );
 
