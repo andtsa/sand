@@ -55,7 +55,7 @@ impl fmt::Display for Expression {
                 write!(f, ")")
             }
             Expression::Block { statements, expr } => {
-                write!(f, "{{\n")?;
+                write!(f, "{{ ")?;
                 for stmt in statements {
                     write!(f, "{};", stmt)?;
                 }

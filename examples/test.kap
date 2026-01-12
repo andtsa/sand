@@ -14,6 +14,8 @@ def main(): Int := {
 
     let f: Bool = 5 * 4 / a;
     
+    let aa: Bool = 5 * 4 / a;
+
     println(f);
 
     let ff: Int = 13;

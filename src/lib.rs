@@ -15,7 +15,7 @@ pub mod interpret;
 pub mod lang;
 pub mod parse;
 pub mod reserved;
-mod traits;
+pub mod traits;
 pub mod uniquify;
 
 #[derive(Debug, Clone, Default)]

@@ -1,0 +1,33 @@
+{
+  "$schema": "https://tree-sitter.github.io/tree-sitter/assets/schemas/config.schema.json",
+  "grammars": [
+    {
+      "name": "kap",
+      "camelcase": "Kap",
+      "title": "KAP",
+      "scope": "source.kap",
+      "file-types": [
+        "kap"
+      ],
+      "injection-regex": "^kap$",
+      "class-name": "TreeSitterKap"
+    }
+  ],
+  "metadata": {
+    "version": "0.0.1",
+    "license": "MIT",
+    "description": "compiler-construction-project",
+    "authors": [
+      {
+        "name": "group-1"
+      }
+    ],
+    "links": {
+      "repository": "https://gitlab.ewi.tudelft.nl/cs4555/2025-2026/student-repos/Group-1/"
+    }
+  },
+  "bindings": {
+    "python": true,
+    "rust": true,
+  }
+}
