@@ -69,6 +69,7 @@ pub fn analyse(program: &str) -> anyhow::Result<ProgramAnnotations> {
     //
     // additionally, the control flow graph should branch for conditionals and
     // loops, and indicate indirection for function calls.
+
     // let cfg = cfg::construct_cfg(&ast)?; /!\ temporarily commented out
     let cfg = Graph::<AnnotatedExpression, (), Directed>::new();
 
