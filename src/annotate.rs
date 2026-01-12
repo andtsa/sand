@@ -55,3 +55,48 @@ pub fn collect_dependencies(expr: &Expression, dependencies: &mut HashSet<String
 
     }
 }
+
+pub fn get_mutations(stmt: &Statement) -> Vec<String> {
+    match stmt {
+        Statement::Declaration { name, .. } => vec![name.clone()],
+        Statement::Assignment { name, .. } => vec![name.clone()],
+        Statement::Expr(e) => vec![]
+    }
+}
+
+pub fn get_mutations_expr(expr: &Expr) -> Vec<String> {
+    let mut mutations = HashSet::new();
+    collect_mutations(&expr.expr, &mut mutations);
+    mutations.into_iter().collect()
+}
+
+fn collect_mutations(expr: &Expression, mutations: &mut HashSet<String>) {
+    match expr {
+        Expression::Block { statements, expr} => {
+            for stmt in statements {
+                match stmt {
+                    Statement::Declaration {name, ..} => {
+                        mutations.insert(name.clone());
+                    }
+                    Statement::Assignment {name, ..} => {
+                        mutations.insert(name.clone());
+                    }
+                    Statement::Expr(e) => {
+                        collect_mutations(&e.expr, mutations);
+                    }
+                }
+            }
+            if let Some(e) = expr {
+                collect_dependencies(&e.expr, mutations);
+            }
+        }
+        Expression::If { t, f, ..} => {
+            collect_mutations(&t.expr, mutations);
+            collect_mutations(&f.expr, mutations);
+        }
+        Expression::While { body, .. } => {
+            collect_mutations(&body.expr, mutations);
+        }
+        _ => {}
+    }
+}
