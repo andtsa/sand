@@ -1,8 +1,10 @@
-use petgraph::graph::Graph;
 use petgraph::Directed;
-use untitled::{AnnotatedExpression};
+use petgraph::graph::Graph;
+use untitled::AnnotatedExpression;
 use untitled::interactions::find_interactions;
-use untitled::lang::{Expr, Expression, Bop};
+use untitled::lang::Bop;
+use untitled::lang::Expr;
+use untitled::lang::Expression;
 
 fn a_plus_b(start: (usize, usize)) -> Expr {
     Expr {
@@ -72,7 +74,10 @@ fn test_simple() {
         println!("{:?} -> {:?}", e, s);
     }
 
-    assert!(annotations.expr_occurrences.is_empty(), "Found available expressions when they shouldn't be any.");
+    assert!(
+        annotations.expr_occurrences.is_empty(),
+        "Found available expressions when they shouldn't be any."
+    );
 }
 
 /// t1 = a+b
@@ -109,9 +114,16 @@ fn test_simple_2() {
         println!("{:?} -> {:?}", e, s);
     }
 
-    assert_eq!(annotations.expr_occurrences.len(), 1, "Found more or less expressions than there should be.");
-    assert_eq!(annotations.expr_occurrences.get(&n1_expr.expr), Some(&vec![((2,1), (2,1))]), "Available Expression found at wrong position.");
-
+    assert_eq!(
+        annotations.expr_occurrences.len(),
+        1,
+        "Found more or less expressions than there should be."
+    );
+    assert_eq!(
+        annotations.expr_occurrences.get(&n1_expr.expr),
+        Some(&vec![((2, 1), (2, 1))]),
+        "Available Expression found at wrong position."
+    );
 }
 
 /// a = a+b  // Kills a -> (a+b)
@@ -137,7 +149,10 @@ fn test_self_generation() {
         println!("{:?} -> {:?}", e, s);
     }
 
-    assert!(annotations.expr_occurrences.is_empty(), "Found available expressions when they shouldn't be any.");
+    assert!(
+        annotations.expr_occurrences.is_empty(),
+        "Found available expressions when they shouldn't be any."
+    );
 }
 
 /// t1 = a + b
@@ -229,8 +244,16 @@ fn test_if() {
         println!("{:?} -> {:?}", e, s);
     }
 
-    assert_eq!(annotations.expr_occurrences.len(), 1, "Found more or less expressions than what there should be.");
-    assert_eq!(annotations.expr_occurrences.get(&n1_expr.expr), Some(&vec![((4,1), (4,1))]), "Available Expression found at wrong position.");
+    assert_eq!(
+        annotations.expr_occurrences.len(),
+        1,
+        "Found more or less expressions than what there should be."
+    );
+    assert_eq!(
+        annotations.expr_occurrences.get(&n1_expr.expr),
+        Some(&vec![((4, 1), (4, 1))]),
+        "Available Expression found at wrong position."
+    );
 }
 
 /// a = 1
@@ -241,12 +264,6 @@ fn test_if() {
 /// t2 = a + b
 #[test]
 fn test_while() {
-    use petgraph::graph::Graph;
-    use petgraph::Directed;
-    use untitled::AnnotatedExpression;
-    use untitled::interactions::find_interactions;
-    use untitled::lang::{Expr, Expression, Bop};
-
     // Node 1: a = 1
     let n1_expr = AnnotatedExpression {
         expr: Expr {
@@ -329,5 +346,8 @@ fn test_while() {
         println!("{:?} -> {:?}", e, s);
     }
 
-   assert!(annotations.expr_occurrences.is_empty(), "Found available expressions when there shouldn't be any.")
+    assert!(
+        annotations.expr_occurrences.is_empty(),
+        "Found available expressions when there shouldn't be any."
+    )
 }
