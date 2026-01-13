@@ -1,21 +1,20 @@
 //! control flow graph construction
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+use std::collections::HashSet;
 
 use anyhow::Result;
 use petgraph::Directed;
 use petgraph::Graph;
 use petgraph::graph::NodeIndex;
 
-use crate::annotate::{get_dependencies};
-
+use crate::AnnotatedExpression;
+use crate::annotate::get_dependencies;
 use crate::lang::Expr;
 use crate::lang::Expression;
 use crate::lang::Function;
 use crate::lang::Program;
 use crate::lang::Statement;
-use crate::AnnotatedExpression;
-
 
 pub fn construct_cfg(ast: &Program) -> Result<Graph<AnnotatedExpression, (), Directed>> {
     let mut graph = Graph::<AnnotatedExpression, (), Directed>::new();
@@ -138,7 +137,8 @@ fn build_cfg_expr(
 
             for stmt in statements.iter().rev() {
                 match stmt {
-                    Statement::Declaration { name, val, .. } | Statement::Assignment { name, val } => {
+                    Statement::Declaration { name, val, .. }
+                    | Statement::Assignment { name, val } => {
                         current_node = build_cfg_expr(
                             graph,
                             val,
@@ -146,7 +146,7 @@ fn build_cfg_expr(
                             function_entries,
                             function_exits,
                         )?;
-                    },
+                    }
                     Statement::Expr(e) => {
                         current_node = build_cfg_expr(
                             graph,
@@ -155,7 +155,7 @@ fn build_cfg_expr(
                             function_entries,
                             function_exits,
                         )?;
-                    },
+                    }
                 }
             }
 
@@ -171,13 +171,11 @@ fn build_cfg_expr(
             };
             let call_node = graph.add_node(call_annotated);
 
-
             if let Some(&callee_entry) = function_entries.get(fn_name) {
                 let callee_exit = function_exits[fn_name];
 
                 graph.add_edge(call_node, callee_entry, ());
                 graph.add_edge(callee_exit, next, ());
-
             } else {
                 graph.add_edge(call_node, next, ());
             }

@@ -7,6 +7,7 @@ use std::collections::HashSet;
 use petgraph::Directed;
 use petgraph::Graph;
 use petgraph::graph::NodeIndex;
+
 use crate::AnnotatedExpression;
 use crate::ProgramAnnotations;
 use crate::TupleSpan;

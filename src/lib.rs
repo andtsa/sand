@@ -2,13 +2,16 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
+use std::hash::Hasher;
+
 use petgraph::graph::NodeIndex;
 
 use crate::interactions::find_interactions;
 use crate::lang::Expr;
 use crate::lang::Program;
 
+pub mod annotate;
 pub mod ast;
 pub mod cfg;
 pub mod interactions;
@@ -16,9 +19,8 @@ pub mod interpret;
 pub mod lang;
 pub mod parse;
 pub mod reserved;
-pub mod uniquify;
-pub mod annotate;
 pub mod traits;
+pub mod uniquify;
 
 pub type TupleSpan = ((usize, usize), (usize, usize));
 #[derive(Debug, Clone, Default)]

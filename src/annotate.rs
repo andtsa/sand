@@ -1,5 +1,8 @@
 use std::collections::HashSet;
-use crate::lang::{Expr, Expression, Statement};
+
+use crate::lang::Expr;
+use crate::lang::Expression;
+use crate::lang::Statement;
 
 pub fn get_dependencies(expr: &Expr) -> HashSet<String> {
     let mut dependencies = HashSet::new();
@@ -16,15 +19,15 @@ pub fn collect_dependencies(expr: &Expression, dependencies: &mut HashSet<String
             collect_dependencies(&left.expr, dependencies);
             collect_dependencies(&right.expr, dependencies);
         }
-        Expression::UnOp { right, ..} => {
+        Expression::UnOp { right, .. } => {
             collect_dependencies(&right.expr, dependencies);
         }
-        Expression::If { cond, f, t} => {
+        Expression::If { cond, f, t } => {
             collect_dependencies(&cond.expr, dependencies);
             collect_dependencies(&f.expr, dependencies);
             collect_dependencies(&t.expr, dependencies);
         }
-        Expression::While { cond, body} => {
+        Expression::While { cond, body } => {
             collect_dependencies(&cond.expr, dependencies);
             collect_dependencies(&body.expr, dependencies);
         }
@@ -33,13 +36,13 @@ pub fn collect_dependencies(expr: &Expression, dependencies: &mut HashSet<String
                 collect_dependencies(&arg.expr, dependencies);
             }
         }
-        Expression::Block { statements, expr} => {
+        Expression::Block { statements, expr } => {
             for stmt in statements {
                 match stmt {
-                    Statement::Declaration {val, ..} => {
+                    Statement::Declaration { val, .. } => {
                         collect_dependencies(&val.expr, dependencies);
                     }
-                    Statement::Assignment {val, ..} => {
+                    Statement::Assignment { val, .. } => {
                         collect_dependencies(&val.expr, dependencies);
                     }
                     Statement::Expr(e) => {
@@ -52,7 +55,6 @@ pub fn collect_dependencies(expr: &Expression, dependencies: &mut HashSet<String
             }
         }
         Expression::Int(_) | Expression::Bool(_) | Expression::Unit => {}
-
     }
 }
 
@@ -60,7 +62,7 @@ pub fn get_mutations_stmt(stmt: &Statement) -> Vec<String> {
     match stmt {
         Statement::Declaration { name, .. } => vec![name.clone()],
         Statement::Assignment { name, .. } => vec![name.clone()],
-        Statement::Expr(e) => vec![]
+        Statement::Expr(e) => vec![],
     }
 }
 
@@ -72,13 +74,13 @@ pub fn get_mutations_expr(expr: &Expr) -> Vec<String> {
 
 fn collect_mutations(expr: &Expression, mutations: &mut HashSet<String>) {
     match expr {
-        Expression::Block { statements, expr} => {
+        Expression::Block { statements, expr } => {
             for stmt in statements {
                 match stmt {
-                    Statement::Declaration {name, ..} => {
+                    Statement::Declaration { name, .. } => {
                         mutations.insert(name.clone());
                     }
-                    Statement::Assignment {name, ..} => {
+                    Statement::Assignment { name, .. } => {
                         mutations.insert(name.clone());
                     }
                     Statement::Expr(e) => {
@@ -90,7 +92,7 @@ fn collect_mutations(expr: &Expression, mutations: &mut HashSet<String>) {
                 collect_dependencies(&e.expr, mutations);
             }
         }
-        Expression::If { t, f, ..} => {
+        Expression::If { t, f, .. } => {
             collect_mutations(&t.expr, mutations);
             collect_mutations(&f.expr, mutations);
         }

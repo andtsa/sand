@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+
 use petgraph::Directed;
 use petgraph::graph::Graph;
 use untitled::AnnotatedExpression;
@@ -869,8 +870,14 @@ fn test_subexpression_and_function_call() {
         println!("{:?} -> {:?}", e, s);
     }
 
-    assert!(annotations.available_at[&n2].contains(&n1_expr.expr), "Available expression missing");
-    assert!(annotations.available_at[&n3].contains(&n2_expr.expr), "Available expression missing");
+    assert!(
+        annotations.available_at[&n2].contains(&n1_expr.expr),
+        "Available expression missing"
+    );
+    assert!(
+        annotations.available_at[&n3].contains(&n2_expr.expr),
+        "Available expression missing"
+    );
 }
 
 ///        x = a+b
@@ -936,8 +943,14 @@ fn test_branching() {
     }
 
     // n3 should only have 'a+b' from the n1->n3 branch if intersection works
-    assert!(annotations.available_at[&n3].contains(&n1_expr.expr), "(a+b) is not available at join.");
+    assert!(
+        annotations.available_at[&n3].contains(&n1_expr.expr),
+        "(a+b) is not available at join."
+    );
 
     let n2_expr_struct = &cfg[n2].expr;
-    assert!(!annotations.available_at[&n3].contains(n2_expr_struct), "Expression that wasn't reachable from all paths reached the join.");
+    assert!(
+        !annotations.available_at[&n3].contains(n2_expr_struct),
+        "Expression that wasn't reachable from all paths reached the join."
+    );
 }
