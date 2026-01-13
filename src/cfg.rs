@@ -138,7 +138,7 @@ fn build_cfg_expr(
             for stmt in statements.iter().rev() {
                 match stmt {
                     Statement::Declaration { name, val, .. }
-                    | Statement::Assignment { name, val } => {
+                    | Statement::Assignment { name, val, .. } => {
                         let rhs_entry = build_cfg_expr(
                             graph,
                             val,

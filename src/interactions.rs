@@ -1,8 +1,9 @@
 //! find repeated expressions in a program,
 //! keeping track of variable interactions
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::collections::HashSet;
+use std::collections::VecDeque;
 
 use petgraph::Directed;
 use petgraph::Graph;
@@ -30,7 +31,7 @@ pub fn find_interactions(
     worklist.push_back(NodeIndex::new(0));
 
     while let Some(n) = worklist.pop_front() {
-        let first_time =visited.insert(n);
+        let first_time = visited.insert(n);
 
         // In set : The intersection of predecessors
         let preds: Vec<_> = cfg.neighbors_directed(n, petgraph::Incoming).collect();
@@ -100,7 +101,7 @@ pub fn find_interactions(
         let mut subexprs = Vec::new();
         collect_expr_subtrees(&node.expr, &mut subexprs);
         for sub in subexprs {
-            if available_at[&n].contains(&sub) {
+            if available_at[&n].contains(sub) {
                 expr_occurrences
                     .entry(sub.clone())
                     .or_default()

@@ -59,17 +59,24 @@ impl PartialEq for Statement {
                     name: n1,
                     ty: t1,
                     val: v1,
+                    ..
                 },
                 Declaration {
                     name: n2,
                     ty: t2,
                     val: v2,
+                    ..
                 },
             ) => n1 == n2 && t1 == t2 && v1 == v2,
 
-            (Assignment { name: n1, val: v1 }, Assignment { name: n2, val: v2 }) => {
-                n1 == n2 && v1 == v2
-            }
+            (
+                Assignment {
+                    name: n1, val: v1, ..
+                },
+                Assignment {
+                    name: n2, val: v2, ..
+                },
+            ) => n1 == n2 && v1 == v2,
 
             (Expr(e1), Expr(e2)) => e1 == e2,
             _ => false,
@@ -84,12 +91,12 @@ impl Hash for Statement {
         use Statement::*;
         std::mem::discriminant(self).hash(state);
         match self {
-            Declaration { name, ty, val } => {
+            Declaration { name, ty, val, .. } => {
                 name.hash(state);
                 ty.hash(state);
                 val.hash(state);
             }
-            Assignment { name, val } => {
+            Assignment { name, val, .. } => {
                 name.hash(state);
                 val.hash(state);
             }

@@ -1,5 +1,4 @@
 use std::collections::HashSet;
-use std::hash::Hash;
 
 use crate::lang::Expr;
 use crate::lang::Expression;

@@ -1,6 +1,8 @@
 use untitled::cfg::construct_cfg;
 use untitled::interactions::find_interactions;
-use untitled::lang::{Bop, Expr, Expression};
+use untitled::lang::Bop;
+use untitled::lang::Expr;
+use untitled::lang::Expression;
 use untitled::lang::Program;
 
 #[test]
@@ -42,8 +44,15 @@ fn test_simple() {
         println!("{:?} -> {:?}", e, s);
     }
 
-    assert_eq!(annotations.expr_occurrences.len(), 1, "More or less available expression founds.");
-    assert!(annotations.expr_occurrences.contains_key(&expr), "Different available expression found than target.");
+    assert_eq!(
+        annotations.expr_occurrences.len(),
+        1,
+        "More or less available expression founds."
+    );
+    assert!(
+        annotations.expr_occurrences.contains_key(&expr),
+        "Different available expression found than target."
+    );
 }
 
 #[test]
@@ -68,6 +77,9 @@ fn test_simple_kill() {
         println!("{:?} -> {:?}", e, s);
     }
 
-    assert_eq!(annotations.expr_occurrences.len(), 0, "Found available expressions where there shouldn't be any.");
+    assert_eq!(
+        annotations.expr_occurrences.len(),
+        0,
+        "Found available expressions where there shouldn't be any."
+    );
 }
-
