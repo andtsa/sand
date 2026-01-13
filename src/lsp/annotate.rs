@@ -46,7 +46,7 @@ pub fn annotate_reused_expressions(text: &str, ast: Program) -> Vec<Diagnostic> 
     // produce diagnostics for keys with more than one occurrence
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
     for (e, occs) in annotations.expr_occurrences.into_iter() {
-        // // NOTE: whether we include this check or not 
+        // // NOTE: whether we include this check or not
         // // depends on how the annotations are made
         //
         // if occs.len() <= 1 {

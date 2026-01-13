@@ -51,8 +51,8 @@ pub fn find_interactions(
                 .unwrap()
         };
 
-        println!("{:?}", &cfg[n].expr);
-        println!("{:?}: New in: {:?}", n, &new_in);
+        // println!("{:?}", &cfg[n].expr);
+        // println!("{:?}: New in: {:?}", n, &new_in);
 
         let expr = &cfg[n];
 
@@ -62,7 +62,7 @@ pub fn find_interactions(
             generated.insert(expr.clone());
         }
 
-        println!("{:?}: Generated: {:?}", n, &generated);
+        // println!("{:?}: Generated: {:?}", n, &generated);
 
         let in_gen_union: HashSet<_> = new_in.union(&generated).cloned().collect();
 
@@ -76,11 +76,11 @@ pub fn find_interactions(
             }
         }
 
-        println!("{:?}: Killed: {:?}", n, &killed);
+        // println!("{:?}: Killed: {:?}", n, &killed);
 
         let new_out = in_gen_union.difference(&killed).cloned().collect();
 
-        println!("{:?}: New out: {:?}", n, &new_out);
+        // println!("{:?}: New out: {:?}", n, &new_out);
 
         if new_in != in_sets[&n] || new_out != out_sets[&n] || first_time {
             in_sets.insert(n, new_in);
