@@ -123,7 +123,7 @@ fn test_simple_2() {
     );
     assert_eq!(
         annotations.expr_occurrences.get(&n1_expr.expr),
-        Some(&vec![((2, 1), (2, 1))]),
+        Some(&HashSet::from([((2, 1), (2, 1))])),
         "Available Expression found at wrong position."
     );
 }
@@ -253,7 +253,7 @@ fn test_if() {
     );
     assert_eq!(
         annotations.expr_occurrences.get(&n1_expr.expr),
-        Some(&vec![((4, 1), (4, 1))]),
+        Some(&HashSet::from([((4, 1), (4, 1))])),
         "Available Expression found at wrong position."
     );
 }
@@ -514,7 +514,7 @@ fn test_subexpressions() {
     );
     assert_eq!(
         annotations.expr_occurrences.get(&n1_expr.expr),
-        Some(&vec![((2, 1), (2, 1)), ((3, 1), (3, 1))]),
+        Some(&HashSet::from([((2, 1), (2, 1)), ((3, 1), (3, 1))])),
         "Available Expression found at wrong position."
     );
 }
@@ -608,7 +608,7 @@ fn test_not_subexpressions() {
     );
     assert_eq!(
         annotations.expr_occurrences.get(&n1_expr.expr),
-        Some(&vec![((2, 1), (2, 1)), ((3, 1), (3, 1))]),
+        Some(&HashSet::from([((2, 1), (2, 1)), ((3, 1), (3, 1))])),
         "Available Expression found at wrong position."
     );
 }
@@ -662,7 +662,7 @@ fn test_parameters1() {
 
     assert_eq!(
         annotations.expr_occurrences.get(&n1_expr.expr),
-        Some(&vec![((2, 1), (2, 1))]),
+        Some(&HashSet::from([((2, 1), (2, 1))])),
         "Available expression not detected in function argument."
     );
 }
@@ -725,7 +725,7 @@ fn test_parameters2() {
     // It should be detected at the function call site
     assert_eq!(
         annotations.expr_occurrences.get(&n1_expr.expr),
-        Some(&vec![((2, 1), (2, 1))]),
+        Some(&HashSet::from([((2, 1), (2, 1))])),
         "Available expression not detected in multi-argument function call."
     );
 }
@@ -808,7 +808,7 @@ fn test_function_call() {
 
     assert_eq!(
         annotations.expr_occurrences.get(&n1_expr.expr),
-        Some(&vec![((2, 1), (2, 1))]),
+        Some(&HashSet::from([((2, 1), (2, 1))])),
         "Entire function call was not detected as available."
     );
 }

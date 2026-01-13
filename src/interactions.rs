@@ -87,7 +87,7 @@ pub fn find_interactions(
     }
 
     // Collect redundancies
-    let mut expr_occurrences: HashMap<Expr, Vec<TupleSpan>> = HashMap::new();
+    let mut expr_occurrences: HashMap<Expr, HashSet<TupleSpan>> = HashMap::new();
     let mut available_at: HashMap<NodeIndex, HashSet<Expr>> = HashMap::new();
 
     for n in cfg.node_indices() {
@@ -104,7 +104,7 @@ pub fn find_interactions(
                 expr_occurrences
                     .entry(sub.clone())
                     .or_default()
-                    .push((sub.start, sub.end));
+                    .insert((sub.start, sub.end));
             }
         }
     }

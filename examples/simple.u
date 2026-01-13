@@ -1,7 +1,9 @@
 
 def main(): Int := {
-            let x: Int = a+b;
-            a = a + 1;
-            let y: Int = a+b;
-            x
-        }
+    t1 = a+b;
+    while cond do {
+        x = 1;
+        t2 = a+b;
+    };
+    a+b
+}
