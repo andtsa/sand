@@ -1,7 +1,7 @@
 //! find repeated expressions in a program,
 //! keeping track of variable interactions
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::collections::HashSet;
 
 use petgraph::Directed;
@@ -25,58 +25,63 @@ pub fn find_interactions(
         out_sets.insert(n, HashSet::new());
     }
 
-    let mut changed = true;
-    while changed {
-        changed = false;
-        for n in cfg.node_indices() {
-            // In set : The intersection of predecessors
-            let preds: Vec<_> = cfg.neighbors_directed(n, petgraph::Incoming).collect();
+    let mut worklist = VecDeque::new();
+    let mut visited = HashSet::new();
+    worklist.push_back(NodeIndex::new(0));
 
-            let new_in = if preds.is_empty() {
-                HashSet::new()
-            } else {
-                preds
-                    .iter()
-                    .map(|p| out_sets[p].clone())
-                    .reduce(|a, b| a.intersection(&b).cloned().collect())
-                    .unwrap()
-            };
+    while let Some(n) = worklist.pop_front() {
+        let first_time =visited.insert(n);
 
-            println!("{:?}", &cfg[n].expr);
-            println!("{:?}: New in: {:?}", n, &new_in);
+        // In set : The intersection of predecessors
+        let preds: Vec<_> = cfg.neighbors_directed(n, petgraph::Incoming).collect();
 
-            let expr = &cfg[n];
+        let new_in = if preds.is_empty() {
+            HashSet::new()
+        } else {
+            preds
+                .iter()
+                .map(|p| out_sets[p].clone())
+                .reduce(|a, b| a.intersection(&b).cloned().collect())
+                .unwrap()
+        };
 
-            // Gen set: A set with only the node's expression itself if it can be memoized
-            let mut generated = HashSet::new();
-            if is_candidate(&expr.expr) {
-                generated.insert(expr.clone());
-            }
+        println!("{:?}", &cfg[n].expr);
+        println!("{:?}: New in: {:?}", n, &new_in);
 
-            println!("{:?}: Generated: {:?}", n, &generated);
+        let expr = &cfg[n];
 
-            let in_gen_union: HashSet<_> = new_in.union(&generated).cloned().collect();
+        // Gen set: A set with only the node's expression itself if it can be memoized
+        let mut generated = HashSet::new();
+        if is_candidate(&expr.expr) {
+            generated.insert(expr.clone());
+        }
 
-            // Kill set : Expressions with at least one rewritten variable
-            let mut killed = HashSet::new();
-            for e in &in_gen_union {
-                for v in &e.depends_on {
-                    if expr.mutates.contains(v) {
-                        killed.insert(e.clone());
-                    }
+        println!("{:?}: Generated: {:?}", n, &generated);
+
+        let in_gen_union: HashSet<_> = new_in.union(&generated).cloned().collect();
+
+        // Kill set : Expressions with at least one rewritten variable
+        let mut killed = HashSet::new();
+        for e in &in_gen_union {
+            for v in &e.depends_on {
+                if expr.mutates.contains(v) {
+                    killed.insert(e.clone());
                 }
             }
+        }
 
-            println!("{:?}: Killed: {:?}", n, &killed);
+        println!("{:?}: Killed: {:?}", n, &killed);
 
-            let new_out = in_gen_union.difference(&killed).cloned().collect();
+        let new_out = in_gen_union.difference(&killed).cloned().collect();
 
-            println!("{:?}: New out: {:?}", n, &new_out);
+        println!("{:?}: New out: {:?}", n, &new_out);
 
-            if new_out != out_sets[&n] {
-                changed = true;
-                in_sets.insert(n, new_in);
-                out_sets.insert(n, new_out);
+        if new_in != in_sets[&n] || new_out != out_sets[&n] || first_time {
+            in_sets.insert(n, new_in);
+            out_sets.insert(n, new_out);
+
+            for succ in cfg.neighbors_directed(n, petgraph::Outgoing) {
+                worklist.push_back(succ);
             }
         }
     }

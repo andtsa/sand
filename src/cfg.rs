@@ -139,13 +139,20 @@ fn build_cfg_expr(
                 match stmt {
                     Statement::Declaration { name, val, .. }
                     | Statement::Assignment { name, val } => {
-                        current_node = build_cfg_expr(
+                        let rhs_entry = build_cfg_expr(
                             graph,
                             val,
                             current_node,
                             function_entries,
                             function_exits,
                         )?;
+                        graph
+                            .node_weight_mut(rhs_entry)
+                            .unwrap()
+                            .mutates
+                            .insert(name.clone());
+
+                        current_node = rhs_entry;
                     }
                     Statement::Expr(e) => {
                         current_node = build_cfg_expr(
