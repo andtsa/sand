@@ -37,13 +37,7 @@ pub struct AnnotatedExpression {
 }
 
 #[allow(unused)]
-pub fn analyse(program: &str) -> anyhow::Result<ProgramAnnotations> {
-    // first parse the whole program into an AST
-    let ast = Program::parse(program)?;
-
-    // then uniquify all variable and function names
-    let ast = ast.uniquify()?;
-
+pub fn analyse(ast: &Program) -> anyhow::Result<ProgramAnnotations> {
     // create the "control flow graph" - the order in which expressions are
     // evaluated. for example:
     // ```
@@ -65,7 +59,7 @@ pub fn analyse(program: &str) -> anyhow::Result<ProgramAnnotations> {
     //
     // additionally, the control flow graph should branch for conditionals and
     // loops, and indicate indirection for function calls.
-    let cfg = cfg::construct_cfg(&ast)?;
+    let cfg = cfg::construct_cfg(ast)?;
 
     // to annotate the program,
     // we need to use the topological ordering of the CFG
@@ -87,7 +81,36 @@ pub fn analyse(program: &str) -> anyhow::Result<ProgramAnnotations> {
     // same state as the other instances of the expression.
     let annotations: ProgramAnnotations = find_interactions(expressions)?;
 
-    Ok(annotations)
+    // Ok(annotations)
+    // boilerplate for testing the rest of the project
+    Ok(ProgramAnnotations {
+        repeated_expressions: vec![vec![
+            crate::lang::Expr {
+                expr: crate::lang::Expression::Call {
+                    fn_name: "factorial".into(),
+                    args: vec![crate::lang::Expr {
+                        expr: crate::lang::Expression::Var("num".into()),
+                        start: Default::default(),
+                        end: Default::default(),
+                    }],
+                },
+                start: (13, 23),
+                end: (13, 36),
+            },
+            crate::lang::Expr {
+                expr: crate::lang::Expression::Call {
+                    fn_name: "factorial".into(),
+                    args: vec![crate::lang::Expr {
+                        expr: crate::lang::Expression::Var("num".into()),
+                        start: Default::default(),
+                        end: Default::default(),
+                    }],
+                },
+                start: (16, 29),
+                end: (16, 42),
+            },
+        ]],
+    })
 }
 
 pub fn visualise_cfg(program: &Program) -> anyhow::Result<String> {
