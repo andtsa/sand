@@ -1,0 +1,10 @@
+
+        def main(): Int := {
+            let e: Int = {
+                let y:Int = a;
+                let x:Int = a+b;
+                x
+            };
+            let b:Int = a+b;
+            b
+        }

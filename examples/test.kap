@@ -3,6 +3,8 @@ def test(x: Int): Int := {
     if x ≤ 0 then 1 else x * test(x - 1)
 }
 
+def repeat(): Int := (5 + 9) * (5 + 9)
+
 def main(): Int := {
     let a: Int = 9;
     let x: Int = {
@@ -13,6 +15,9 @@ def main(): Int := {
     };
 
     let f: Bool = 5 * 4 / a;
+
+    5 + 9;
+    5 + 9;
     
     let aa: Bool = 5 * 4 / a;
 

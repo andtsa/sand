@@ -1,0 +1,218 @@
+
+def t1(a: Int, b: Int): Int :=
+{
+    let x: Int = a + b;
+    let y: Int = a + b;
+    x + y
+}
+
+def main(): Int := {
+    let x: Int = {
+        let y: Int = 92;
+        y * y - 5
+    };
+
+    let z: Int = {
+        192 * 555;
+        x * x
+    };
+
+    let w: Int = x * x;
+
+    let o: Int = {
+        x = x + 1;
+        x * x + x
+    };
+
+    x * x + 5 - {
+        192 * 555;
+        while false do print(0);
+        5
+    };
+ 
+    x * x;
+    192*555;
+
+    if true then {
+        x * x
+    } else {
+        print(0);
+        192 * 555
+    }
+}
+
+def t2(a: Int, b: Int): Int :=
+{
+    let x: Int = a + b;
+    a = a + 1;
+    let y: Int = a + b;
+    x + y
+}
+
+def t3(a: Int, b: Int, c: Int): Int :=
+{
+    let x: Int = a + b;
+    c = c + 1;
+    let y: Int = a + b;
+    x + y
+}
+
+def t4(a: Int, b: Int): Int :=
+{
+    let x: Int = a + b;
+    b = a + b;
+    let y: Int = a + b;
+    x + y
+}
+
+def t5(a: Int, b: Int): Int :=
+{
+    let x: Int = a + b;
+    {
+        let a: Int = 10;
+        a + b;
+    };
+    let y: Int = a + b;
+    x + y
+}
+
+
+def t6(a: Int, b: Int, c: Bool): Int :=
+{
+    let x: Int = a + b;
+    if c then {
+        a = a + 1;
+    };
+    let y: Int = a + b;
+    x + y
+}
+
+
+def t7(a: Int, b: Int, c: Bool): Int :=
+{
+    let x: Int = a + b;
+    if c then {
+        b = b + 1;
+    }  else {
+        b = b + 1;
+    };
+    let y: Int = a + b;
+    x + y
+}
+
+
+def t8(a: Int, b: Int, c: Bool): Int :=
+{
+    let x: Int = a + b;
+    if c then {
+        b = b;
+    }
+    else {
+        0;
+    };
+    let y: Int = a + b;
+    x + y
+}
+
+
+def t9(a: Int, b: Int): Int :=
+{
+    let x: Int = a + b;
+    while a < 10 do {
+        b = b + 1;
+    };
+    let y: Int = a + b;
+    x + y
+}
+
+def t10(a: Int, b: Int): Int :=
+{
+    let x: Int = a + b;
+    while a < 10 do {
+        let c: Int = a + b;
+        a = a + 1;
+    };
+    x
+}
+
+def t11(a: Int, b: Int): Int :=
+{
+    let t: Int = a + b;
+    let x: Int = t * 2;
+    t = t + 1;
+    let y: Int = t * 2;
+    x + y
+}
+
+def t12(a: Int, b: Int): Int :=
+{
+    let x: Int = a + b;
+    let y: Int = b + a;
+    x + y
+}
+
+def t13(a: Int, b: Int): Bool :=
+{
+    let x: Bool = a > b;
+    b = b + 1;
+    let y: Bool = a > b;
+    x & y
+}
+
+def t14(a: Int, b: Int, c: Int): Int :=
+{
+    let x: Int = a * (b + c);
+    if a > 0 then {
+        c = c + 1;
+        a = a - 1;
+    } else {
+        0;
+    };
+    let y: Int = a * (b + c);
+    x + y
+}
+
+def t15(a: Int, b: Int): Int :=
+{
+    let x: Int = (a + b) * (a - b);
+    b = a;
+    let y: Int = (a + b) * (a - b);
+    x + y
+}
+
+def t16(a: Int): Int := 
+{
+    let x: Int = {
+        1 + 2 + (3 * 4) / 5 * (
+            6 + 7 - 8
+        )
+    };
+
+    let y: Int = (
+        1 + 2 + (3 * 4) / 5 * (
+            6 + 7 - 8
+        )
+    );
+
+    let z: Int = 6 + 7 - 8;
+    
+    let w: Int = 3 * 4;
+    let f: Int = 3 * 4;
+}
+
+def t17(a: Int, b: Int): Int := {
+    a + b;
+    ((((a+b))))
+}
+
+def helper(x: Int): Unit := print(x)
+
+def t18(): Unit := {
+    let z: Int = 1 + 2 + 3 * 4;
+    let a: Unit = helper(z);
+    z = z * z;
+    let b: Unit = helper(z);
+    z * z;
+    1 + 2+ 3*4;
+    helper(z)
+}

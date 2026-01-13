@@ -1,8 +1,12 @@
 //! analysis logic
 
-use anyhow::anyhow;
+use std::collections::HashMap;
+use std::collections::HashSet;
+use std::hash::Hash;
+use std::hash::Hasher;
 
-use crate::annotate::annotate;
+use petgraph::graph::NodeIndex;
+
 use crate::interactions::find_interactions;
 use crate::lang::Expr;
 use crate::lang::Program;
@@ -19,21 +23,37 @@ pub mod reserved;
 pub mod traits;
 pub mod uniquify;
 
+pub type TupleSpan = ((usize, usize), (usize, usize));
 #[derive(Debug, Clone, Default)]
 pub struct ProgramAnnotations {
-    /// each `Expr` contains metadata on where it appears in the code,
-    /// so we need to store all the instances of repeated expressions
-    /// in order to visualise them later
-    pub repeated_expressions: Vec<Vec<Expr>>,
+    /// Map from each expression to all its occurrences in the source code
+    pub expr_occurrences: HashMap<Expr, HashSet<TupleSpan>>,
+
+    /// Available-expressions set at each CFG node
+    pub available_at: HashMap<NodeIndex, HashSet<Expr>>,
 }
 
 #[derive(Debug, Clone)]
 pub struct AnnotatedExpression {
     pub expr: Expr,
     /// which variables does this expression depend on
-    pub depends_on: Vec<String>,
+    pub depends_on: HashSet<String>,
     /// which variables does this expression mutate
-    pub mutates: Vec<String>,
+    pub mutates: HashSet<String>,
+}
+
+impl PartialEq for AnnotatedExpression {
+    fn eq(&self, other: &Self) -> bool {
+        self.expr == other.expr
+    }
+}
+
+impl Eq for AnnotatedExpression {}
+
+impl Hash for AnnotatedExpression {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.expr.hash(state);
+    }
 }
 
 #[allow(unused)]
@@ -61,56 +81,13 @@ pub fn analyse(ast: &Program) -> anyhow::Result<ProgramAnnotations> {
     // loops, and indicate indirection for function calls.
     let cfg = cfg::construct_cfg(ast)?;
 
-    // to annotate the program,
-    // we need to use the topological ordering of the CFG
-    let order: Vec<Expr> = petgraph::algo::toposort(&cfg, None)
-        .map_err(|e| anyhow!("cycle in cfg: {e:?}"))?
-        .into_iter()
-        .filter_map(|node_idx| match cfg.node_weight(node_idx).unwrap() {
-            cfg::CfgNode::Expr(expr) => Some(expr.clone()),
-            cfg::CfgNode::FunctionEntry(_) | cfg::CfgNode::FunctionExit(_) => None,
-        })
-        .collect();
-
-    // for every expression in the AST, find variable interactions.
-    let expressions: Vec<AnnotatedExpression> = annotate(order)?;
-
-    // we iterate through the above vector,
+    // we iterate through the above graph,
     // and for every expression we count how many times it appeared,
     // keeping track of whether the variables it depends on are in the
     // same state as the other instances of the expression.
-    let annotations: ProgramAnnotations = find_interactions(expressions)?;
+    let annotations: ProgramAnnotations = find_interactions(cfg)?;
 
-    // Ok(annotations)
-    // boilerplate for testing the rest of the project
-    Ok(ProgramAnnotations {
-        repeated_expressions: vec![vec![
-            crate::lang::Expr {
-                expr: crate::lang::Expression::Call {
-                    fn_name: "factorial".into(),
-                    args: vec![crate::lang::Expr {
-                        expr: crate::lang::Expression::Var("num".into()),
-                        start: Default::default(),
-                        end: Default::default(),
-                    }],
-                },
-                start: (13, 23),
-                end: (13, 36),
-            },
-            crate::lang::Expr {
-                expr: crate::lang::Expression::Call {
-                    fn_name: "factorial".into(),
-                    args: vec![crate::lang::Expr {
-                        expr: crate::lang::Expression::Var("num".into()),
-                        start: Default::default(),
-                        end: Default::default(),
-                    }],
-                },
-                start: (16, 29),
-                end: (16, 42),
-            },
-        ]],
-    })
+    Ok(annotations)
 }
 
 pub fn visualise_cfg(program: &Program) -> anyhow::Result<String> {

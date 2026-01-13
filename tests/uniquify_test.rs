@@ -4,7 +4,6 @@ use anyhow::Result;
 use untitled::lang::*;
 use untitled::reserved::assert_unique;
 // ----------------------------------------------- Helper
-// ------------------------------------------------------
 
 /// Compares the behavior of the original and uniquified programs by
 /// interpreting both and expecting that they produce the same result.
@@ -18,7 +17,6 @@ fn assert_uniquify_sound(original: &Program, uniquified: &Program) -> bool {
 }
 
 // ----------------------------------------------- Helper
-// ------------------------------------------------------
 
 /// Checks uniqueness in a very simple program.
 #[test]
