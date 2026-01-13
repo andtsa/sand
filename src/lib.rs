@@ -79,10 +79,9 @@ pub fn analyse(ast: &Program) -> anyhow::Result<ProgramAnnotations> {
     //
     // additionally, the control flow graph should branch for conditionals and
     // loops, and indicate indirection for function calls.
-
     let cfg = cfg::construct_cfg(ast)?;
 
-    // we iterate through the above vector,
+    // we iterate through the above graph,
     // and for every expression we count how many times it appeared,
     // keeping track of whether the variables it depends on are in the
     // same state as the other instances of the expression.

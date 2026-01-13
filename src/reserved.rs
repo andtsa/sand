@@ -162,7 +162,7 @@ pub fn assert_unique(prog: &Program) -> Result<(), UniquifyError> {
 ///   occurrence.
 /// # Returns
 /// 'Ok(())' if all names are unique, otherwise `UniquifyError`.
-fn check_expr(expr: &Expr, seen: &mut SeenMap) -> Result<(), UniquifyError> {
+pub fn check_expr(expr: &Expr, seen: &mut SeenMap) -> Result<(), UniquifyError> {
     match &expr.expr {
         Expression::If { cond, t, f } => {
             check_expr(cond, seen)?;
@@ -214,7 +214,7 @@ fn check_expr(expr: &Expr, seen: &mut SeenMap) -> Result<(), UniquifyError> {
 ///   occurrence.
 /// # Returns
 /// 'Ok(())' if all names are unique, otherwise `UniquifyError`.
-fn check_stmt(stmt: &Statement, seen: &mut SeenMap) -> Result<(), UniquifyError> {
+pub fn check_stmt(stmt: &Statement, seen: &mut SeenMap) -> Result<(), UniquifyError> {
     match stmt {
         Statement::Declaration {
             name,
