@@ -1,9 +1,10 @@
 
-def main(): Int := {
-    t1 = a+b;
-    while cond do {
-        x = 1;
-        t2 = a+b;
-    };
-    a+b
-}
+        def main(): Int := {
+            let e: Int = {
+                let y:Int = a;
+                let x:Int = a+b;
+                x
+            };
+            let b:Int = a+b;
+            b
+        }

@@ -1,10 +1,7 @@
 use std::collections::HashSet;
-
 use untitled::cfg::construct_cfg;
 use untitled::interactions::find_interactions;
-use untitled::lang::Bop;
-use untitled::lang::Expr;
-use untitled::lang::Expression;
+use untitled::lang::{Bop, Expr, Expression};
 use untitled::lang::Program;
 
 fn a_plus_b(start: (usize, usize)) -> Expr {
@@ -66,15 +63,8 @@ fn test_simple() {
         println!("{:?} -> {:?}", e, s);
     }
 
-    assert_eq!(
-        annotations.expr_occurrences.len(),
-        1,
-        "More or less available expression founds."
-    );
-    assert!(
-        annotations.expr_occurrences.contains_key(&expr),
-        "Different available expression found than target."
-    );
+    assert_eq!(annotations.expr_occurrences.len(), 1, "More or less available expression founds.");
+    assert!(annotations.expr_occurrences.contains_key(&expr), "Different available expression found than target.");
 }
 
 #[test]
@@ -99,11 +89,7 @@ fn test_simple_kill() {
         println!("{:?} -> {:?}", e, s);
     }
 
-    assert_eq!(
-        annotations.expr_occurrences.len(),
-        0,
-        "Found available expressions where there shouldn't be any."
-    );
+    assert_eq!(annotations.expr_occurrences.len(), 0, "Found available expressions where there shouldn't be any.");
 }
 
 #[test]
@@ -121,7 +107,7 @@ fn test_if() {
         }
     "#;
 
-    let expr = a_plus_b((0, 0));
+    let expr = a_plus_b((0,0));
 
     let program = Program::parse(src).unwrap();
     let cfg = construct_cfg(&program).unwrap();
@@ -136,10 +122,7 @@ fn test_if() {
         println!("{:?} -> {:?}", e, s);
     }
 
-    assert!(
-        annotations.expr_occurrences.contains_key(&expr),
-        "Different available expression found."
-    );
+    assert!(annotations.expr_occurrences.contains_key(&expr), "Different available expression found.");
     assert_eq!(
         annotations.expr_occurrences.get(&expr),
         Some(&HashSet::from([((6, 22), (6, 25))])),
@@ -148,7 +131,7 @@ fn test_if() {
 }
 
 #[test]
-fn test_while1() {
+fn test_while() {
     let src = r#"
         def main(): Int := {
             while cond do {
@@ -171,15 +154,11 @@ fn test_while1() {
         println!("{:?} -> {:?}", e, s);
     }
 
-    assert_eq!(
-        annotations.expr_occurrences.len(),
-        0,
-        "Different available expression found."
-    );
+    assert_eq!(annotations.expr_occurrences.len(), 0, "Different available expression found.");
 }
 
 #[test]
-fn test_while2() {
+fn test_params() {
     let src = r#"
         def main(): Int := {
             fn(a+b);
@@ -187,7 +166,7 @@ fn test_while2() {
         }
     "#;
 
-    let expr1 = a_plus_b((0, 0));
+    let expr1 = a_plus_b((0,0));
     let expr2 = Expr {
         expr: Expression::Call {
             fn_name: "fn".to_string(),
@@ -210,13 +189,98 @@ fn test_while2() {
         println!("{:?} -> {:?}", e, s);
     }
 
-    assert_eq!(
-        annotations.expr_occurrences.len(),
-        2,
-        "Different number of available expression found."
-    );
-    assert!(annotations.expr_occurrences.contains_key(&expr1));
-    assert!(annotations.expr_occurrences.contains_key(&expr2));
-    assert_eq!(annotations.expr_occurrences.get(&expr1).unwrap().len(), 2);
-    assert_eq!(annotations.expr_occurrences.get(&expr2).unwrap().len(), 1);
+    assert_eq!(annotations.expr_occurrences.len(), 2, "Different number of available expression found.");
+    assert!(annotations.expr_occurrences.contains_key(&expr1), "Available expression missing.");
+    assert!(annotations.expr_occurrences.contains_key(&expr2), "Available expression missing.");
+    assert_eq!(annotations.expr_occurrences.get(&expr1).unwrap().len(), 2, "Wrong number of occurrences.");
+    assert_eq!(annotations.expr_occurrences.get(&expr2).unwrap().len(), 1, "Wrong number of occurrences.");
+}
+
+#[test]
+fn test_function_simple() {
+    let src = r#"
+        def fn(a: Int): Int := {
+            let c: Int = a+1;
+            c
+        }
+
+        def main(): Int := {
+            let a: Int = 1;
+            a = a+1;
+            let b:Int = fn(a);
+            a
+        }
+    "#;
+
+    let program = Program::parse(src).unwrap();
+    let cfg = construct_cfg(&program).unwrap();
+
+    println!("{:?}", cfg);
+
+    // Debug output
+    let annotations = find_interactions(cfg).unwrap();
+
+    println!("\nAvailable expressions:");
+    for (e, s) in &annotations.expr_occurrences {
+        println!("{:?} -> {:?}", e, s);
+    }
+
+    assert_eq!(annotations.expr_occurrences.len(), 0, "Found available expressions where there shouldn't be any.");
+}
+
+#[test]
+fn test_function_intersection() {
+    let src = r#"
+    def foo():Int := {
+        let x:Int = a + b;
+    }
+
+    def main():Int := {
+        foo();
+        let y:Int = a + b;
+    }
+    "#;
+
+    let expr = a_plus_b((0,0));
+
+    let program = Program::parse(src).unwrap();
+    let cfg = construct_cfg(&program).unwrap();
+    let annotations = find_interactions(cfg).unwrap();
+
+    // Debug Output:
+    println!("\nAvailable expressions:");
+    for (e, s) in &annotations.expr_occurrences {
+        println!("{:?} -> {:?}", e, s);
+    }
+
+    assert!(annotations.expr_occurrences.contains_key(&expr), "(a + b) should be available after main's call to foo.");
+}
+
+#[test]
+fn test_block() {
+    let src = r#"
+    def main(): Int := {
+        let e: Int = {
+            let y:Int = a;
+            let x:Int = a+b;
+            x
+        };
+        let b:Int = a+b;
+        b
+    }
+    "#;
+
+    let expr = a_plus_b((0,0));
+
+    let program = Program::parse(src).unwrap();
+    let cfg = construct_cfg(&program).unwrap();
+    let annotations = find_interactions(cfg).unwrap();
+
+    // Debug Output:
+    println!("\nAvailable expressions:");
+    for (e, s) in &annotations.expr_occurrences {
+        println!("{:?} -> {:?}", e, s);
+    }
+
+    assert!(annotations.expr_occurrences.contains_key(&expr), "(a + b) should be available after the block.");
 }

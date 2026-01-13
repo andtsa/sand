@@ -21,8 +21,12 @@ pub fn construct_cfg(ast: &Program) -> Result<Graph<AnnotatedExpression, (), Dir
     let mut function_entries = HashMap::new();
     let mut function_exits = HashMap::new();
 
+    // AE Analysis expects that the entry to the main function is always at IndexNode(0)
+    let mut funcs_sorted: Vec<&Function> = ast.0.iter().collect();
+    funcs_sorted.sort_by_key(|f| if f.name == "main" { 0 } else { 1 });
+
     // Add entry and exit nodes for every function
-    for func in &ast.0 {
+    for func in funcs_sorted {
         let entry_annotated = AnnotatedExpression {
             expr: Expr {
                 expr: Expression::Unit,
