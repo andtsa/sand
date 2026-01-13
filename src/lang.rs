@@ -14,11 +14,15 @@ pub enum Ty {
 pub struct Parameter {
     pub name: String,
     pub ty: Ty,
+    pub start: (usize, usize),
+    pub end: (usize, usize),
 }
 
 #[derive(Debug, Clone)]
 pub struct Function {
     pub name: String,
+    pub name_start: (usize, usize),
+    pub name_end: (usize, usize),
     pub parameters: Vec<Parameter>,
     pub ret_type: Ty,
     pub body: Expr,
@@ -26,9 +30,20 @@ pub struct Function {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Statement {
-    Declaration { name: String, ty: Ty, val: Expr },
+    Declaration {
+        name: String,
+        name_start: (usize, usize),
+        name_end: (usize, usize),
+        ty: Ty,
+        val: Expr,
+    },
 
-    Assignment { name: String, val: Expr },
+    Assignment {
+        name: String,
+        name_start: (usize, usize),
+        name_end: (usize, usize),
+        val: Expr,
+    },
 
     Expr(Expr),
 }

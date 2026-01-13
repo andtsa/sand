@@ -4,7 +4,7 @@
 use untitled::lang::Expression;
 
 pub fn open_example_from_file(name: &str) -> String {
-    let path = format!("examples/{}.u", name);
+    let path = format!("examples/{}.kap", name);
     std::fs::read_to_string(path).expect("failed to read example file")
 }
 

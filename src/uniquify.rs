@@ -3,13 +3,10 @@
 //! takes a program AST and ensures all variable and function names are unique
 use std::collections::BTreeMap;
 
-use anyhow::anyhow;
-
 use crate::lang::*;
 use crate::reserved::RESERVED_FUNCTION_NAMES;
+use crate::reserved::UniquifyError;
 use crate::reserved::assert_unique;
-// ----------------------------------------------- Helper
-// ------------------------------------------------------
 
 /// A helper struct that captures the active scopes for all identifiers at the
 /// program's various levels and offers the functionality to keep track of and
@@ -91,17 +88,15 @@ impl Context {
     /// # Arguments
     /// * 'name' - The original identifier to look up.
     /// # Returns
-    /// The currently active unique name for that identifier.
-    /// # Panics
-    /// If the identifier is not bound in any active scope (e.g. using a
-    /// variable defined in an inner block, outside of that block).
-    pub fn lookup_var(&self, name: &str) -> String {
+    /// The currently active unique name for that identifier, or None if not
+    /// bound.
+    pub fn lookup_var_opt(&self, name: &str) -> Option<String> {
         for scope in self.var_scopes.iter().rev() {
             if let Some(n) = scope.get(name) {
-                return n.clone();
+                return Some(n.clone());
             }
         }
-        panic!("Unbound variable: {}", name);
+        None
     }
 
     /// Binds a given function to a newly generated unique name and stores it
@@ -124,20 +119,12 @@ impl Context {
     /// # Arguments
     /// * 'name' - The original identifier to look up.
     /// # Returns
-    /// The currently active unique name for that identifier.
-    /// # Panics
-    /// If the function is not defined in the global scope.
-    pub fn lookup_fun(&self, name: &str) -> String {
-        if let Some(n) = self.fun_scopes.get(name) {
-            n.clone()
-        } else {
-            panic!("Undefined function: {}", name);
-        }
+    /// The currently active unique name for that identifier, or None if not
+    /// defined.
+    pub fn lookup_fun_opt(&self, name: &str) -> Option<String> {
+        self.fun_scopes.get(name).cloned()
     }
 }
-
-// ----------------------------------------------- Helper
-// ------------------------------------------------------
 
 /// Offers the uniquify pass publicly via Program::uniquify
 impl Program {
@@ -146,7 +133,7 @@ impl Program {
     /// # Returns
     /// A new Program AST with all its names uniquified but with the same
     /// functionality.
-    pub fn uniquify(&self) -> anyhow::Result<Self> {
+    pub fn uniquify(&self) -> Result<Self, UniquifyError> {
         let mut u = Context::new();
 
         // First, bind all function names
@@ -156,14 +143,14 @@ impl Program {
         }
 
         // Then, enter those functions and uniquify them
-        let functions = self
-            .0
-            .iter()
-            .map(|f| uniquify_function(f, &mut u))
-            .collect();
+        let mut functions = Vec::new();
+        for f in &self.0 {
+            functions.push(uniquify_function(f, &mut u)?);
+        }
 
         let ast = Program(functions);
-        assert_unique(&ast).map_err(|e| anyhow!("{e}"))?;
+        // propagate uniqueness errors from the reserved checks
+        assert_unique(&ast)?;
         Ok(ast)
     }
 }
@@ -174,30 +161,41 @@ impl Program {
 /// * 'u' - The entire current Context.
 /// # Returns
 /// A new Function`AST with all identifiers uniquely renamed.
-fn uniquify_function(f: &Function, u: &mut Context) -> Function {
+fn uniquify_function(f: &Function, u: &mut Context) -> Result<Function, UniquifyError> {
     u.enter_scope();
 
-    let parameters = f
-        .parameters
-        .iter()
-        .map(|p| {
-            let new_name = u.bind_var(&p.name);
-            Parameter {
-                name: new_name,
-                ty: p.ty,
-            }
-        })
-        .collect();
-    let body = uniquify_expr(&f.body, u); // Enter a new context and recursively uniquify its expressions
+    let mut parameters: Vec<Parameter> = Vec::new();
+    for p in &f.parameters {
+        let new_name = u.bind_var(&p.name);
+        parameters.push(Parameter {
+            name: new_name,
+            ty: p.ty,
+            start: p.start,
+            end: p.end,
+        });
+    }
+    let body = uniquify_expr(&f.body, u)?; // Enter a new context and recursively uniquify its expressions
 
     u.exit_scope();
 
-    Function {
-        name: u.lookup_fun(&f.name),
+    let name = match u.lookup_fun_opt(&f.name) {
+        Some(n) => n,
+        None => {
+            return Err(UniquifyError::UndefinedFunction {
+                name: f.name.clone(),
+                at: (f.name_start, f.name_end),
+            });
+        }
+    };
+
+    Ok(Function {
+        name,
+        name_start: f.name_start,
+        name_end: f.name_end,
         parameters,
         ret_type: f.ret_type,
         body,
-    }
+    })
 }
 
 /// Recursively traverses and uniquifies an expression AST.
@@ -206,36 +204,60 @@ fn uniquify_function(f: &Function, u: &mut Context) -> Function {
 /// * 'u' - The entire current Context.
 /// # Returns
 /// A new 'Expr' with all identifiers renamed according to scope rules.
-fn uniquify_expr(e: &Expr, u: &mut Context) -> Expr {
+fn uniquify_expr(e: &Expr, u: &mut Context) -> Result<Expr, UniquifyError> {
     let expr = match &e.expr {
         Expression::If { cond, t, f } => Expression::If {
-            cond: Box::new(uniquify_expr(cond, u)),
-            t: Box::new(uniquify_expr(t, u)),
-            f: Box::new(uniquify_expr(f, u)),
+            cond: Box::new(uniquify_expr(cond, u)?),
+            t: Box::new(uniquify_expr(t, u)?),
+            f: Box::new(uniquify_expr(f, u)?),
         },
 
         Expression::While { cond, body } => Expression::While {
-            cond: Box::new(uniquify_expr(cond, u)),
-            body: Box::new(uniquify_expr(body, u)),
+            cond: Box::new(uniquify_expr(cond, u)?),
+            body: Box::new(uniquify_expr(body, u)?),
         },
 
         Expression::BinOp { left, op, right } => Expression::BinOp {
-            left: Box::new(uniquify_expr(left, u)),
+            left: Box::new(uniquify_expr(left, u)?),
             op: *op,
-            right: Box::new(uniquify_expr(right, u)),
+            right: Box::new(uniquify_expr(right, u)?),
         },
 
         Expression::UnOp { op, right } => Expression::UnOp {
             op: *op,
-            right: Box::new(uniquify_expr(right, u)),
+            right: Box::new(uniquify_expr(right, u)?),
         },
 
-        Expression::Call { fn_name, args } => Expression::Call {
-            fn_name: u.lookup_fun(fn_name),
-            args: args.iter().map(|a| uniquify_expr(a, u)).collect(),
-        },
+        Expression::Call { fn_name, args } => {
+            let mapped = match u.lookup_fun_opt(fn_name) {
+                Some(n) => n,
+                None => {
+                    return Err(UniquifyError::UndefinedFunction {
+                        name: fn_name.clone(),
+                        at: (e.start, e.end),
+                    });
+                }
+            };
+            let args_res: Result<Vec<Expr>, UniquifyError> =
+                args.iter().map(|a| uniquify_expr(a, u)).collect();
+            Expression::Call {
+                fn_name: mapped,
+                args: args_res?,
+            }
+        }
 
-        Expression::Var(name) => Expression::Var(u.lookup_var(name)),
+        Expression::Var(name) => {
+            let mapped = match u.lookup_var_opt(name) {
+                Some(n) => n,
+                None => {
+                    return Err(UniquifyError::UnboundVariable {
+                        name: name.clone(),
+                        at: (e.start, e.end),
+                    });
+                }
+            };
+            Expression::Var(mapped)
+        }
         Expression::Int(i) => Expression::Int(*i),
         Expression::Bool(b) => Expression::Bool(*b),
         Expression::Unit => Expression::Unit,
@@ -243,20 +265,29 @@ fn uniquify_expr(e: &Expr, u: &mut Context) -> Expr {
         Expression::Block { statements, expr } => {
             u.enter_scope();
 
-            let statements = statements.iter().map(|s| uniquify_stmt(s, u)).collect();
-            let expr = expr.as_ref().map(|e| Box::new(uniquify_expr(e, u)));
+            let mut stmts = Vec::new();
+            for s in statements {
+                stmts.push(uniquify_stmt(s, u)?);
+            }
+            let inner_expr = match expr.as_ref() {
+                Some(inner) => Some(Box::new(uniquify_expr(inner, u)?)),
+                None => None,
+            };
 
             u.exit_scope();
 
-            Expression::Block { statements, expr }
+            Expression::Block {
+                statements: stmts,
+                expr: inner_expr,
+            }
         }
     };
 
-    Expr {
+    Ok(Expr {
         expr,
         start: e.start,
         end: e.end,
-    }
+    })
 }
 
 /// Recursively traverses and uniquifies a statement AST.
@@ -265,23 +296,53 @@ fn uniquify_expr(e: &Expr, u: &mut Context) -> Expr {
 /// * 'u' - The entire current Context.
 /// # Returns
 /// A new Statement with variable names uniquely renamed
-fn uniquify_stmt(stmt: &Statement, u: &mut Context) -> Statement {
+fn uniquify_stmt(stmt: &Statement, u: &mut Context) -> Result<Statement, UniquifyError> {
     match stmt {
-        Statement::Declaration { name, ty, val } => {
-            let val = uniquify_expr(val, u);
+        Statement::Declaration {
+            name,
+            name_start,
+            name_end,
+            ty,
+            val,
+        } => {
+            let val = uniquify_expr(val, u)?;
             let new_name = u.bind_var(name);
-            Statement::Declaration {
+            Ok(Statement::Declaration {
                 name: new_name,
+                name_start: *name_start,
+                name_end: *name_end,
                 ty: *ty,
                 val,
-            }
+            })
         }
 
-        Statement::Assignment { name, val } => Statement::Assignment {
-            name: u.lookup_var(name),
-            val: uniquify_expr(val, u),
-        },
+        Statement::Assignment {
+            name,
+            name_start,
+            name_end,
+            val,
+        } => {
+            let mapped = match u.lookup_var_opt(name) {
+                Some(n) => n,
+                None => {
+                    return Err(UniquifyError::UnboundVariable {
+                        name: name.clone(),
+                        at: (*name_start, *name_end),
+                    });
+                }
+            };
+            let val = uniquify_expr(val, u)?;
+            Ok(Statement::Assignment {
+                name: mapped,
+                name_start: *name_start,
+                name_end: *name_end,
+                val,
+            })
+        }
 
-        Statement::Expr(e) => Statement::Expr(uniquify_expr(e, u)),
+        Statement::Expr(e) => {
+            let expr = uniquify_expr(e, u)?;
+            Ok(Statement::Expr(expr))
+        }
     }
 }
