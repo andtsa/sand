@@ -17,11 +17,15 @@ pub enum Ty {
 pub struct Parameter {
     pub name: String,
     pub ty: Ty,
+    pub start: (usize, usize),
+    pub end: (usize, usize),
 }
 
 #[derive(Debug, Clone)]
 pub struct Function {
     pub name: String,
+    pub name_start: (usize, usize),
+    pub name_end: (usize, usize),
     pub parameters: Vec<Parameter>,
     pub ret_type: Ty,
     pub body: Expr,
@@ -29,9 +33,20 @@ pub struct Function {
 
 #[derive(Debug, Clone)]
 pub enum Statement {
-    Declaration { name: String, ty: Ty, val: Expr },
+    Declaration {
+        name: String,
+        name_start: (usize, usize),
+        name_end: (usize, usize),
+        ty: Ty,
+        val: Expr,
+    },
 
-    Assignment { name: String, val: Expr },
+    Assignment {
+        name: String,
+        name_start: (usize, usize),
+        name_end: (usize, usize),
+        val: Expr,
+    },
 
     Expr(Expr),
 }
@@ -44,17 +59,24 @@ impl PartialEq for Statement {
                     name: n1,
                     ty: t1,
                     val: v1,
+                    ..
                 },
                 Declaration {
                     name: n2,
                     ty: t2,
                     val: v2,
+                    ..
                 },
             ) => n1 == n2 && t1 == t2 && v1 == v2,
 
-            (Assignment { name: n1, val: v1 }, Assignment { name: n2, val: v2 }) => {
-                n1 == n2 && v1 == v2
-            }
+            (
+                Assignment {
+                    name: n1, val: v1, ..
+                },
+                Assignment {
+                    name: n2, val: v2, ..
+                },
+            ) => n1 == n2 && v1 == v2,
 
             (Expr(e1), Expr(e2)) => e1 == e2,
             _ => false,
@@ -69,12 +91,12 @@ impl Hash for Statement {
         use Statement::*;
         std::mem::discriminant(self).hash(state);
         match self {
-            Declaration { name, ty, val } => {
+            Declaration { name, ty, val, .. } => {
                 name.hash(state);
                 ty.hash(state);
                 val.hash(state);
             }
-            Assignment { name, val } => {
+            Assignment { name, val, .. } => {
                 name.hash(state);
                 val.hash(state);
             }

@@ -17,6 +17,7 @@ pub mod cfg;
 pub mod interactions;
 pub mod interpret;
 pub mod lang;
+pub mod lsp;
 pub mod parse;
 pub mod reserved;
 pub mod traits;
