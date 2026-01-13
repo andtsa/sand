@@ -75,7 +75,14 @@ pub fn build_cfg_func(
     function_entries: &HashMap<String, NodeIndex>,
     function_exits: &HashMap<String, NodeIndex>,
 ) -> Result<()> {
-    let body_entry = build_cfg_expr(graph, &func.body, exit, function_entries, function_exits, None)?;
+    let body_entry = build_cfg_expr(
+        graph,
+        &func.body,
+        exit,
+        function_entries,
+        function_exits,
+        None,
+    )?;
     graph.add_edge(entry, body_entry, ());
 
     Ok(())
@@ -97,8 +104,10 @@ fn build_cfg_expr(
                 mutates: mutations.clone().unwrap_or_default(),
             };
             let cond_node = graph.add_node(cond_annotated);
-            let then_entry = build_cfg_expr(graph, t, next, function_entries, function_exits, None)?;
-            let else_entry = build_cfg_expr(graph, f, next, function_entries, function_exits, None)?;
+            let then_entry =
+                build_cfg_expr(graph, t, next, function_entries, function_exits, None)?;
+            let else_entry =
+                build_cfg_expr(graph, f, next, function_entries, function_exits, None)?;
 
             graph.add_edge(cond_node, then_entry, ());
             graph.add_edge(cond_node, else_entry, ());
@@ -112,8 +121,14 @@ fn build_cfg_expr(
                 mutates: mutations.clone().unwrap_or_default(),
             };
             let cond_node = graph.add_node(cond_annotated);
-            let body_entry =
-                build_cfg_expr(graph, body, cond_node, function_entries, function_exits, None)?;
+            let body_entry = build_cfg_expr(
+                graph,
+                body,
+                cond_node,
+                function_entries,
+                function_exits,
+                None,
+            )?;
 
             graph.add_edge(cond_node, body_entry, ());
             graph.add_edge(cond_node, next, ());
@@ -133,15 +148,14 @@ fn build_cfg_expr(
                     current_node,
                     function_entries,
                     function_exits,
-                    Some(mutations.clone().unwrap_or_default())
+                    Some(mutations.clone().unwrap_or_default()),
                 )?;
             }
 
             for stmt in statements.iter().rev() {
                 match stmt {
                     Statement::Declaration { name, val, .. }
-                    | Statement::Assignment { name, val , ..} => {
-
+                    | Statement::Assignment { name, val, .. } => {
                         let rhs_entry = build_cfg_expr(
                             graph,
                             val,
@@ -174,7 +188,7 @@ fn build_cfg_expr(
             Ok(current_node)
         }
         Expression::Call { fn_name, args } => {
-            let mut current_node = next;
+            let mut current_node;
 
             let call_annotated = AnnotatedExpression {
                 expr: expr.clone(),
@@ -195,8 +209,14 @@ fn build_cfg_expr(
             current_node = call_node;
 
             for arg in args.iter().rev() {
-                current_node =
-                    build_cfg_expr(graph, arg, current_node, function_entries, function_exits, None)?;
+                current_node = build_cfg_expr(
+                    graph,
+                    arg,
+                    current_node,
+                    function_entries,
+                    function_exits,
+                    None,
+                )?;
             }
 
             Ok(current_node)
