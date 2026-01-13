@@ -137,26 +137,26 @@ fn build_cfg_expr(
             }
 
             for stmt in statements.iter().rev() {
-                let (stmt_expr, mutations) = match stmt {
-                    Statement::Declaration { name, val, .. } => {
-                        (val, vec![name.clone()])
-                    },
-                    Statement::Assignment { name, val } => {
-                        (val, vec![name.clone()])
+                match stmt {
+                    Statement::Declaration { name, val, .. } | Statement::Assignment { name, val } => {
+                        current_node = build_cfg_expr(
+                            graph,
+                            val,
+                            current_node,
+                            function_entries,
+                            function_exits,
+                        )?;
                     },
                     Statement::Expr(e) => {
-                        (e, vec![])
+                        current_node = build_cfg_expr(
+                            graph,
+                            e,
+                            current_node,
+                            function_entries,
+                            function_exits,
+                        )?;
                     },
-                };
-                let annotated = AnnotatedExpression {
-                    expr: stmt_expr.clone(),
-                    depends_on: get_dependencies(stmt_expr),
-                    mutates: mutations,
-                };
-
-                let stmt_node = graph.add_node(annotated);
-                graph.add_edge(stmt_node, current_node, ());
-                current_node = stmt_node;
+                }
             }
 
             Ok(current_node)
