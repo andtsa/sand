@@ -57,13 +57,7 @@ impl Hash for AnnotatedExpression {
 }
 
 #[allow(unused)]
-pub fn analyse(program: &str) -> anyhow::Result<ProgramAnnotations> {
-    // first parse the whole program into an AST
-    let ast = Program::parse(program)?;
-
-    // then uniquify all variable and function names
-    let ast = ast.uniquify()?;
-
+pub fn analyse(ast: &Program) -> anyhow::Result<ProgramAnnotations> {
     // create the "control flow graph" - the order in which expressions are
     // evaluated. for example:
     // ```
@@ -86,9 +80,7 @@ pub fn analyse(program: &str) -> anyhow::Result<ProgramAnnotations> {
     // additionally, the control flow graph should branch for conditionals and
     // loops, and indicate indirection for function calls.
 
-    // /!\ temporarily commented out
-    let cfg = cfg::construct_cfg(&ast)?;
-    // let cfg = Graph::<AnnotatedExpression, (), Directed>::new();
+    let cfg = cfg::construct_cfg(ast)?;
 
     // we iterate through the above vector,
     // and for every expression we count how many times it appeared,

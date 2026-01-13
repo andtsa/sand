@@ -101,7 +101,7 @@ pub fn find_interactions(
         let mut subexprs = Vec::new();
         collect_expr_subtrees(&node.expr, &mut subexprs);
         for sub in subexprs {
-            if available_at[&n].contains(&sub) {
+            if available_at[&n].contains(sub) {
                 expr_occurrences
                     .entry(sub.clone())
                     .or_default()

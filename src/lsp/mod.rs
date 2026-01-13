@@ -8,6 +8,7 @@ use tower_lsp::LanguageServer;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 
+pub mod annotate;
 pub mod ast;
 pub mod backend;
 pub mod uniquify;
