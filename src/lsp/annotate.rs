@@ -49,9 +49,9 @@ pub fn annotate_reused_expressions(text: &str, ast: Program) -> Vec<Diagnostic> 
         // // NOTE: whether we include this check or not
         // // depends on how the annotations are made
         //
-        // if occs.len() <= 1 {
-        //     continue;
-        // }
+        if occs.len() <= 1 {
+            continue;
+        }
 
         for ((sl, sc), (el, ec)) in occs {
             let start = position_from_line_col(text, sl, sc);

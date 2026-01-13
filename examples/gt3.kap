@@ -1,0 +1,25 @@
+
+    def is_greater_than_three(n: Int): Bool :=
+    {
+        if n > 3 then {
+            true
+        } else {
+            false
+        }
+    }
+
+
+    def main(): Int :=
+    {
+        let i: Int = 1;
+        let cond: Bool = true;
+        while cond do {
+            cond = is_greater_than_three(i);
+            i = i + 1;
+        };
+
+        i
+    }
+
+
+

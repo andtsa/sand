@@ -28,12 +28,12 @@ pub fn find_interactions(
 
     let mut worklist = VecDeque::new();
     let mut visited = HashSet::new();
-    // worklist.push_back(NodeIndex::new(0)); // this is unsafe, it depends on the
+    worklist.push_back(NodeIndex::new(0)); // this is unsafe, it depends on the
     // internal implementation for the numbering, i would recommend u avoid.
     // // NOTE: starting from all nodes is inefficient but guarantees convergence
-    for n in cfg.node_indices() {
-        worklist.push_back(n);
-    }
+    // for n in cfg.node_indices() {
+    //     worklist.push_back(n);
+    // }
 
     while let Some(n) = worklist.pop_front() {
         let first_time = visited.insert(n);

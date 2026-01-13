@@ -32,10 +32,9 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn visualise_annotations(
-    text: &str,
-    repeated_expressions: &HashMap<Expr, HashSet<((usize, usize), (usize, usize))>>,
-) -> String {
+type OccurenceMap = HashMap<Expr, HashSet<((usize, usize), (usize, usize))>>;
+
+fn visualise_annotations(text: &str, repeated_expressions: &OccurenceMap) -> String {
     // collect lines preserving newline characters
     let lines_inclusive: Vec<&str> = text.split_inclusive('\n').collect();
 
@@ -43,14 +42,8 @@ fn visualise_annotations(
     let mut line_char_counts: Vec<usize> = Vec::with_capacity(lines_inclusive.len());
     let mut line_stripped: Vec<String> = Vec::with_capacity(lines_inclusive.len());
     for l in &lines_inclusive {
-        if l.ends_with('\n') {
-            let no_nl = &l[..l.len() - 1];
-            line_char_counts.push(no_nl.chars().count());
-            line_stripped.push(no_nl.to_string());
-        } else {
-            line_char_counts.push(l.chars().count());
-            line_stripped.push(l.to_string());
-        }
+        line_char_counts.push(l.trim_end().chars().count());
+        line_stripped.push(l.trim_end().to_string());
     }
 
     // map from 1-based line number -> Vec<(start_col, end_col)> inclusive, both
@@ -72,12 +65,7 @@ fn visualise_annotations(
             } else if sl < el {
                 // start line: from sc to end
                 let start_line_len = line_char_counts.get(sl - 1).copied().unwrap_or(0);
-                if start_line_len > 0 && sc <= start_line_len {
-                    ranges_by_line
-                        .entry(sl)
-                        .or_default()
-                        .push((sc, start_line_len));
-                } else if start_line_len > 0 && sc <= start_line_len + 1 {
+                if start_line_len > 0 && sc <= start_line_len + 1 {
                     ranges_by_line
                         .entry(sl)
                         .or_default()
