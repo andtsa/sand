@@ -132,6 +132,9 @@ impl Program {
                     (Expression::Int(l), Expression::Int(r), Bop::Div) => {
                         Ok(Expression::Int(l / r))
                     }
+                    (Expression::Int(l), Expression::Int(r), Bop::Pow) => {
+                        Ok(Expression::Int(l.pow(r as u32)))
+                    }
                     (Expression::Int(l), Expression::Int(r), Bop::Comp(cop)) => match cop {
                         CompOp::Eq => Ok(Expression::Bool(l == r)),
                         CompOp::Ne => Ok(Expression::Bool(l != r)),
@@ -178,13 +181,24 @@ impl Program {
                 let mut ret_expr = Expression::Unit;
                 for stmt in statements {
                     match stmt {
-                        Statement::Declaration { name, ty: _, val } => {
+                        Statement::Declaration {
+                            name,
+                            name_start: _,
+                            name_end: _,
+                            ty: _,
+                            val,
+                        } => {
                             let evaluated_val = val.evaluate(self, &local_env)?;
                             local_env
                                 .borrow_mut()
                                 .add_variable(name.clone(), evaluated_val);
                         }
-                        Statement::Assignment { name, val } => {
+                        Statement::Assignment {
+                            name,
+                            name_start: _,
+                            name_end: _,
+                            val,
+                        } => {
                             let evaluated_val = val.evaluate(self, &local_env)?;
                             local_env.borrow_mut().assign(name.clone(), evaluated_val)?;
                         }
@@ -207,6 +221,13 @@ impl Program {
                             print!("{:?} ", val);
                         }
                         println!();
+                        Ok(Expression::Unit)
+                    }
+                    "print" => {
+                        for arg in args {
+                            let val = arg.evaluate(self, env)?;
+                            print!("{:?} ", val);
+                        }
                         Ok(Expression::Unit)
                     }
                     x if self.0.iter().any(|f| f.name == x) => {

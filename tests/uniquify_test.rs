@@ -344,7 +344,7 @@ fn correctness15() -> Result<()> {
     }
     "#;
     let original: Program = Program::parse(src).unwrap();
-    let result = std::panic::catch_unwind(|| original.uniquify());
+    let result = original.uniquify();
     assert!(result.is_err());
     Ok(())
 }

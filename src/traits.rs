@@ -71,10 +71,21 @@ impl fmt::Display for Expression {
 impl fmt::Display for Statement {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Statement::Declaration { name, ty, val } => {
+            Statement::Declaration {
+                name,
+                name_start: _,
+                name_end: _,
+                ty,
+                val,
+            } => {
                 write!(f, "let {}: {} = {}", name, ty, val.expr)
             }
-            Statement::Assignment { name, val } => {
+            Statement::Assignment {
+                name,
+                name_start: _,
+                name_end: _,
+                val,
+            } => {
                 write!(f, "{} = {}", name, val.expr)
             }
             Statement::Expr(expr) => {
