@@ -1,0 +1,7 @@
+
+def main(): Int := {
+            let x: Int = a+b;
+            a = a + 1;
+            let y: Int = a+b;
+            x
+        }

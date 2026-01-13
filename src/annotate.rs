@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::hash::Hash;
 
 use crate::lang::Expr;
 use crate::lang::Expression;
@@ -58,18 +59,18 @@ pub fn collect_dependencies(expr: &Expression, dependencies: &mut HashSet<String
     }
 }
 
-pub fn get_mutations_stmt(stmt: &Statement) -> Vec<String> {
+pub fn get_mutations_stmt(stmt: &Statement) -> HashSet<String> {
     match stmt {
-        Statement::Declaration { name, .. } => vec![name.clone()],
-        Statement::Assignment { name, .. } => vec![name.clone()],
-        Statement::Expr(e) => vec![],
+        Statement::Declaration { name, .. } => HashSet::from([name.clone()]),
+        Statement::Assignment { name, .. } => HashSet::from([name.clone()]),
+        Statement::Expr(_) => HashSet::new(),
     }
 }
 
-pub fn get_mutations_expr(expr: &Expr) -> Vec<String> {
+pub fn get_mutations_expr(expr: &Expr) -> HashSet<String> {
     let mut mutations = HashSet::new();
     collect_mutations(&expr.expr, &mut mutations);
-    mutations.into_iter().collect()
+    mutations
 }
 
 fn collect_mutations(expr: &Expression, mutations: &mut HashSet<String>) {
