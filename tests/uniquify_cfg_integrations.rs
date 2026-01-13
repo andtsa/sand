@@ -1,14 +1,18 @@
-use petgraph::{Directed, Graph};
+use std::collections::HashSet;
+
+use petgraph::Directed;
+use petgraph::Graph;
 use petgraph::graph::NodeIndex;
+use petgraph::visit::EdgeRef;
 use untitled::AnnotatedExpression;
 use untitled::cfg::construct_cfg;
 use untitled::lang::Program;
-use untitled::reserved::{assert_unique, check_expr, SeenMap, UniquifyError};
+use untitled::reserved::SeenMap;
+use untitled::reserved::UniquifyError;
+use untitled::reserved::assert_unique;
+use untitled::reserved::check_expr;
 
 // --------------------------- Helper
-
-use petgraph::visit::EdgeRef;
-use std::collections::{HashSet};
 
 /// Recursively traverses a CFG and checks that all variables are unique.
 ///
@@ -60,7 +64,13 @@ fn simple() {
     assert!(assert_unique(&uniquified).is_ok());
 
     let cfg = construct_cfg(&uniquified).unwrap();
-    check_cfg_uniqueness(&cfg, NodeIndex::new(0), &mut SeenMap::new(),&mut HashSet::new()).expect("cfg should be unique");
+    check_cfg_uniqueness(
+        &cfg,
+        NodeIndex::new(0),
+        &mut SeenMap::new(),
+        &mut HashSet::new(),
+    )
+    .expect("cfg should be unique");
 }
 
 #[test]
@@ -81,7 +91,13 @@ fn if_statement() {
     assert!(assert_unique(&uniquified).is_ok());
 
     let cfg = construct_cfg(&uniquified).unwrap();
-    check_cfg_uniqueness(&cfg, NodeIndex::new(0), &mut SeenMap::new(),&mut HashSet::new()).expect("cfg should be unique");
+    check_cfg_uniqueness(
+        &cfg,
+        NodeIndex::new(0),
+        &mut SeenMap::new(),
+        &mut HashSet::new(),
+    )
+    .expect("cfg should be unique");
 }
 
 #[test]
@@ -102,7 +118,13 @@ fn while_loop() {
     assert!(assert_unique(&uniquified).is_ok());
 
     let cfg = construct_cfg(&uniquified).unwrap();
-    check_cfg_uniqueness(&cfg, NodeIndex::new(0), &mut SeenMap::new(),&mut HashSet::new()).expect("cfg should be unique");
+    check_cfg_uniqueness(
+        &cfg,
+        NodeIndex::new(0),
+        &mut SeenMap::new(),
+        &mut HashSet::new(),
+    )
+    .expect("cfg should be unique");
 }
 
 #[test]
@@ -124,7 +146,13 @@ fn functions() {
     assert!(assert_unique(&uniquified).is_ok());
 
     let cfg = construct_cfg(&uniquified).unwrap();
-    check_cfg_uniqueness(&cfg, NodeIndex::new(0), &mut SeenMap::new(),&mut HashSet::new()).expect("cfg should be unique");
+    check_cfg_uniqueness(
+        &cfg,
+        NodeIndex::new(0),
+        &mut SeenMap::new(),
+        &mut HashSet::new(),
+    )
+    .expect("cfg should be unique");
 }
 
 #[test]
@@ -161,7 +189,13 @@ fn complex() {
     assert!(assert_unique(&uniquified).is_ok());
 
     let cfg = construct_cfg(&uniquified).unwrap();
-    check_cfg_uniqueness(&cfg, NodeIndex::new(0), &mut SeenMap::new(),&mut HashSet::new()).expect("cfg should be unique");
+    check_cfg_uniqueness(
+        &cfg,
+        NodeIndex::new(0),
+        &mut SeenMap::new(),
+        &mut HashSet::new(),
+    )
+    .expect("cfg should be unique");
 }
 
 #[test]
@@ -182,5 +216,11 @@ fn blocks() {
     assert!(assert_unique(&uniquified).is_ok());
 
     let cfg = construct_cfg(&uniquified).unwrap();
-    check_cfg_uniqueness(&cfg, NodeIndex::new(0), &mut SeenMap::new(),&mut HashSet::new()).expect("cfg should be unique");
+    check_cfg_uniqueness(
+        &cfg,
+        NodeIndex::new(0),
+        &mut SeenMap::new(),
+        &mut HashSet::new(),
+    )
+    .expect("cfg should be unique");
 }
