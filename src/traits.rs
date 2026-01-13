@@ -151,14 +151,14 @@ impl fmt::Display for AnnotatedExpression {
             write!(f, " [")?;
 
             if !self.depends_on.is_empty() {
-                write!(f, "deps: {}", self.depends_on.join(", "))?;
+                write!(f, "deps: {}", self.depends_on.iter().cloned().collect::<Vec<_>>().join(", "))?;
             }
 
             if !self.mutates.is_empty() {
                 if !self.depends_on.is_empty() {
                     write!(f, "; ")?;
                 }
-                write!(f, "muts: {}", self.mutates.join(", "))?;
+                write!(f, "muts: {}", self.mutates.iter().cloned().collect::<Vec<_>>().join(", "))?;
             }
 
             write!(f, "]")?;

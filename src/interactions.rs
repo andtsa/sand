@@ -7,7 +7,6 @@ use std::collections::HashSet;
 use petgraph::Directed;
 use petgraph::Graph;
 use petgraph::graph::NodeIndex;
-
 use crate::AnnotatedExpression;
 use crate::ProgramAnnotations;
 use crate::TupleSpan;
@@ -61,7 +60,7 @@ pub fn find_interactions(
             let mut killed = HashSet::new();
             for e in &in_gen_union {
                 for v in &e.depends_on {
-                    if expr.mutates.contains(&v) {
+                    if expr.mutates.contains(v) {
                         killed.insert(e.clone());
                     }
                 }
@@ -92,11 +91,15 @@ pub fn find_interactions(
         let exprs: HashSet<_> = in_sets[&n].iter().map(|ae| ae.expr.clone()).collect();
         available_at.insert(n, exprs.clone());
 
-        if exprs.contains(&node.expr) {
-            expr_occurrences
-                .entry(node.expr.clone())
-                .or_default()
-                .push((node.expr.start, node.expr.end));
+        let mut subexprs = Vec::new();
+        collect_expr_subtrees(&node.expr, &mut subexprs);
+        for sub in subexprs {
+            if available_at[&n].contains(&sub) {
+                expr_occurrences
+                    .entry(sub.clone())
+                    .or_default()
+                    .push((sub.start, sub.end));
+            }
         }
     }
 
@@ -112,4 +115,24 @@ fn is_candidate(expr: &Expr) -> bool {
         expr.expr,
         Expression::BinOp { .. } | Expression::UnOp { .. } | Expression::Call { .. }
     )
+}
+
+fn collect_expr_subtrees<'a>(expr: &'a Expr, out: &mut Vec<&'a Expr>) {
+    out.push(expr);
+
+    match &expr.expr {
+        Expression::BinOp { left, right, .. } => {
+            collect_expr_subtrees(left, out);
+            collect_expr_subtrees(right, out);
+        }
+        Expression::UnOp { right, .. } => {
+            collect_expr_subtrees(right, out);
+        }
+        Expression::Call { args, .. } => {
+            for a in args {
+                collect_expr_subtrees(a, out);
+            }
+        }
+        _ => {}
+    }
 }
