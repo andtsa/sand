@@ -2,9 +2,7 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
-
-use petgraph::Directed;
-use petgraph::Graph;
+use std::hash::{Hash, Hasher};
 use petgraph::graph::NodeIndex;
 
 use crate::interactions::find_interactions;
@@ -32,13 +30,27 @@ pub struct ProgramAnnotations {
     pub available_at: HashMap<NodeIndex, HashSet<Expr>>,
 }
 
-#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct AnnotatedExpression {
     pub expr: Expr,
     /// which variables does this expression depend on
-    pub depends_on: Vec<String>,
+    pub depends_on: HashSet<String>,
     /// which variables does this expression mutate
-    pub mutates: Vec<String>,
+    pub mutates: HashSet<String>,
+}
+
+impl PartialEq for AnnotatedExpression {
+    fn eq(&self, other: &Self) -> bool {
+        self.expr == other.expr
+    }
+}
+
+impl Eq for AnnotatedExpression {}
+
+impl Hash for AnnotatedExpression {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.expr.hash(state);
+    }
 }
 
 #[allow(unused)]

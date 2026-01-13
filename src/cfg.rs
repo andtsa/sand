@@ -1,6 +1,6 @@
 //! control flow graph construction
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
 use petgraph::Directed;
@@ -30,8 +30,8 @@ pub fn construct_cfg(ast: &Program) -> Result<Graph<AnnotatedExpression, (), Dir
                 start: (0, 0),
                 end: (0, 0),
             },
-            depends_on: vec![],
-            mutates: vec![],
+            depends_on: HashSet::new(),
+            mutates: HashSet::new(),
         };
         let entry = graph.add_node(entry_annotated);
 
@@ -41,8 +41,8 @@ pub fn construct_cfg(ast: &Program) -> Result<Graph<AnnotatedExpression, (), Dir
                 start: (0, 0),
                 end: (0, 0),
             },
-            depends_on: vec![],
-            mutates: vec![],
+            depends_on: HashSet::new(),
+            mutates: HashSet::new(),
         };
         let exit = graph.add_node(exit_annotated);
 
@@ -94,7 +94,7 @@ fn build_cfg_expr(
             let cond_annotated = AnnotatedExpression {
                 expr: cond.as_ref().clone(),
                 depends_on: get_dependencies(cond),
-                mutates: vec![],
+                mutates: HashSet::new(),
             };
             let cond_node = graph.add_node(cond_annotated);
             let then_entry = build_cfg_expr(graph, t, next, function_entries, function_exits)?;
@@ -109,7 +109,7 @@ fn build_cfg_expr(
             let cond_annotated = AnnotatedExpression {
                 expr: cond.as_ref().clone(),
                 depends_on: get_dependencies(cond),
-                mutates: vec![],
+                mutates: HashSet::new(),
             };
             let cond_node = graph.add_node(cond_annotated);
             let body_entry =
@@ -167,7 +167,7 @@ fn build_cfg_expr(
             let call_annotated = AnnotatedExpression {
                 expr: expr.clone(),
                 depends_on: get_dependencies(expr),
-                mutates: vec![],
+                mutates: HashSet::new(),
             };
             let call_node = graph.add_node(call_annotated);
 
@@ -195,7 +195,7 @@ fn build_cfg_expr(
             let annotated = AnnotatedExpression {
                 expr: expr.clone(),
                 depends_on: get_dependencies(expr),
-                mutates: vec![],
+                mutates: HashSet::new(),
             };
             let node = graph.add_node(annotated);
             graph.add_edge(node, next, ());

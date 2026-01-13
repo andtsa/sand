@@ -1,10 +1,10 @@
 use std::collections::HashSet;
 use crate::lang::{Expr, Expression, Statement};
 
-pub fn get_dependencies(expr: &Expr) -> Vec<String> {
+pub fn get_dependencies(expr: &Expr) -> HashSet<String> {
     let mut dependencies = HashSet::new();
     collect_dependencies(&expr.expr, &mut dependencies);
-    dependencies.into_iter().collect()
+    dependencies
 }
 
 pub fn collect_dependencies(expr: &Expression, dependencies: &mut HashSet<String>) {
