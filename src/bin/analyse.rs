@@ -4,6 +4,8 @@
 //! - find repeated expressions
 //! - print to stdout
 
+use untitled::lang::Program;
+
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.len() != 2 {
@@ -15,7 +17,8 @@ fn main() -> anyhow::Result<()> {
     let program_src = std::fs::read_to_string(input_file)
         .map_err(|e| anyhow::anyhow!("failed to read input file {}: {}", input_file, e))?;
 
-    let annotations = untitled::analyse(&program_src)?;
+    let ast = Program::parse(&program_src)?.uniquify()?;
+    let annotations = untitled::analyse(&ast)?;
 
     println!("Program Annotations:\n{:#?}", annotations);
 

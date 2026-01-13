@@ -12,6 +12,8 @@ def main(): Int := {
     let num: Int = 9;
     let result: Int = factorial(num);
     println(result);
+
+    let other_result: Int = factorial(num);
     
     result
 }
