@@ -204,3 +204,15 @@ def t17(a: Int, b: Int): Int := {
     a + b;
     ((((a+b))))
 }
+
+def helper(x: Int): Unit := print(x)
+
+def t18(): Unit := {
+    let z: Int = 1 + 2 + 3 * 4;
+    let a: Unit = helper(z);
+    z = z * z;
+    let b: Unit = helper(z);
+    z * z;
+    1 + 2+ 3*4;
+    helper(z)
+}
