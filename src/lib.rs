@@ -27,7 +27,7 @@ pub type TupleSpan = ((usize, usize), (usize, usize));
 #[derive(Debug, Clone, Default)]
 pub struct ProgramAnnotations {
     /// Map from each expression to all its occurrences in the source code
-    pub expr_occurrences: HashMap<Expr, Vec<TupleSpan>>,
+    pub expr_occurrences: HashMap<Expr, HashSet<TupleSpan>>,
 
     /// Available-expressions set at each CFG node
     pub available_at: HashMap<NodeIndex, HashSet<Expr>>,
