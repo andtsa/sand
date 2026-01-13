@@ -29,6 +29,9 @@ def main(): Int := {
         while false do print(0);
         5
     };
+ 
+    x * x;
+    192*555;
 
     if true then {
         x * x
@@ -177,5 +180,27 @@ def t15(a: Int, b: Int): Int :=
     x + y
 }
 
+def t16(a: Int): Int := 
+{
+    let x: Int = {
+        1 + 2 + (3 * 4) / 5 * (
+            6 + 7 - 8
+        )
+    };
 
+    let y: Int = (
+        1 + 2 + (3 * 4) / 5 * (
+            6 + 7 - 8
+        )
+    );
 
+    let z: Int = 6 + 7 - 8;
+    
+    let w: Int = 3 * 4;
+    let f: Int = 3 * 4;
+}
+
+def t17(a: Int, b: Int): Int := {
+    a + b;
+    ((((a+b))))
+}
