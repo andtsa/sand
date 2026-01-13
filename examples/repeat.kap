@@ -1,0 +1,8 @@
+def main(): Unit := {
+    let a: Int = 5 + 9;
+    let b: Int = 5 + 9;
+    (5 + 9) * a / b;
+    5 + 9; 
+    5 + 9; 
+    5 + 9; 
+}

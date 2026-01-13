@@ -28,7 +28,12 @@ pub fn find_interactions(
 
     let mut worklist = VecDeque::new();
     let mut visited = HashSet::new();
-    worklist.push_back(NodeIndex::new(0));
+    worklist.push_back(NodeIndex::new(0)); // this is unsafe, it depends on the internal
+    // implementation for the numbering, i would recommend u avoid.
+    // // NOTE: starting from all nodes is inefficient but guarantees convergence
+    // for n in cfg.node_indices() {
+    //     worklist.push_back(n);
+    // }
 
     while let Some(n) = worklist.pop_front() {
         let first_time = visited.insert(n);
@@ -95,7 +100,13 @@ pub fn find_interactions(
         let node = &cfg[n];
 
         // available_at
-        let exprs: HashSet<_> = in_sets[&n].iter().map(|ae| ae.expr.clone()).collect();
+        let exprs: HashSet<_> = in_sets[&n]
+            .iter()
+            // NOTE: including the out-set captures the first instance of an expression as well
+            // .chain(out_sets[&n].iter())
+            .map(|ae| ae.expr.clone())
+            .collect();
+
         available_at.insert(n, exprs.clone());
 
         let mut subexprs = Vec::new();

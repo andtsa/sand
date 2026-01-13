@@ -20,7 +20,7 @@ fn main() -> anyhow::Result<()> {
     let ast = Program::parse(&program_src)?.uniquify()?;
     let annotations = untitled::analyse(&ast)?;
 
-    println!("Program Annotations:\n{:#?}", annotations);
+    println!("Program Annotations:\n{:#?}", annotations.expr_occurrences);
 
     Ok(())
 }
