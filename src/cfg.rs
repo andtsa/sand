@@ -1,3 +1,4 @@
+#![allow(unused)]
 //! control flow graph construction
 
 use std::collections::HashMap;
@@ -192,67 +193,67 @@ fn build_cfg_expr(
 
             Ok(current_node)
         }
-        Expression::BinOp {left, op: _ , right} => {
-            let binop_annotated = AnnotatedExpression {
-                expr: expr.clone(),
-                depends_on: get_dependencies(expr),
-                mutates: mutations.clone().unwrap_or_default(),
-            };
-            let binop_node = graph.add_node(binop_annotated);
-            graph.add_edge(binop_node, next, ());
-
-            let rhs_entry = if needs_node(right) {
-                build_cfg_expr(
-                    graph,
-                    right,
-                    binop_node,
-                    function_entries,
-                    function_exits,
-                    None,
-                )?
-            } else {
-                binop_node
-            };
-
-            let lhs_entry = if needs_node(left) {
-                build_cfg_expr(
-                    graph,
-                    left,
-                    rhs_entry,
-                    function_entries,
-                    function_exits,
-                    None,
-                )?
-            } else {
-                rhs_entry
-            };
-
-            Ok(lhs_entry)
-        }
-        Expression::UnOp {op: _ , right} => {
-            let unop_annotated = AnnotatedExpression {
-                expr: expr.clone(),
-                depends_on: get_dependencies(expr),
-                mutates: mutations.clone().unwrap_or_default(),
-            };
-            let unop_node = graph.add_node(unop_annotated);
-            graph.add_edge(unop_node, next, ());
-
-            let rhs_entry = if needs_node(right) {
-                build_cfg_expr(
-                    graph,
-                    right,
-                    unop_node,
-                    function_entries,
-                    function_exits,
-                    None,
-                )?
-            } else {
-                unop_node
-            };
-
-            Ok(rhs_entry)
-        }
+        // Expression::BinOp {left, op: _ , right} => {
+        //     let binop_annotated = AnnotatedExpression {
+        //         expr: expr.clone(),
+        //         depends_on: get_dependencies(expr),
+        //         mutates: mutations.clone().unwrap_or_default(),
+        //     };
+        //     let binop_node = graph.add_node(binop_annotated);
+        //     graph.add_edge(binop_node, next, ());
+        //
+        //     let rhs_entry = if needs_node(right) {
+        //         build_cfg_expr(
+        //             graph,
+        //             right,
+        //             binop_node,
+        //             function_entries,
+        //             function_exits,
+        //             None,
+        //         )?
+        //     } else {
+        //         binop_node
+        //     };
+        //
+        //     let lhs_entry = if needs_node(left) {
+        //         build_cfg_expr(
+        //             graph,
+        //             left,
+        //             rhs_entry,
+        //             function_entries,
+        //             function_exits,
+        //             None,
+        //         )?
+        //     } else {
+        //         rhs_entry
+        //     };
+        //
+        //     Ok(lhs_entry)
+        // }
+        // Expression::UnOp {op: _ , right} => {
+        //     let unop_annotated = AnnotatedExpression {
+        //         expr: expr.clone(),
+        //         depends_on: get_dependencies(expr),
+        //         mutates: mutations.clone().unwrap_or_default(),
+        //     };
+        //     let unop_node = graph.add_node(unop_annotated);
+        //     graph.add_edge(unop_node, next, ());
+        //
+        //     let rhs_entry = if needs_node(right) {
+        //         build_cfg_expr(
+        //             graph,
+        //             right,
+        //             unop_node,
+        //             function_entries,
+        //             function_exits,
+        //             None,
+        //         )?
+        //     } else {
+        //         unop_node
+        //     };
+        //
+        //     Ok(rhs_entry)
+        // }
         Expression::Call { fn_name, args } => {
             let mut current_node;
 

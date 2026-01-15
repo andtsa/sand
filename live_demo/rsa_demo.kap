@@ -1,0 +1,26 @@
+def main(): Int  := {
+    let x: Int = 5 + 9;
+    let x: Int = 5 + 9;
+    let x: Int = 5 + 9;
+    let y: Int = 5 + 9 + 4;
+
+    let z: Int = x + y;
+    let z: Int = x + y;
+    let z: Int = x + y;
+    x = z + 1;
+
+    x + y;
+    x + y;
+
+    if x > 5 then {
+        192 * 555;
+        192 * 555;
+    }; 
+    /*else {
+        192 * 555;
+    };*/
+
+    192 * 555; 
+    
+    print(x);
+}

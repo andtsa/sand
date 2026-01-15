@@ -6,6 +6,7 @@ use tower_lsp::lsp_types::Range;
 
 use crate::ProgramAnnotations;
 use crate::analyse;
+use crate::interactions::has_other_side_effects;
 use crate::lang::Program;
 use crate::lsp::util::position_from_line_col;
 
@@ -51,6 +52,9 @@ pub fn annotate_reused_expressions(text: &str, ast: Program) -> Vec<Diagnostic> 
         // if occs.len() <= 1 {
         //     continue;
         // }
+        if has_other_side_effects(&e) {
+            continue;
+        }
 
         for ((sl, sc), (el, ec)) in occs {
             let start = position_from_line_col(text, sl, sc);

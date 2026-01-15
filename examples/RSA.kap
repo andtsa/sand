@@ -1,0 +1,116 @@
+
+def mod(a: Int, m: Int): Int :=
+    a - (a / m) * m
+
+def gcd(a: Int, b: Int): Int :=
+{
+    let x: Int = a;
+    let y: Int = b;
+
+    while y != 0 do {
+        let t: Int = y;
+        y = mod(x, y);
+        x = t;
+    };
+
+    x
+}
+
+
+def modinv(a: Int, m: Int): Int :=
+{
+    let t: Int = 0;
+    let newt: Int = 1;
+    let r: Int = m;
+    let newr: Int = a;
+
+    while newr != 0 do {
+        let q: Int = r / newr;
+
+        let tmp_t: Int = t - q * newt;
+        t = newt;
+        newt = tmp_t;
+
+        let tmp_r: Int = r - q * newr;
+        r = newr;
+        newr = tmp_r;
+    };
+
+    if r > 1 then
+        0 // not invertible
+    else {
+        if t < 0 then { t = t + m; };
+        t
+    }
+}
+
+
+def modexp(base: Int, exp: Int, m: Int): Int :=
+{
+    let result: Int = 1;
+    let b: Int = mod(base, m);
+    let e: Int = exp;
+
+    while e > 0 do {
+        if mod(e, 2) == 1 then {
+            result = mod(result * b, m);
+        };
+
+        b = mod(b * b, m);
+        e = e / 2;
+    };
+
+    result
+}
+
+
+def rsa_encrypt(msg: Int): Int :=
+{
+    // primes
+    let p: Int = 61;
+    let q: Int = 53;
+
+    let n: Int = p * q;
+    let phi: Int = (p - 1) * (q - 1);
+    let phi_2: Int = (p - 1) * (q - 1);
+
+    let e: Int = 17; // gcd(17, phi) == 1
+    let d: Int = modinv(e, phi);
+
+    modexp(msg, e, n)
+}
+
+
+def rsa_decrypt(cipher: Int): Int :=
+{
+    let p: Int = 61;
+    let q: Int = 53;
+
+    let n: Int = p * q;
+    let phi: Int = (p - 1) * (q - 1);
+
+    let e: Int = 17;
+    let d: Int = modinv(e, phi);
+
+    modexp(cipher, d, n)
+}
+
+
+def test(message: Int): Unit := {
+    println(message);
+    let cipher: Int = rsa_encrypt(message);
+    println(cipher);
+    let plain: Int = rsa_decrypt(cipher);
+    println(plain);
+}
+
+
+def main(): Int :=
+{
+    let message: Int = 42;
+    test(message);
+
+    let msg: Int = 12345 + 1345765 + 343543;
+    test(12345 + 1345765 + 343543);
+}
+

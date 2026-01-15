@@ -1,3 +1,4 @@
+#![allow(unused)]
 //! find repeated expressions in a program,
 //! keeping track of variable interactions
 
@@ -14,6 +15,7 @@ use crate::ProgramAnnotations;
 use crate::TupleSpan;
 use crate::lang::Expr;
 use crate::lang::Expression;
+use crate::reserved::RESERVED_FUNCTION_NAMES;
 
 pub fn find_interactions(
     cfg: Graph<AnnotatedExpression, (), Directed>,
@@ -135,7 +137,22 @@ fn is_candidate(expr: &Expr) -> bool {
     )
 }
 
+pub fn has_other_side_effects(expr: &Expr) -> bool {
+    false
+    // match &expr.expr {
+    //     Expression::Call { fn_name, .. } if RESERVED_FUNCTION_NAMES.contains(&fn_name.as_str()) => {
+    //         true
+    //     }
+    //     _ => false        // Expression::If { cond, t, f } => has_other_side_effects(&cond)
+    // }
+}
+
 fn collect_expr_subtrees<'a>(expr: &'a Expr, out: &mut Vec<&'a Expr>) {
+    if has_other_side_effects(expr) {
+        println!("side effects: {expr:?}, {out:?}");
+        out.clear();
+        return;
+    }
     out.push(expr);
 
     match &expr.expr {

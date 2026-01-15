@@ -3,6 +3,19 @@ def main(): Unit := {
     let b: Int = 5 + 9;
     (5 + 9) * a / b;
     5 + 9; 
-    5 + 9; 
+    5 + 9;
+    1 + f(1, 5 + 9);
+    f(5) + 9 ;
+
+
+    f(1, f(5) + 9);
+    let n: Unit = 4;
+    n = f(n);
+    n = f(n);
+    f(n) + f(n);
     5 + 9
+}
+
+def f(x: Int): Int := {
+    f(x) + f(x)
 }

@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+use untitled::interactions::has_other_side_effects;
 use untitled::lang::Expr;
 use untitled::lang::Program;
 
@@ -50,7 +51,10 @@ fn visualise_annotations(text: &str, repeated_expressions: &OccurenceMap) -> Str
     // 1-based
     let mut ranges_by_line: HashMap<usize, Vec<(usize, usize)>> = HashMap::new();
 
-    for (_expr, occs) in repeated_expressions.iter() {
+    for (expr, occs) in repeated_expressions.iter() {
+        if has_other_side_effects(&expr) {
+            continue;
+        }
         for &((sl, sc), (el, ec)) in occs.iter() {
             if sl == 0 || el == 0 {
                 continue;

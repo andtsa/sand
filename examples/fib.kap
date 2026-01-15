@@ -1,11 +1,13 @@
 // fibonacci
 
-def fib(x: Int): Int := 
+def fib(x: Int): Int := {
+    1 + 2;
     if x ≤ 1 then 
         x 
     else 
         fib(x - 1) 
         + fib(x - 2)
+}
 
 def main(): Unit := {
     let a: Int = 10;
@@ -15,5 +17,6 @@ def main(): Unit := {
     // between variable names and function names
     let fib: Int = fib(a);
     println(fib(a));
+    1 + 2;
     fib
 }
