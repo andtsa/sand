@@ -1,6 +1,6 @@
 //! operators
 
-use crate::ir_types::types::Ty;
+use crate::lang::types::Ty;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Bop {

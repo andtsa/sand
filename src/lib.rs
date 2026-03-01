@@ -9,8 +9,8 @@ use petgraph::graph::NodeIndex;
 
 use crate::analysis::cfg;
 use crate::analysis::interactions::find_interactions;
-use crate::ir_types::ast::Expr;
-use crate::ir_types::ast::Program;
+use crate::ir_types::hhir::Expr;
+use crate::ir_types::hhir::Program;
 
 pub mod analysis;
 pub mod interpreter;
@@ -18,6 +18,7 @@ pub mod ir_types;
 pub mod lsp;
 pub mod passes;
 pub mod util;
+pub mod lang;
 
 pub type TupleSpan = ((usize, usize), (usize, usize));
 #[derive(Debug, Clone, Default)]

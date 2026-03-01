@@ -1,4 +1,4 @@
-use sand::ir_types::ast::Program;
+use sand::ir_types::hhir::Program;
 
 mod common;
 

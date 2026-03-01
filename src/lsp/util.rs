@@ -36,7 +36,7 @@ pub(super) fn parse_error_to_diagnostic(text: &str, err: pest::error::Error<Rule
     Diagnostic {
         range: Range::new(start, end),
         severity: Some(DiagnosticSeverity::ERROR),
-        source: Some("kap".into()),
+        source: Some("sand".into()),
         message: err.variant.message().into(),
         ..Default::default()
     }

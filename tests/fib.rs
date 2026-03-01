@@ -1,7 +1,7 @@
 //! tests for examples in examples/
 
 mod common;
-use sand::ir_types::ast::Expression;
+use sand::ir_types::hhir::Expression;
 
 #[test]
 fn fib() -> anyhow::Result<()> {

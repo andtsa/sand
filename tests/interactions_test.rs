@@ -4,9 +4,9 @@ use petgraph::Directed;
 use petgraph::graph::Graph;
 use sand::AnnotatedExpression;
 use sand::analysis::interactions::find_interactions;
-use sand::ir_types::ast::Expr;
-use sand::ir_types::ast::Expression;
-use sand::ir_types::ops::Bop;
+use sand::ir_types::hhir::Expr;
+use sand::ir_types::hhir::Expression;
+use sand::lang::ops::Bop;
 
 fn a_plus_b(start: (usize, usize)) -> Expr {
     Expr {

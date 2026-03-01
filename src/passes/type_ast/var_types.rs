@@ -3,10 +3,10 @@
 
 use std::collections::BTreeMap;
 
-use crate::ir_types::ast::*;
-use crate::ir_types::typed_ast::FnName;
-use crate::ir_types::typed_ast::VarName;
-use crate::ir_types::types::Ty;
+use crate::ir_types::hhir::*;
+use crate::ir_types::typed_hir::FnName;
+use crate::ir_types::typed_hir::VarName;
+use crate::lang::types::Ty;
 use crate::passes::type_ast::AstTypeError;
 
 pub(super) type VarMap = BTreeMap<VarName, Ty>;
@@ -22,6 +22,7 @@ pub(super) fn collect_variables(func: &Function, fn_args: &FnMap) -> Result<VarM
     Ok(vars)
 }
 
+#[track_caller]
 pub(super) fn collect_variable_names_in_expr(
     expr: &Expr,
     vars: VarMap,
@@ -65,31 +66,25 @@ pub(super) fn collect_variable_names_in_expr(
         }
         Expression::Call { fn_name, args } => {
             // functions only get their arguments in the variable scope
-            let params = fn_args
+            let _params = fn_args
                 .get(fn_name)
                 .ok_or_else(|| AstTypeError::UndefinedFunction {
                     name: fn_name.clone(),
                     start: expr.start,
                     end: expr.end,
                 })?;
-            let mut new_vars = vars.clone();
-            for (param_name, param_ty) in &params.0 {
-                new_vars.insert(param_name.clone(), *param_ty);
+            let mut acc = vars;
+            for arg in args {
+                acc = collect_variable_names_in_expr(arg, acc, fn_args)?;
             }
-            new_vars = args
-                .iter()
-                .map(|arg| collect_variable_names_in_expr(arg, new_vars.clone(), fn_args))
-                .collect::<Result<Vec<VarMap>, AstTypeError>>()?
-                .into_iter()
-                .flatten()
-                .collect();
-            Ok(new_vars)
+            Ok(acc)
         }
         Expression::Block { statements, expr } => {
             let mut new_vars = vars.clone();
             for stmt in statements {
                 match stmt {
-                    Statement::Declaration { name, ty, .. } => {
+                    Statement::Declaration { name, ty, val, .. } => {
+                        new_vars = collect_variable_names_in_expr(val, new_vars, fn_args)?;
                         new_vars.insert(name.clone(), *ty);
                     }
                     Statement::Expr(e) => {
@@ -101,8 +96,8 @@ pub(super) fn collect_variable_names_in_expr(
                         name_start,
                         name_end,
                     } => {
-                        if vars.get(name).is_some() {
-                            new_vars = collect_variable_names_in_expr(val, vars.clone(), fn_args)?;
+                        if new_vars.contains_key(name) {
+                            new_vars = collect_variable_names_in_expr(val, new_vars, fn_args)?;
                         } else {
                             return Err(AstTypeError::UnboundVariable {
                                 name: name.clone(),
@@ -114,7 +109,7 @@ pub(super) fn collect_variable_names_in_expr(
                 }
             }
             if let Some(e) = expr {
-                new_vars = collect_variable_names_in_expr(e, vars, fn_args)?;
+                new_vars = collect_variable_names_in_expr(e, new_vars, fn_args)?;
             }
             Ok(new_vars)
         }

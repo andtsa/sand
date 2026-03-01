@@ -5,7 +5,7 @@ pub mod reserved;
 
 use std::collections::BTreeMap;
 
-use crate::ir_types::ast::*;
+use crate::ir_types::hhir::*;
 use crate::passes::uniquify::reserved::RESERVED_FUNCTION_NAMES;
 use crate::passes::uniquify::reserved::UniquifyError;
 use crate::passes::uniquify::reserved::assert_unique;

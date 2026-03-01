@@ -1,37 +1,26 @@
-//! a strongly typed abstract syntax tree IR,
-//! - expressions are annotated with their types
-//! - variables and functions are resolved (VarRef and FnRef instead of String)
-//! - uniquify has already been run, so no name clashes
-//! - is SSA form (each variable is assigned to exactly once)
+//! highest high intermediate representation:
+//! the abstract syntax tree IR
 
-use std::collections::BTreeMap;
 use std::hash::Hash;
 use std::hash::Hasher;
 
-use crate::ir_types::ops::*;
-use crate::ir_types::types::*;
-
-pub type FnName = String;
-pub type VarName = String;
+use crate::lang::ops::*;
+use crate::lang::types::*;
 
 #[derive(Debug, Clone)]
-pub struct TypedProgram {
-    pub avail_fns: Vec<FnName>,
-    pub avail_vars: BTreeMap<VarName, Ty>,
-    pub functions: BTreeMap<FnName, TypedFunction>,
-}
+pub struct Program(pub Vec<Function>);
 
 #[derive(Debug, Clone)]
 pub struct Parameter {
-    pub name: VarName,
+    pub name: String,
     pub ty: Ty,
     pub start: (usize, usize),
     pub end: (usize, usize),
 }
 
 #[derive(Debug, Clone)]
-pub struct TypedFunction {
-    pub name: FnName,
+pub struct Function {
+    pub name: String,
     pub name_start: (usize, usize),
     pub name_end: (usize, usize),
     pub parameters: Vec<Parameter>,
@@ -42,7 +31,7 @@ pub struct TypedFunction {
 #[derive(Debug, Clone)]
 pub enum Statement {
     Declaration {
-        name: VarName,
+        name: String,
         name_start: (usize, usize),
         name_end: (usize, usize),
         ty: Ty,
@@ -50,7 +39,7 @@ pub enum Statement {
     },
 
     Assignment {
-        name: VarName,
+        name: String,
         name_start: (usize, usize),
         name_end: (usize, usize),
         val: Expr,
@@ -63,7 +52,6 @@ pub enum Statement {
 #[derive(Debug, Clone)]
 pub struct Expr {
     pub expr: Expression,
-    pub ty: Ty,
     pub start: (usize, usize),
     pub end: (usize, usize),
 }
@@ -89,10 +77,10 @@ pub enum Expression {
         right: Box<Expr>,
     },
     Call {
-        fn_name: FnName,
+        fn_name: String,
         args: Vec<Expr>,
     },
-    Var(VarName),
+    Var(String),
     Int(i64),
     Bool(bool),
     Unit,
@@ -102,7 +90,26 @@ pub enum Expression {
     },
 }
 
-// --- trait implementations ---
+impl Eq for Statement {}
+
+impl Hash for Statement {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        use Statement::*;
+        std::mem::discriminant(self).hash(state);
+        match self {
+            Declaration { name, ty, val, .. } => {
+                name.hash(state);
+                ty.hash(state);
+                val.hash(state);
+            }
+            Assignment { name, val, .. } => {
+                name.hash(state);
+                val.hash(state);
+            }
+            Expr(e) => e.hash(state),
+        }
+    }
+}
 
 impl PartialEq for Statement {
     fn eq(&self, other: &Self) -> bool {
@@ -134,27 +141,6 @@ impl PartialEq for Statement {
 
             (Expr(e1), Expr(e2)) => e1 == e2,
             _ => false,
-        }
-    }
-}
-
-impl Eq for Statement {}
-
-impl Hash for Statement {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        use Statement::*;
-        std::mem::discriminant(self).hash(state);
-        match self {
-            Declaration { name, ty, val, .. } => {
-                name.hash(state);
-                ty.hash(state);
-                val.hash(state);
-            }
-            Assignment { name, val, .. } => {
-                name.hash(state);
-                val.hash(state);
-            }
-            Expr(e) => e.hash(state),
         }
     }
 }

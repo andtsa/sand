@@ -2,7 +2,7 @@
 
 use std::error::Error;
 
-use crate::ir_types::types::Ty;
+use crate::lang::types::Ty;
 
 #[derive(Debug)]
 pub enum AstTypeError {

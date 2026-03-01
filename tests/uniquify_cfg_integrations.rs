@@ -6,7 +6,7 @@ use petgraph::graph::NodeIndex;
 use petgraph::visit::EdgeRef;
 use sand::AnnotatedExpression;
 use sand::analysis::cfg::construct_cfg;
-use sand::ir_types::ast::Program;
+use sand::ir_types::hhir::Program;
 use sand::passes::uniquify::reserved::SeenMap;
 use sand::passes::uniquify::reserved::UniquifyError;
 use sand::passes::uniquify::reserved::assert_unique;

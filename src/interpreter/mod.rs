@@ -6,8 +6,8 @@ use std::rc::Rc;
 
 use anyhow::anyhow;
 
-use crate::ir_types::ast::*;
-use crate::ir_types::ops::*;
+use crate::ir_types::hhir::*;
+use crate::lang::ops::*;
 
 impl Program {
     /// run the main function of the program and return an expression

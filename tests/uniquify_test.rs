@@ -1,7 +1,7 @@
 //! Tests for the uniquify pass of the compiler
 
 use anyhow::Result;
-use sand::ir_types::ast::*;
+use sand::ir_types::hhir::*;
 use sand::passes::uniquify::reserved::assert_unique;
 // ----------------------------------------------- Helper
 

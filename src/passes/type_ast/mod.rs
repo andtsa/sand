@@ -11,18 +11,18 @@ mod var_types;
 
 use std::collections::BTreeMap;
 
-use crate::ir_types::ast;
-use crate::ir_types::typed_ast;
-use crate::ir_types::typed_ast::FnName;
-use crate::ir_types::typed_ast::TypedFunction;
-use crate::ir_types::types::Ty;
+use crate::ir_types::hhir;
+use crate::ir_types::typed_hir;
+use crate::ir_types::typed_hir::FnName;
+use crate::ir_types::typed_hir::TypedFunction;
+use crate::lang::types::Ty;
 pub use crate::passes::type_ast::errors::AstTypeError;
 use crate::passes::type_ast::var_types::FnMap;
 use crate::passes::type_ast::var_types::VarMap;
 use crate::passes::uniquify::reserved::assert_unique;
 
-impl typed_ast::TypedProgram {
-    pub fn from_ast_program(ast: &ast::Program) -> Result<Self, AstTypeError> {
+impl typed_hir::TypedProgram {
+    pub fn from_ast_program(ast: &hhir::Program) -> Result<Self, AstTypeError> {
         assert_unique(ast).map_err(AstTypeError::UniquifyError)?;
 
         let avail_fns = ast
@@ -51,7 +51,7 @@ impl typed_ast::TypedProgram {
 
         let functions = fn_list.into_iter().collect::<BTreeMap<_, _>>();
 
-        let prog = typed_ast::TypedProgram {
+        let prog = typed_hir::TypedProgram {
             avail_fns: avail_fns.keys().cloned().collect(),
             avail_vars,
             functions,
@@ -64,10 +64,10 @@ impl typed_ast::TypedProgram {
 }
 
 pub fn annotate_function(
-    func: &ast::Function,
+    func: &hhir::Function,
     avail_fns: &FnMap,
     avail_vars: &mut VarMap,
-) -> Result<(typed_ast::FnName, typed_ast::TypedFunction), AstTypeError> {
+) -> Result<(typed_hir::FnName, typed_hir::TypedFunction), AstTypeError> {
     let mut var_types = var_types::collect_variables(func, avail_fns)?;
 
     let body = annotate_expression(&func.body, avail_fns, &var_types)?;
@@ -76,14 +76,14 @@ pub fn annotate_function(
 
     Ok((
         func.name.clone(),
-        typed_ast::TypedFunction {
+        typed_hir::TypedFunction {
             name: func.name.clone(),
             name_start: func.name_start,
             name_end: func.name_end,
             parameters: func
                 .parameters
                 .iter()
-                .map(|p| typed_ast::Parameter {
+                .map(|p| typed_hir::Parameter {
                     name: p.name.clone(),
                     ty: p.ty,
                     start: p.start,
@@ -97,30 +97,30 @@ pub fn annotate_function(
 }
 
 fn annotate_expression(
-    expr: &ast::Expr,
+    expr: &hhir::Expr,
     avail_fns: &FnMap,
     var_types: &VarMap,
-) -> Result<typed_ast::Expr, AstTypeError> {
+) -> Result<typed_hir::Expr, AstTypeError> {
     match &expr.expr {
-        ast::Expression::Int(x) => Ok(typed_ast::Expr {
-            expr: typed_ast::Expression::Int(*x),
+        hhir::Expression::Int(x) => Ok(typed_hir::Expr {
+            expr: typed_hir::Expression::Int(*x),
             start: expr.start,
             end: expr.end,
             ty: Ty::Int,
         }),
-        ast::Expression::Bool(x) => Ok(typed_ast::Expr {
-            expr: typed_ast::Expression::Bool(*x),
+        hhir::Expression::Bool(x) => Ok(typed_hir::Expr {
+            expr: typed_hir::Expression::Bool(*x),
             start: expr.start,
             end: expr.end,
             ty: Ty::Bool,
         }),
-        ast::Expression::Unit => Ok(typed_ast::Expr {
-            expr: typed_ast::Expression::Unit,
+        hhir::Expression::Unit => Ok(typed_hir::Expr {
+            expr: typed_hir::Expression::Unit,
             start: expr.start,
             end: expr.end,
             ty: Ty::Unit,
         }),
-        ast::Expression::Var(x) => {
+        hhir::Expression::Var(x) => {
             let ty = var_types
                 .get(x)
                 .ok_or_else(|| AstTypeError::UnboundVariable {
@@ -128,32 +128,32 @@ fn annotate_expression(
                     start: expr.start,
                     end: expr.end,
                 })?;
-            Ok(typed_ast::Expr {
-                expr: typed_ast::Expression::Var(x.clone()),
+            Ok(typed_hir::Expr {
+                expr: typed_hir::Expression::Var(x.clone()),
                 start: expr.start,
                 end: expr.end,
                 ty: *ty,
             })
         }
-        ast::Expression::BinOp { left, op, right } => {
+        hhir::Expression::BinOp { left, op, right } => {
             let left_expr = annotate_expression(left, avail_fns, var_types)?;
             let right_expr = annotate_expression(right, avail_fns, var_types)?;
 
-            let expected_ty = op
-                .accepts_types(left_expr.ty, right_expr.ty)
-                .map_err(|expected_ty| AstTypeError::TypeError {
-                    message: format!(
-                        "Operator '{:?}' does not accept types {:?} and {:?}",
-                        op, left_expr.ty, right_expr.ty
-                    ),
-                    expected: expected_ty,
-                    found: left_expr.ty,
-                    start: expr.start,
-                    end: expr.end,
-                })?;
+            let expected_ty =
+                op.accepts_types(left_expr.ty, right_expr.ty)
+                    .map_err(|expected_ty| AstTypeError::TypeError {
+                        message: format!(
+                            "Operator '{:?}' does not accept types {:?} and {:?}",
+                            op, left_expr.ty, right_expr.ty
+                        ),
+                        expected: expected_ty,
+                        found: left_expr.ty,
+                        start: expr.start,
+                        end: expr.end,
+                    })?;
 
-            Ok(typed_ast::Expr {
-                expr: typed_ast::Expression::BinOp {
+            Ok(typed_hir::Expr {
+                expr: typed_hir::Expression::BinOp {
                     left: Box::new(left_expr),
                     op: *op,
                     right: Box::new(right_expr),
@@ -163,24 +163,24 @@ fn annotate_expression(
                 ty: expected_ty,
             })
         }
-        ast::Expression::UnOp { op, right } => {
+        hhir::Expression::UnOp { op, right } => {
             let right_expr = annotate_expression(right, avail_fns, var_types)?;
 
-            let expected_ty = op
-                .accepts_type(right_expr.ty)
-                .map_err(|expected_ty| AstTypeError::TypeError {
-                    message: format!(
-                        "Operator '{:?}' does not accept type {:?}",
-                        op, right_expr.ty
-                    ),
-                    expected: expected_ty,
-                    found: right_expr.ty,
-                    start: expr.start,
-                    end: expr.end,
-                })?;
+            let expected_ty =
+                op.accepts_type(right_expr.ty)
+                    .map_err(|expected_ty| AstTypeError::TypeError {
+                        message: format!(
+                            "Operator '{:?}' does not accept type {:?}",
+                            op, right_expr.ty
+                        ),
+                        expected: expected_ty,
+                        found: right_expr.ty,
+                        start: expr.start,
+                        end: expr.end,
+                    })?;
 
-            Ok(typed_ast::Expr {
-                expr: typed_ast::Expression::UnOp {
+            Ok(typed_hir::Expr {
+                expr: typed_hir::Expression::UnOp {
                     op: *op,
                     right: Box::new(right_expr),
                 },
@@ -189,7 +189,7 @@ fn annotate_expression(
                 ty: expected_ty,
             })
         }
-        ast::Expression::If { cond, t, f } => {
+        hhir::Expression::If { cond, t, f } => {
             let cond_expr = annotate_expression(cond, avail_fns, var_types)?;
             let t_expr = annotate_expression(t, avail_fns, var_types)?;
             let f_expr = annotate_expression(f, avail_fns, var_types)?;
@@ -209,8 +209,8 @@ fn annotate_expression(
                 t_expr.ty
             };
 
-            Ok(typed_ast::Expr {
-                expr: typed_ast::Expression::If {
+            Ok(typed_hir::Expr {
+                expr: typed_hir::Expression::If {
                     cond: Box::new(cond_expr),
                     t: Box::new(t_expr),
                     f: Box::new(f_expr),
@@ -220,13 +220,13 @@ fn annotate_expression(
                 ty: expected_ty,
             })
         }
-        ast::Expression::While { cond, body } => {
+        hhir::Expression::While { cond, body } => {
             let cond_expr = annotate_expression(cond, avail_fns, var_types)?;
             let body_expr = annotate_expression(body, avail_fns, var_types)?;
             let ret_ty = body_expr.ty;
 
-            Ok(typed_ast::Expr {
-                expr: typed_ast::Expression::While {
+            Ok(typed_hir::Expr {
+                expr: typed_hir::Expression::While {
                     cond: Box::new(cond_expr),
                     body: Box::new(body_expr),
                 },
@@ -235,7 +235,7 @@ fn annotate_expression(
                 ty: ret_ty,
             })
         }
-        ast::Expression::Call { fn_name, args } => {
+        hhir::Expression::Call { fn_name, args } => {
             let arg_exprs_and_tys = args
                 .iter()
                 .map(|arg| annotate_expression(arg, avail_fns, var_types))
@@ -250,8 +250,8 @@ fn annotate_expression(
                 })?
                 .1;
 
-            Ok(typed_ast::Expr {
-                expr: typed_ast::Expression::Call {
+            Ok(typed_hir::Expr {
+                expr: typed_hir::Expression::Call {
                     fn_name: fn_name.clone(),
                     args: arg_exprs_and_tys,
                 },
@@ -260,7 +260,10 @@ fn annotate_expression(
                 ty: ret_type,
             })
         }
-        ast::Expression::Block { statements, expr: ret_expr } => {
+        hhir::Expression::Block {
+            statements,
+            expr: ret_expr,
+        } => {
             let typed_statements = statements
                 .iter()
                 .map(|stmt| annotate_statement(stmt, avail_fns, var_types))
@@ -274,8 +277,8 @@ fn annotate_expression(
                 (None, Ty::Unit)
             };
 
-            Ok(typed_ast::Expr {
-                expr: typed_ast::Expression::Block {
+            Ok(typed_hir::Expr {
+                expr: typed_hir::Expression::Block {
                     statements: typed_statements,
                     expr: typed_expr,
                 },
@@ -288,12 +291,12 @@ fn annotate_expression(
 }
 
 fn annotate_statement(
-    stmt: &ast::Statement,
+    stmt: &hhir::Statement,
     avail_fns: &FnMap,
     var_types: &VarMap,
-) -> Result<typed_ast::Statement, AstTypeError> {
+) -> Result<typed_hir::Statement, AstTypeError> {
     let typed_stmt = match stmt {
-        ast::Statement::Declaration {
+        hhir::Statement::Declaration {
             name,
             ty,
             val,
@@ -301,7 +304,7 @@ fn annotate_statement(
             name_end,
         } => {
             let val_expr = annotate_expression(val, avail_fns, var_types)?;
-            typed_ast::Statement::Declaration {
+            typed_hir::Statement::Declaration {
                 name: name.clone(),
                 name_start: *name_start,
                 name_end: *name_end,
@@ -309,23 +312,23 @@ fn annotate_statement(
                 val: val_expr,
             }
         }
-        ast::Statement::Assignment {
+        hhir::Statement::Assignment {
             name,
             val,
             name_start,
             name_end,
         } => {
             let val_expr = annotate_expression(val, avail_fns, var_types)?;
-            typed_ast::Statement::Assignment {
+            typed_hir::Statement::Assignment {
                 name: name.clone(),
                 name_start: *name_start,
                 name_end: *name_end,
                 val: val_expr,
             }
         }
-        ast::Statement::Expr(e) => {
+        hhir::Statement::Expr(e) => {
             let e_expr = annotate_expression(e, avail_fns, var_types)?;
-            typed_ast::Statement::Expr(e_expr)
+            typed_hir::Statement::Expr(e_expr)
         }
     };
     Ok(typed_stmt)

@@ -30,7 +30,7 @@ pub(super) fn uniquify_error_to_diagnostic(
             vec![Diagnostic {
                 range,
                 severity: Some(DiagnosticSeverity::ERROR),
-                source: Some("kap".into()),
+                source: Some("sand".into()),
                 message,
                 related_information: Some(vec![related]),
                 ..Default::default()
@@ -55,7 +55,7 @@ pub(super) fn uniquify_error_to_diagnostic(
             vec![Diagnostic {
                 range,
                 severity: Some(DiagnosticSeverity::ERROR),
-                source: Some("kap".into()),
+                source: Some("sand".into()),
                 message,
                 related_information: Some(vec![related]),
                 ..Default::default()
@@ -91,7 +91,7 @@ pub(super) fn uniquify_error_to_diagnostic(
             vec![Diagnostic {
                 range: second_range,
                 severity: Some(DiagnosticSeverity::ERROR),
-                source: Some("kap".into()),
+                source: Some("sand".into()),
                 message,
                 related_information: Some(vec![related]),
                 ..Default::default()
@@ -116,7 +116,7 @@ pub(super) fn uniquify_error_to_diagnostic(
             vec![Diagnostic {
                 range,
                 severity: Some(DiagnosticSeverity::ERROR),
-                source: Some("kap".into()),
+                source: Some("sand".into()),
                 message,
                 related_information: Some(vec![related]),
                 ..Default::default()
@@ -152,7 +152,7 @@ pub(super) fn uniquify_error_to_diagnostic(
             vec![Diagnostic {
                 range: second_range,
                 severity: Some(DiagnosticSeverity::ERROR),
-                source: Some("kap".into()),
+                source: Some("sand".into()),
                 message,
                 related_information: Some(vec![related]),
                 ..Default::default()
@@ -188,7 +188,7 @@ pub(super) fn uniquify_error_to_diagnostic(
             vec![Diagnostic {
                 range: second_range,
                 severity: Some(DiagnosticSeverity::ERROR),
-                source: Some("kap".into()),
+                source: Some("sand".into()),
                 message,
                 related_information: Some(vec![related]),
                 ..Default::default()

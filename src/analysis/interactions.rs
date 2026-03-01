@@ -13,8 +13,8 @@ use petgraph::graph::NodeIndex;
 use crate::AnnotatedExpression;
 use crate::ProgramAnnotations;
 use crate::TupleSpan;
-use crate::ir_types::ast::Expr;
-use crate::ir_types::ast::Expression;
+use crate::ir_types::hhir::Expr;
+use crate::ir_types::hhir::Expression;
 use crate::passes::uniquify::reserved::RESERVED_FUNCTION_NAMES;
 
 pub fn find_interactions(

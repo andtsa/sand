@@ -1,4 +1,6 @@
-use sand::ir_types::ast::Program;
+#![allow(unused)]
+use sand::ir_types::hhir::Program;
+use sand::ir_types::typed_hir::TypedProgram;
 use sand::passes::parse::Rule;
 
 fn _print_pairs(pairs: pest::iterators::Pairs<Rule>, indent: usize) {
@@ -86,32 +88,34 @@ fn main() -> anyhow::Result<()> {
     }"#;
 
     let _test_4 = r#"
-    def main(): Int := {
-        let a: Int = 1;
+def main(): Int := {
+    let a: Int = 1;
+    let x: Int = {
         let x: Int = {
             let x: Int = {
-                let x: Int = {
-                    let x: Int = 3;
-                    x + a
-                };
-                x
+                let x: Int = 3;
+                x + a
             };
             x
         };
         x
-    }"#;
+    };
+    x
+}"#;
 
     let program = Program::parse(_test_4)?;
-    println!("{:#?}", program);
+    // println!("{:#?}", program);
 
     let uniquified = Program::uniquify(&program)?;
+    // let typed = TypedProgram::from_ast_program(&uniquified)?;
     println!("{:#?}", uniquified);
+    // println!("{:#?}", typed);
 
     let eval_u = uniquified.interpret()?;
-    let eval_p = program.interpret()?;
-    println!(
-        "Program evaluated to: {:?}\nUniquified evaluated to: {:?}",
-        eval_p, eval_u
-    );
+    // let eval_p = program.interpret()?;
+    // println!(
+    //     "Program evaluated to: {:?}\nUniquified evaluated to: {:?}",
+    //     eval_p, eval_u
+    // );
     Ok(())
 }

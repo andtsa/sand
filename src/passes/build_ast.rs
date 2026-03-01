@@ -6,9 +6,9 @@ use pest::error::Error;
 use pest::iterators::Pair;
 use thiserror::Error;
 
-use crate::ir_types::ast::*;
-use crate::ir_types::ops::*;
-use crate::ir_types::types::*;
+use crate::ir_types::hhir::*;
+use crate::lang::ops::*;
+use crate::lang::types::*;
 use crate::passes::parse::LangParser;
 use crate::passes::parse::Rule;
 use crate::passes::uniquify::reserved::RESERVED_FUNCTION_NAMES;

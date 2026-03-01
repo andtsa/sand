@@ -1,7 +1,7 @@
 //! check that the types of a TypedProgram AST actually make sense
 
-use crate::ir_types::typed_ast::*;
-use crate::ir_types::types::Ty;
+use crate::ir_types::typed_hir::*;
+use crate::lang::types::Ty;
 use crate::passes::type_ast::AstTypeError;
 
 pub(super) fn check_program(prog: &TypedProgram) -> Result<(), AstTypeError> {
@@ -23,7 +23,7 @@ pub(super) fn check_function(
                 "Function '{}' has return type {:?} but body has type {:?}",
                 func.name, func.ret_type, body_ty
             ),
-            expected: func.ret_type.clone(),
+            expected: func.ret_type,
             found: body_ty,
             start: func.name_start,
             end: func.name_end,
@@ -139,7 +139,7 @@ pub(super) fn check_expr(expr: &Expr, prog: &TypedProgram) -> Result<Ty, AstType
                         func.parameters.len(),
                         args.len()
                     ),
-                    expected: func.parameters.iter().map(|p| p.ty.clone()).collect(),
+                    expected: func.parameters.iter().map(|p| p.ty).collect(),
                     found: arg_tys,
                     start: expr.start,
                     end: expr.end,
@@ -156,15 +156,15 @@ pub(super) fn check_expr(expr: &Expr, prog: &TypedProgram) -> Result<Ty, AstType
                             param.ty,
                             arg_ty
                         ),
-                        expected: vec![param.ty.clone()],
-                        found: vec![arg_ty.clone()],
+                        expected: vec![param.ty],
+                        found: vec![*arg_ty],
                         start: args[i].start,
                         end: args[i].end,
                     });
                 }
             }
 
-            Ok(func.ret_type.clone())
+            Ok(func.ret_type)
         }
         Expression::Block { statements, expr } => {
             let mut block_scope = prog.clone();
@@ -184,13 +184,13 @@ pub(super) fn check_expr(expr: &Expr, prog: &TypedProgram) -> Result<Ty, AstType
                                     "Declared variable '{}' has type {:?} but initializer has type {:?}",
                                     name, ty, val_ty
                                 ),
-                                expected: ty.clone(),
+                                expected: *ty,
                                 found: val_ty,
                                 start: *name_start,
                                 end: *name_end,
                             });
                         }
-                        block_scope.avail_vars.insert(name.clone(), ty.clone());
+                        block_scope.avail_vars.insert(name.clone(), *ty);
                     }
                     Statement::Assignment {
                         name,
@@ -212,7 +212,7 @@ pub(super) fn check_expr(expr: &Expr, prog: &TypedProgram) -> Result<Ty, AstType
                                     "Variable '{}' has type {:?} but assigned value has type {:?}",
                                     name, var_ty, val_ty
                                 ),
-                                expected: var_ty.clone(),
+                                expected: *var_ty,
                                 found: val_ty,
                                 start: *name_start,
                                 end: *name_end,

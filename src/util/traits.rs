@@ -1,9 +1,9 @@
 use std::fmt;
 
 use crate::AnnotatedExpression;
-use crate::ir_types::ast::*;
-use crate::ir_types::ops::*;
-use crate::ir_types::types::*;
+use crate::ir_types::hhir::*;
+use crate::lang::ops::*;
+use crate::lang::types::*;
 
 impl fmt::Display for Expr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

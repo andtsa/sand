@@ -3,7 +3,7 @@ use std::fs;
 use petgraph::dot::Config;
 use petgraph::dot::Dot;
 use sand::analysis::cfg;
-use sand::ir_types::ast::Program;
+use sand::ir_types::hhir::Program;
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();

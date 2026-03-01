@@ -11,6 +11,7 @@ use tower_lsp::lsp_types::*;
 pub mod annotate;
 pub mod ast;
 pub mod backend;
+pub mod typecheck;
 pub mod uniquify;
 pub mod util;
 
@@ -36,7 +37,7 @@ impl LanguageServer for Backend {
 
     async fn initialized(&self, _: InitializedParams) {
         self.client
-            .log_message(MessageType::INFO, "kap-lsp initialized")
+            .log_message(MessageType::INFO, "sand-lsp initialized")
             .await;
     }
 

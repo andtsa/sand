@@ -8,8 +8,8 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 
 use sand::analysis::interactions::has_other_side_effects;
-use sand::ir_types::ast::Expr;
-use sand::ir_types::ast::Program;
+use sand::ir_types::hhir::Expr;
+use sand::ir_types::hhir::Program;
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -52,7 +52,7 @@ fn visualise_annotations(text: &str, repeated_expressions: &OccurenceMap) -> Str
     let mut ranges_by_line: HashMap<usize, Vec<(usize, usize)>> = HashMap::new();
 
     for (expr, occs) in repeated_expressions.iter() {
-        if has_other_side_effects(&expr) {
+        if has_other_side_effects(expr) {
             continue;
         }
         for &((sl, sc), (el, ec)) in occs.iter() {

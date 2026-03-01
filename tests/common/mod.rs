@@ -1,11 +1,11 @@
 //! helper methods for integration tests
 #![allow(dead_code)]
 
-use sand::ir_types::ast::Expression;
-use sand::ir_types::ast::Program;
+use sand::ir_types::hhir::Expression;
+use sand::ir_types::hhir::Program;
 
 pub fn open_example_from_file(name: &str) -> String {
-    let path = format!("examples/{}.kap", name);
+    let path = format!("examples/{}.sand", name);
     std::fs::read_to_string(path).expect("failed to read example file")
 }
 
