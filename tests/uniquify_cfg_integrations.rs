@@ -4,13 +4,13 @@ use petgraph::Directed;
 use petgraph::Graph;
 use petgraph::graph::NodeIndex;
 use petgraph::visit::EdgeRef;
-use untitled::AnnotatedExpression;
-use untitled::cfg::construct_cfg;
-use untitled::lang::Program;
-use untitled::reserved::SeenMap;
-use untitled::reserved::UniquifyError;
-use untitled::reserved::assert_unique;
-use untitled::reserved::check_expr;
+use sand::AnnotatedExpression;
+use sand::analysis::cfg::construct_cfg;
+use sand::ir_types::ast::Program;
+use sand::passes::uniquify::reserved::SeenMap;
+use sand::passes::uniquify::reserved::UniquifyError;
+use sand::passes::uniquify::reserved::assert_unique;
+use sand::passes::uniquify::reserved::check_expr;
 
 // --------------------------- Helper
 

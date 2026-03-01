@@ -11,7 +11,7 @@ fn main() -> anyhow::Result<()> {
     let program_src = std::fs::read_to_string(input_file)
         .map_err(|e| anyhow::anyhow!("failed to read input file {}: {}", input_file, e))?;
 
-    let program = untitled::lang::Program::parse(&program_src)?;
+    let program = sand::ir_types::ast::Program::parse(&program_src)?;
 
     let output = program.interpret()?;
 

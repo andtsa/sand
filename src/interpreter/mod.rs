@@ -1,4 +1,4 @@
-//! a simple interpreter for the untitled language
+//! a simple interpreter for the sand language
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -6,7 +6,8 @@ use std::rc::Rc;
 
 use anyhow::anyhow;
 
-use crate::lang::*;
+use crate::ir_types::ast::*;
+use crate::ir_types::ops::*;
 
 impl Program {
     /// run the main function of the program and return an expression

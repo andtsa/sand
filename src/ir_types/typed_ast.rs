@@ -1,29 +1,37 @@
-//! rust types for the language
+//! a strongly typed abstract syntax tree IR,
+//! - expressions are annotated with their types
+//! - variables and functions are resolved (VarRef and FnRef instead of String)
+//! - uniquify has already been run, so no name clashes
+//! - is SSA form (each variable is assigned to exactly once)
 
+use std::collections::BTreeMap;
 use std::hash::Hash;
 use std::hash::Hasher;
 
-#[derive(Debug, Clone)]
-pub struct Program(pub Vec<Function>);
+use crate::ir_types::ops::*;
+use crate::ir_types::types::*;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Ty {
-    Int,
-    Bool,
-    Unit,
+pub type FnName = String;
+pub type VarName = String;
+
+#[derive(Debug, Clone)]
+pub struct TypedProgram {
+    pub avail_fns: Vec<FnName>,
+    pub avail_vars: BTreeMap<VarName, Ty>,
+    pub functions: BTreeMap<FnName, TypedFunction>,
 }
 
 #[derive(Debug, Clone)]
 pub struct Parameter {
-    pub name: String,
+    pub name: VarName,
     pub ty: Ty,
     pub start: (usize, usize),
     pub end: (usize, usize),
 }
 
 #[derive(Debug, Clone)]
-pub struct Function {
-    pub name: String,
+pub struct TypedFunction {
+    pub name: FnName,
     pub name_start: (usize, usize),
     pub name_end: (usize, usize),
     pub parameters: Vec<Parameter>,
@@ -34,7 +42,7 @@ pub struct Function {
 #[derive(Debug, Clone)]
 pub enum Statement {
     Declaration {
-        name: String,
+        name: VarName,
         name_start: (usize, usize),
         name_end: (usize, usize),
         ty: Ty,
@@ -42,7 +50,7 @@ pub enum Statement {
     },
 
     Assignment {
-        name: String,
+        name: VarName,
         name_start: (usize, usize),
         name_end: (usize, usize),
         val: Expr,
@@ -50,6 +58,52 @@ pub enum Statement {
 
     Expr(Expr),
 }
+
+/// `Expr` wraps an `Expression` and carries start/end positions (line,col)
+#[derive(Debug, Clone)]
+pub struct Expr {
+    pub expr: Expression,
+    pub ty: Ty,
+    pub start: (usize, usize),
+    pub end: (usize, usize),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Expression {
+    If {
+        cond: Box<Expr>,
+        t: Box<Expr>,
+        f: Box<Expr>,
+    },
+    While {
+        cond: Box<Expr>,
+        body: Box<Expr>,
+    },
+    BinOp {
+        left: Box<Expr>,
+        op: Bop,
+        right: Box<Expr>,
+    },
+    UnOp {
+        op: Uop,
+        right: Box<Expr>,
+    },
+    Call {
+        fn_name: FnName,
+        args: Vec<Expr>,
+    },
+    Var(VarName),
+    Int(i64),
+    Bool(bool),
+    Unit,
+    Block {
+        statements: Vec<Statement>,
+        expr: Option<Box<Expr>>,
+    },
+}
+
+// --- trait implementations ---
+
 impl PartialEq for Statement {
     fn eq(&self, other: &Self) -> bool {
         use Statement::*;
@@ -105,14 +159,6 @@ impl Hash for Statement {
     }
 }
 
-/// `Expr` wraps an `Expression` and carries start/end positions (line,col)
-#[derive(Debug, Clone)]
-pub struct Expr {
-    pub expr: Expression,
-    pub start: (usize, usize),
-    pub end: (usize, usize),
-}
-
 impl PartialEq for Expr {
     fn eq(&self, other: &Self) -> bool {
         self.expr == other.expr
@@ -126,66 +172,3 @@ impl Hash for Expr {
 }
 
 impl Eq for Expr {}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Expression {
-    If {
-        cond: Box<Expr>,
-        t: Box<Expr>,
-        f: Box<Expr>,
-    },
-    While {
-        cond: Box<Expr>,
-        body: Box<Expr>,
-    },
-    BinOp {
-        left: Box<Expr>,
-        op: Bop,
-        right: Box<Expr>,
-    },
-    UnOp {
-        op: Uop,
-        right: Box<Expr>,
-    },
-    Call {
-        fn_name: String,
-        args: Vec<Expr>,
-    },
-    Var(String),
-    Int(i64),
-    Bool(bool),
-    Unit,
-    Block {
-        statements: Vec<Statement>,
-        expr: Option<Box<Expr>>,
-    },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Bop {
-    Plus,
-    Minus,
-    Mult,
-    Div,
-    Pow,
-    And,
-    Or,
-    Xor,
-    Comp(CompOp),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum CompOp {
-    Ge,
-    Le,
-    Eq,
-    Ne,
-    Gt,
-    Lt,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Uop {
-    Neg,
-    Not,
-}

@@ -1,5 +1,5 @@
-use untitled::lang::Program;
-use untitled::parse::Rule;
+use sand::ir_types::ast::Program;
+use sand::passes::parse::Rule;
 
 fn _print_pairs(pairs: pest::iterators::Pairs<Rule>, indent: usize) {
     let indent_str = "  ".repeat(indent);

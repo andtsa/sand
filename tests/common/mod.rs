@@ -1,7 +1,8 @@
 //! helper methods for integration tests
 #![allow(dead_code)]
 
-use untitled::lang::Expression;
+use sand::ir_types::ast::Expression;
+use sand::ir_types::ast::Program;
 
 pub fn open_example_from_file(name: &str) -> String {
     let path = format!("examples/{}.kap", name);
@@ -9,7 +10,7 @@ pub fn open_example_from_file(name: &str) -> String {
 }
 
 pub fn interpret_example(name: &str) -> anyhow::Result<Expression> {
-    let program = untitled::lang::Program::parse(&open_example_from_file(name))?;
+    let program = Program::parse(&open_example_from_file(name))?;
     let result = program.interpret()?;
     Ok(result)
 }

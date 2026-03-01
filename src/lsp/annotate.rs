@@ -6,8 +6,8 @@ use tower_lsp::lsp_types::Range;
 
 use crate::ProgramAnnotations;
 use crate::analyse;
-use crate::interactions::has_other_side_effects;
-use crate::lang::Program;
+use crate::analysis::interactions::has_other_side_effects;
+use crate::ir_types::ast::Program;
 use crate::lsp::util::position_from_line_col;
 
 /// if an expression without side effects appears multiple times in the code,

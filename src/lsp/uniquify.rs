@@ -3,7 +3,7 @@
 use tower_lsp::lsp_types::*;
 
 use crate::lsp::util::position_from_line_col;
-use crate::reserved::UniquifyError;
+use crate::passes::uniquify::reserved::UniquifyError;
 
 pub(super) fn uniquify_error_to_diagnostic(
     uri: &Url,

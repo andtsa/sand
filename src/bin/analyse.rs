@@ -7,9 +7,9 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
-use untitled::interactions::has_other_side_effects;
-use untitled::lang::Expr;
-use untitled::lang::Program;
+use sand::analysis::interactions::has_other_side_effects;
+use sand::ir_types::ast::Expr;
+use sand::ir_types::ast::Program;
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -23,7 +23,7 @@ fn main() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("failed to read input file {}: {}", input_file, e))?;
 
     let ast = Program::parse(&program_src)?.uniquify()?;
-    let annotations = untitled::analyse(&ast)?;
+    let annotations = sand::analyse(&ast)?;
 
     println!(
         "Program Annotations:\n{}",

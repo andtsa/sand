@@ -13,9 +13,9 @@ use petgraph::graph::NodeIndex;
 use crate::AnnotatedExpression;
 use crate::ProgramAnnotations;
 use crate::TupleSpan;
-use crate::lang::Expr;
-use crate::lang::Expression;
-use crate::reserved::RESERVED_FUNCTION_NAMES;
+use crate::ir_types::ast::Expr;
+use crate::ir_types::ast::Expression;
+use crate::passes::uniquify::reserved::RESERVED_FUNCTION_NAMES;
 
 pub fn find_interactions(
     cfg: Graph<AnnotatedExpression, (), Directed>,
@@ -140,11 +140,11 @@ fn is_candidate(expr: &Expr) -> bool {
 pub fn has_other_side_effects(expr: &Expr) -> bool {
     false
     // match &expr.expr {
-    //     Expression::Call { fn_name, .. } if RESERVED_FUNCTION_NAMES.contains(&fn_name.as_str()) => {
-    //         true
+    //     Expression::Call { fn_name, .. } if
+    // RESERVED_FUNCTION_NAMES.contains(&fn_name.as_str()) => {         true
     //     }
-    //     _ => false        // Expression::If { cond, t, f } => has_other_side_effects(&cond)
-    // }
+    //     _ => false        // Expression::If { cond, t, f } =>
+    // has_other_side_effects(&cond) }
 }
 
 fn collect_expr_subtrees<'a>(expr: &'a Expr, out: &mut Vec<&'a Expr>) {

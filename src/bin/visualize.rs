@@ -2,8 +2,8 @@ use std::fs;
 
 use petgraph::dot::Config;
 use petgraph::dot::Dot;
-use untitled::cfg;
-use untitled::lang::Program;
+use sand::analysis::cfg;
+use sand::ir_types::ast::Program;
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();

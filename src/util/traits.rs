@@ -1,7 +1,9 @@
 use std::fmt;
 
 use crate::AnnotatedExpression;
-use crate::lang::*;
+use crate::ir_types::ast::*;
+use crate::ir_types::ops::*;
+use crate::ir_types::types::*;
 
 impl fmt::Display for Expr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -139,6 +141,8 @@ impl fmt::Display for Ty {
             Ty::Int => write!(f, "Int"),
             Ty::Bool => write!(f, "Bool"),
             Ty::Unit => write!(f, "Unit"),
+            Ty::Top => write!(f, "Top"),
+            Ty::Bottom => write!(f, "Bottom"),
         }
     }
 }

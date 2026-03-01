@@ -1,11 +1,11 @@
 use std::collections::HashSet;
 
-use untitled::cfg::construct_cfg;
-use untitled::interactions::find_interactions;
-use untitled::lang::Bop;
-use untitled::lang::Expr;
-use untitled::lang::Expression;
-use untitled::lang::Program;
+use sand::analysis::cfg::construct_cfg;
+use sand::analysis::interactions::find_interactions;
+use sand::ir_types::ast::Expr;
+use sand::ir_types::ast::Expression;
+use sand::ir_types::ast::Program;
+use sand::ir_types::ops::Bop;
 
 fn a_plus_b(start: (usize, usize)) -> Expr {
     Expr {

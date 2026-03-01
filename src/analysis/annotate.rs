@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 
-use crate::lang::Expr;
-use crate::lang::Expression;
-use crate::lang::Statement;
+use crate::ir_types::ast::Expr;
+use crate::ir_types::ast::Expression;
+use crate::ir_types::ast::Statement;
 
 pub fn get_dependencies(expr: &Expr) -> HashSet<String> {
     let mut dependencies = HashSet::new();

@@ -7,21 +7,17 @@ use std::hash::Hasher;
 
 use petgraph::graph::NodeIndex;
 
-use crate::interactions::find_interactions;
-use crate::lang::Expr;
-use crate::lang::Program;
+use crate::analysis::cfg;
+use crate::analysis::interactions::find_interactions;
+use crate::ir_types::ast::Expr;
+use crate::ir_types::ast::Program;
 
-pub mod annotate;
-pub mod ast;
-pub mod cfg;
-pub mod interactions;
-pub mod interpret;
-pub mod lang;
+pub mod analysis;
+pub mod interpreter;
+pub mod ir_types;
 pub mod lsp;
-pub mod parse;
-pub mod reserved;
-pub mod traits;
-pub mod uniquify;
+pub mod passes;
+pub mod util;
 
 pub type TupleSpan = ((usize, usize), (usize, usize));
 #[derive(Debug, Clone, Default)]

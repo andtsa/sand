@@ -6,10 +6,12 @@ use pest::error::Error;
 use pest::iterators::Pair;
 use thiserror::Error;
 
-use crate::lang::*;
-use crate::parse::LangParser;
-use crate::parse::Rule;
-use crate::reserved::RESERVED_FUNCTION_NAMES;
+use crate::ir_types::ast::*;
+use crate::ir_types::ops::*;
+use crate::ir_types::types::*;
+use crate::passes::parse::LangParser;
+use crate::passes::parse::Rule;
+use crate::passes::uniquify::reserved::RESERVED_FUNCTION_NAMES;
 
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Error)]

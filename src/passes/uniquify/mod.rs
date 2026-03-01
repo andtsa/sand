@@ -1,12 +1,14 @@
 //! the uniquify pass of the compiler
 //!
 //! takes a program AST and ensures all variable and function names are unique
+pub mod reserved;
+
 use std::collections::BTreeMap;
 
-use crate::lang::*;
-use crate::reserved::RESERVED_FUNCTION_NAMES;
-use crate::reserved::UniquifyError;
-use crate::reserved::assert_unique;
+use crate::ir_types::ast::*;
+use crate::passes::uniquify::reserved::RESERVED_FUNCTION_NAMES;
+use crate::passes::uniquify::reserved::UniquifyError;
+use crate::passes::uniquify::reserved::assert_unique;
 
 /// A helper struct that captures the active scopes for all identifiers at the
 /// program's various levels and offers the functionality to keep track of and

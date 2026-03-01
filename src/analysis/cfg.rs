@@ -10,12 +10,12 @@ use petgraph::Graph;
 use petgraph::graph::NodeIndex;
 
 use crate::AnnotatedExpression;
-use crate::annotate::get_dependencies;
-use crate::lang::Expr;
-use crate::lang::Expression;
-use crate::lang::Function;
-use crate::lang::Program;
-use crate::lang::Statement;
+use crate::analysis::annotate::get_dependencies;
+use crate::ir_types::ast::Expr;
+use crate::ir_types::ast::Expression;
+use crate::ir_types::ast::Function;
+use crate::ir_types::ast::Program;
+use crate::ir_types::ast::Statement;
 
 pub fn construct_cfg(ast: &Program) -> Result<Graph<AnnotatedExpression, (), Directed>> {
     let mut graph = Graph::<AnnotatedExpression, (), Directed>::new();

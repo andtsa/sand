@@ -2,9 +2,9 @@
 
 use tower_lsp::lsp_types::*;
 
-use crate::ast::AstError;
 use crate::lsp::util::parse_error_to_diagnostic;
 use crate::lsp::util::position_from_line_col;
+use crate::passes::build_ast::AstError;
 
 /// convert an AstError into one or more lsp diagnostics
 pub(super) fn ast_error_to_diagnostics(uri: &Url, text: &str, err: AstError) -> Vec<Diagnostic> {

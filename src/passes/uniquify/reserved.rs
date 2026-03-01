@@ -2,10 +2,10 @@
 
 use std::collections::BTreeMap;
 
-use crate::lang::Expr;
-use crate::lang::Expression;
-use crate::lang::Program;
-use crate::lang::Statement;
+use crate::ir_types::ast::Expr;
+use crate::ir_types::ast::Expression;
+use crate::ir_types::ast::Program;
+use crate::ir_types::ast::Statement;
 
 pub const RESERVED_FUNCTION_NAMES: [&str; 6] =
     ["print", "println", "printf", "scanf", "read", "readline"];

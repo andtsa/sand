@@ -2,7 +2,7 @@
 
 use tower_lsp::lsp_types::*;
 
-use crate::lang::Program;
+use crate::ir_types::ast::Program;
 use crate::lsp::Backend;
 use crate::lsp::annotate::annotate_reused_expressions;
 use crate::lsp::ast::ast_error_to_diagnostics;

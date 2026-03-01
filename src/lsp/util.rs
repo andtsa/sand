@@ -3,7 +3,7 @@
 use pest::error::LineColLocation;
 use tower_lsp::lsp_types::*;
 
-use crate::parse::Rule;
+use crate::passes::parse::Rule;
 
 pub(super) fn position_from_line_col(text: &str, line: usize, col: usize) -> Position {
     // pest reports 1-based line/col; convert to 0-based

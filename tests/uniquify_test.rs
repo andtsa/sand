@@ -1,8 +1,8 @@
 //! Tests for the uniquify pass of the compiler
 
 use anyhow::Result;
-use untitled::lang::*;
-use untitled::reserved::assert_unique;
+use sand::ir_types::ast::*;
+use sand::passes::uniquify::reserved::assert_unique;
 // ----------------------------------------------- Helper
 
 /// Compares the behavior of the original and uniquified programs by

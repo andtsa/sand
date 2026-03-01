@@ -1,4 +1,4 @@
-use untitled::lang::Program;
+use sand::ir_types::ast::Program;
 
 mod common;
 
