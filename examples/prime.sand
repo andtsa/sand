@@ -10,7 +10,8 @@ def is_prime(n : Int): Bool := {
             } else {
                 i = i + 1;
             }
-        }
+        };
+        true
     };
 
     ok
@@ -20,5 +21,5 @@ def main(): Int := {
     let i: Int = 0;
     while i ≤ 100 do { if is_prime(i) then println(i); i = i + 1; };
 
-
+    5
 }

@@ -172,8 +172,7 @@ fn uniquify_function(f: &Function, u: &mut Context) -> Result<Function, Uniquify
         parameters.push(Parameter {
             name: new_name,
             ty: p.ty,
-            start: p.start,
-            end: p.end,
+            range: p.range,
         });
     }
     let body = uniquify_expr(&f.body, u)?; // Enter a new context and recursively uniquify its expressions
@@ -185,15 +184,14 @@ fn uniquify_function(f: &Function, u: &mut Context) -> Result<Function, Uniquify
         None => {
             return Err(UniquifyError::UndefinedFunction {
                 name: f.name.clone(),
-                at: (f.name_start, f.name_end),
+                at: f.range,
             });
         }
     };
 
     Ok(Function {
         name,
-        name_start: f.name_start,
-        name_end: f.name_end,
+        range: f.range,
         parameters,
         ret_type: f.ret_type,
         body,
@@ -236,7 +234,7 @@ fn uniquify_expr(e: &Expr, u: &mut Context) -> Result<Expr, UniquifyError> {
                 None => {
                     return Err(UniquifyError::UndefinedFunction {
                         name: fn_name.clone(),
-                        at: (e.start, e.end),
+                        at: e.range,
                     });
                 }
             };
@@ -254,7 +252,7 @@ fn uniquify_expr(e: &Expr, u: &mut Context) -> Result<Expr, UniquifyError> {
                 None => {
                     return Err(UniquifyError::UnboundVariable {
                         name: name.clone(),
-                        at: (e.start, e.end),
+                        at: e.range,
                     });
                 }
             };
@@ -287,8 +285,8 @@ fn uniquify_expr(e: &Expr, u: &mut Context) -> Result<Expr, UniquifyError> {
 
     Ok(Expr {
         expr,
-        start: e.start,
-        end: e.end,
+
+        range: e.range,
     })
 }
 
@@ -302,8 +300,7 @@ fn uniquify_stmt(stmt: &Statement, u: &mut Context) -> Result<Statement, Uniquif
     match stmt {
         Statement::Declaration {
             name,
-            name_start,
-            name_end,
+            range,
             ty,
             val,
         } => {
@@ -311,33 +308,26 @@ fn uniquify_stmt(stmt: &Statement, u: &mut Context) -> Result<Statement, Uniquif
             let new_name = u.bind_var(name);
             Ok(Statement::Declaration {
                 name: new_name,
-                name_start: *name_start,
-                name_end: *name_end,
+                range: *range,
                 ty: *ty,
                 val,
             })
         }
 
-        Statement::Assignment {
-            name,
-            name_start,
-            name_end,
-            val,
-        } => {
+        Statement::Assignment { name, range, val } => {
             let mapped = match u.lookup_var_opt(name) {
                 Some(n) => n,
                 None => {
                     return Err(UniquifyError::UnboundVariable {
                         name: name.clone(),
-                        at: (*name_start, *name_end),
+                        at: *range,
                     });
                 }
             };
             let val = uniquify_expr(val, u)?;
             Ok(Statement::Assignment {
                 name: mapped,
-                name_start: *name_start,
-                name_end: *name_end,
+                range: *range,
                 val,
             })
         }

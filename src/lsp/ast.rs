@@ -2,8 +2,8 @@
 
 use tower_lsp::lsp_types::*;
 
+use crate::lsp::util::lsp_range_from_pest;
 use crate::lsp::util::parse_error_to_diagnostic;
-use crate::lsp::util::position_from_line_col;
 use crate::passes::build_ast::AstError;
 
 /// convert an AstError into one or more lsp diagnostics
@@ -14,12 +14,9 @@ pub(super) fn ast_error_to_diagnostics(uri: &Url, text: &str, err: AstError) -> 
         AstError::UnexpectedRule {
             expected,
             got,
-            start,
-            end,
+            range,
         } => {
-            let start_pos = position_from_line_col(text, start.0, start.1);
-            let end_pos = position_from_line_col(text, end.0, end.1);
-            let range = Range::new(start_pos, end_pos);
+            let range = lsp_range_from_pest(text, range);
             let message = format!("unexpected rule: expected {:?}, got {:?}", expected, got);
 
             let related = DiagnosticRelatedInformation {
@@ -40,14 +37,8 @@ pub(super) fn ast_error_to_diagnostics(uri: &Url, text: &str, err: AstError) -> 
             }]
         }
 
-        AstError::Missing {
-            expected,
-            start,
-            end,
-        } => {
-            let start_pos = position_from_line_col(text, start.0, start.1);
-            let end_pos = position_from_line_col(text, end.0, end.1);
-            let range = Range::new(start_pos, end_pos);
+        AstError::Missing { expected, range } => {
+            let range = lsp_range_from_pest(text, range);
             let message = format!("missing {}", expected);
 
             let related = DiagnosticRelatedInformation {
@@ -68,10 +59,8 @@ pub(super) fn ast_error_to_diagnostics(uri: &Url, text: &str, err: AstError) -> 
             }]
         }
 
-        AstError::InvalidInteger { got, start, end } => {
-            let start_pos = position_from_line_col(text, start.0, start.1);
-            let end_pos = position_from_line_col(text, end.0, end.1);
-            let range = Range::new(start_pos, end_pos);
+        AstError::InvalidInteger { got, range } => {
+            let range = lsp_range_from_pest(text, range);
             let message = format!("invalid integer literal: {}", got);
 
             let related = DiagnosticRelatedInformation {
@@ -92,10 +81,8 @@ pub(super) fn ast_error_to_diagnostics(uri: &Url, text: &str, err: AstError) -> 
             }]
         }
 
-        AstError::InvalidName { got, start, end } => {
-            let start_pos = position_from_line_col(text, start.0, start.1);
-            let end_pos = position_from_line_col(text, end.0, end.1);
-            let range = Range::new(start_pos, end_pos);
+        AstError::InvalidName { got, range } => {
+            let range = lsp_range_from_pest(text, range);
             let message = format!("invalid name: {}", got);
 
             let related = DiagnosticRelatedInformation {

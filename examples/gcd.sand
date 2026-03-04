@@ -3,7 +3,7 @@ def gcd(a: Int, b: Int): Int :=
     let x: Int = a;
     let y: Int = b;
 
-    while y != 0 do {
+    while (y != 0) do {
         let t: Int = y;
         y = x - (x / y) * y;
         x = t;
@@ -13,6 +13,6 @@ def gcd(a: Int, b: Int): Int :=
 }
 
 def main(): Int := {
-
+    gcd(9, 1)
 }
 

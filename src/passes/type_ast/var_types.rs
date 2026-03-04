@@ -4,19 +4,21 @@
 use std::collections::BTreeMap;
 
 use crate::ir_types::hhir::*;
-use crate::ir_types::typed_hir::FnName;
-use crate::ir_types::typed_hir::VarName;
+use crate::lang::structure::FnName;
+use crate::lang::structure::FnSig;
+use crate::lang::structure::Map;
+use crate::lang::structure::VarName;
 use crate::lang::types::Ty;
 use crate::passes::type_ast::AstTypeError;
+use crate::passes::type_ast::check_intrinsic::is_intrinsic_call;
 
-pub(super) type VarMap = BTreeMap<VarName, Ty>;
-pub(super) type FnSig = (Vec<(VarName, Ty)>, Ty);
-pub(super) type FnMap = BTreeMap<FnName, FnSig>;
+pub(super) type VarMap = Map<String, (VarName, Ty)>;
+pub(super) type FnMap = Map<String, (FnName, FnSig)>;
 
 pub(super) fn collect_variables(func: &Function, fn_args: &FnMap) -> Result<VarMap, AstTypeError> {
     let mut vars = BTreeMap::new();
     for param in &func.parameters {
-        vars.insert(param.name.clone(), param.ty);
+        vars.insert(param.name.clone(), (VarName::from(param), param.ty));
     }
     vars = collect_variable_names_in_expr(&func.body, vars, fn_args)?;
     Ok(vars)
@@ -34,8 +36,7 @@ pub(super) fn collect_variable_names_in_expr(
             if !vars.contains_key(x) {
                 return Err(AstTypeError::UnboundVariable {
                     name: x.clone(),
-                    start: expr.start,
-                    end: expr.end,
+                    range: expr.range,
                 });
             }
             Ok(vars)
@@ -66,13 +67,15 @@ pub(super) fn collect_variable_names_in_expr(
         }
         Expression::Call { fn_name, args } => {
             // functions only get their arguments in the variable scope
-            let _params = fn_args
-                .get(fn_name)
-                .ok_or_else(|| AstTypeError::UndefinedFunction {
-                    name: fn_name.clone(),
-                    start: expr.start,
-                    end: expr.end,
-                })?;
+            if !is_intrinsic_call(fn_name) {
+                let _params =
+                    fn_args
+                        .get(fn_name)
+                        .ok_or_else(|| AstTypeError::UndefinedFunction {
+                            name: fn_name.clone(),
+                            range: expr.range,
+                        })?;
+            }
             let mut acc = vars;
             for arg in args {
                 acc = collect_variable_names_in_expr(arg, acc, fn_args)?;
@@ -83,26 +86,20 @@ pub(super) fn collect_variable_names_in_expr(
             let mut new_vars = vars.clone();
             for stmt in statements {
                 match stmt {
-                    Statement::Declaration { name, ty, val, .. } => {
+                    d @ Statement::Declaration { name, ty, val, .. } => {
                         new_vars = collect_variable_names_in_expr(val, new_vars, fn_args)?;
-                        new_vars.insert(name.clone(), *ty);
+                        new_vars.insert(name.clone(), (VarName::try_from(d).unwrap(), *ty));
                     }
                     Statement::Expr(e) => {
                         new_vars = collect_variable_names_in_expr(e, new_vars, fn_args)?;
                     }
-                    Statement::Assignment {
-                        name,
-                        val,
-                        name_start,
-                        name_end,
-                    } => {
+                    Statement::Assignment { name, val, range } => {
                         if new_vars.contains_key(name) {
                             new_vars = collect_variable_names_in_expr(val, new_vars, fn_args)?;
                         } else {
                             return Err(AstTypeError::UnboundVariable {
                                 name: name.clone(),
-                                start: *name_start,
-                                end: *name_end,
+                                range: *range,
                             });
                         }
                     }

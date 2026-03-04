@@ -2,7 +2,7 @@
 
 use tower_lsp::lsp_types::*;
 
-use crate::lsp::util::position_from_line_col;
+use crate::lsp::util::lsp_range_from_pest;
 use crate::passes::uniquify::reserved::UniquifyError;
 
 pub(super) fn uniquify_error_to_diagnostic(
@@ -13,10 +13,7 @@ pub(super) fn uniquify_error_to_diagnostic(
     use UniquifyError::*;
     match err {
         UnboundVariable { name, at } => {
-            let ((sl, sc), (el, ec)) = at;
-            let start_pos = position_from_line_col(text, sl, sc);
-            let end_pos = position_from_line_col(text, el, ec);
-            let range = Range::new(start_pos, end_pos);
+            let range = lsp_range_from_pest(text, at);
             let message = format!("unbound variable: {}", name);
 
             let related = DiagnosticRelatedInformation {
@@ -38,10 +35,7 @@ pub(super) fn uniquify_error_to_diagnostic(
         }
 
         UndefinedFunction { name, at } => {
-            let ((sl, sc), (el, ec)) = at;
-            let start_pos = position_from_line_col(text, sl, sc);
-            let end_pos = position_from_line_col(text, el, ec);
-            let range = Range::new(start_pos, end_pos);
+            let range = lsp_range_from_pest(text, at);
             let message = format!("undefined function: {}", name);
 
             let related = DiagnosticRelatedInformation {
@@ -67,16 +61,8 @@ pub(super) fn uniquify_error_to_diagnostic(
             first_instance,
             second_instance,
         } => {
-            let ((fsl, fsc), (fel, fec)) = first_instance;
-            let ((ssl, ssc), (sel, sec)) = second_instance;
-
-            let first_start = position_from_line_col(text, fsl, fsc);
-            let first_end = position_from_line_col(text, fel, fec);
-            let first_range = Range::new(first_start, first_end);
-
-            let second_start = position_from_line_col(text, ssl, ssc);
-            let second_end = position_from_line_col(text, sel, sec);
-            let second_range = Range::new(second_start, second_end);
+            let first_range = lsp_range_from_pest(text, first_instance);
+            let second_range = lsp_range_from_pest(text, second_instance);
 
             let message = format!("duplicate function: {}", name);
 
@@ -99,10 +85,7 @@ pub(super) fn uniquify_error_to_diagnostic(
         }
 
         IllegalFunctionName { name, at } => {
-            let ((sl, sc), (el, ec)) = at;
-            let start_pos = position_from_line_col(text, sl, sc);
-            let end_pos = position_from_line_col(text, el, ec);
-            let range = Range::new(start_pos, end_pos);
+            let range = lsp_range_from_pest(text, at);
             let message = format!("illegal function name: {}", name);
 
             let related = DiagnosticRelatedInformation {
@@ -128,16 +111,8 @@ pub(super) fn uniquify_error_to_diagnostic(
             first_instance,
             second_instance,
         } => {
-            let ((fsl, fsc), (fel, fec)) = first_instance;
-            let ((ssl, ssc), (sel, sec)) = second_instance;
-
-            let first_start = position_from_line_col(text, fsl, fsc);
-            let first_end = position_from_line_col(text, fel, fec);
-            let first_range = Range::new(first_start, first_end);
-
-            let second_start = position_from_line_col(text, ssl, ssc);
-            let second_end = position_from_line_col(text, sel, sec);
-            let second_range = Range::new(second_start, second_end);
+            let first_range = lsp_range_from_pest(text, first_instance);
+            let second_range = lsp_range_from_pest(text, second_instance);
 
             let message = format!("duplicate parameter: {}", name);
 
@@ -164,16 +139,8 @@ pub(super) fn uniquify_error_to_diagnostic(
             first_instance,
             second_instance,
         } => {
-            let ((fsl, fsc), (fel, fec)) = first_instance;
-            let ((ssl, ssc), (sel, sec)) = second_instance;
-
-            let first_start = position_from_line_col(text, fsl, fsc);
-            let first_end = position_from_line_col(text, fel, fec);
-            let first_range = Range::new(first_start, first_end);
-
-            let second_start = position_from_line_col(text, ssl, ssc);
-            let second_end = position_from_line_col(text, sel, sec);
-            let second_range = Range::new(second_start, second_end);
+            let first_range = lsp_range_from_pest(text, first_instance);
+            let second_range = lsp_range_from_pest(text, second_instance);
 
             let message = format!("duplicate variable: {}", name);
 

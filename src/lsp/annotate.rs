@@ -8,7 +8,7 @@ use crate::ProgramAnnotations;
 use crate::analyse;
 use crate::analysis::interactions::has_other_side_effects;
 use crate::ir_types::hhir::Program;
-use crate::lsp::util::position_from_line_col;
+use crate::lsp::util::lsp_range_from_pest;
 
 /// if an expression without side effects appears multiple times in the code,
 /// we can compute its value just once,
@@ -56,11 +56,8 @@ pub fn annotate_reused_expressions(text: &str, ast: &Program) -> Vec<Diagnostic>
             continue;
         }
 
-        for ((sl, sc), (el, ec)) in occs {
-            let start = position_from_line_col(text, sl, sc);
-            let end = position_from_line_col(text, el, ec);
-
-            let range = Range::new(start, end);
+        for range in occs {
+            let range = lsp_range_from_pest(text, range);
 
             let message = format!("reused expression: {}", e.expr);
 

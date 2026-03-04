@@ -7,24 +7,22 @@ use sand::analysis::interactions::find_interactions;
 use sand::ir_types::hhir::Expr;
 use sand::ir_types::hhir::Expression;
 use sand::lang::ops::Bop;
+use sand::lang::structure::Range;
 
-fn a_plus_b(start: (usize, usize)) -> Expr {
+fn a_plus_b(range: Range) -> Expr {
     Expr {
         expr: Expression::BinOp {
             left: Box::new(Expr {
                 expr: Expression::Var("a".to_string()),
-                start,
-                end: start,
+                range,
             }),
             op: Bop::Plus,
             right: Box::new(Expr {
                 expr: Expression::Var("b".to_string()),
-                start,
-                end: start,
+                range,
             }),
         },
-        start,
-        end: start,
+        range,
     }
 }
 
@@ -35,7 +33,7 @@ fn a_plus_b(start: (usize, usize)) -> Expr {
 fn test_simple() {
     // Node 1: compute a + b
     let n1_expr = AnnotatedExpression {
-        expr: a_plus_b((1, 1)),
+        expr: a_plus_b(Range::default()),
         depends_on: HashSet::from(["a".into(), "b".into()]),
         mutates: HashSet::from(["t1".into()]),
     };
@@ -44,8 +42,7 @@ fn test_simple() {
     let n2_expr = AnnotatedExpression {
         expr: Expr {
             expr: Expression::Int(1),
-            start: (2, 1),
-            end: (2, 1),
+            range: Range::default(),
         },
         depends_on: HashSet::from([]),
         mutates: HashSet::from(["a".into()]),
@@ -53,7 +50,7 @@ fn test_simple() {
 
     // Node 3: compute a + b
     let n3_expr = AnnotatedExpression {
-        expr: a_plus_b((3, 1)),
+        expr: a_plus_b(Range::default()),
         depends_on: HashSet::from(["a".into(), "b".into()]),
         mutates: HashSet::from(["t2".into()]),
     };
@@ -88,14 +85,14 @@ fn test_simple() {
 fn test_simple_2() {
     // Node 1: compute a + b
     let n1_expr = AnnotatedExpression {
-        expr: a_plus_b((1, 1)),
+        expr: a_plus_b(Range::new(1, 1, 1, 1)),
         depends_on: HashSet::from(["a".into(), "b".into()]),
         mutates: HashSet::from(["t1".into()]),
     };
 
     // Node 2: compute a + b
     let n2_expr = AnnotatedExpression {
-        expr: a_plus_b((2, 1)),
+        expr: a_plus_b(Range::new(2, 1, 2, 1)),
         depends_on: HashSet::from(["a".into(), "b".into()]),
         mutates: HashSet::from(["t2".into()]),
     };
@@ -123,7 +120,7 @@ fn test_simple_2() {
     );
     assert_eq!(
         annotations.expr_occurrences.get(&n1_expr.expr),
-        Some(&HashSet::from([((2, 1), (2, 1))])),
+        Some(&HashSet::from([Range::new(2, 1, 2, 1)])),
         "Available Expression found at wrong position."
     );
 }
@@ -133,7 +130,7 @@ fn test_simple_2() {
 fn test_self_generation() {
     // Node 1: compute a + b
     let n1_expr = AnnotatedExpression {
-        expr: a_plus_b((1, 1)),
+        expr: a_plus_b(Range::new(2, 1, 2, 1)),
         depends_on: HashSet::from(["a".into(), "b".into()]),
         mutates: HashSet::from(["a".into()]),
     };
@@ -169,7 +166,7 @@ fn test_self_generation() {
 fn test_if() {
     // Node 1: compute a + b
     let n1_expr = AnnotatedExpression {
-        expr: a_plus_b((1, 1)),
+        expr: a_plus_b(Range::new(1, 1, 1, 1)),
         depends_on: HashSet::from(["a".into(), "b".into()]),
         mutates: HashSet::from(["t1".into()]),
     };
@@ -178,8 +175,7 @@ fn test_if() {
     let n2_expr = AnnotatedExpression {
         expr: Expr {
             expr: Expression::Var("cond".into()),
-            start: (2, 1),
-            end: (2, 4),
+            range: Range::new(2, 1, 2, 4),
         },
         depends_on: HashSet::from(["cond".into()]),
         mutates: HashSet::from([]),
@@ -189,8 +185,7 @@ fn test_if() {
     let n3_expr = AnnotatedExpression {
         expr: Expr {
             expr: Expression::Int(1),
-            start: (3, 1),
-            end: (3, 1),
+            range: Range::new(3, 1, 3, 1),
         },
         depends_on: HashSet::from([]),
         mutates: HashSet::from(["x".into()]),
@@ -198,7 +193,7 @@ fn test_if() {
 
     // Node 4 (then): a + b
     let n4_expr = AnnotatedExpression {
-        expr: a_plus_b((4, 1)),
+        expr: a_plus_b(Range::new(4, 1, 4, 1)),
         depends_on: HashSet::from(["a".into(), "b".into()]),
         mutates: HashSet::from(["t2".into()]),
     };
@@ -207,8 +202,7 @@ fn test_if() {
     let n5_expr = AnnotatedExpression {
         expr: Expr {
             expr: Expression::Int(10),
-            start: (5, 1),
-            end: (5, 2),
+            range: Range::new(5, 1, 5, 2),
         },
         depends_on: HashSet::from([]),
         mutates: HashSet::from(["a".into()]), // kills (a+b)
@@ -216,7 +210,7 @@ fn test_if() {
 
     // Node 6: join point, compute a + b again
     let n6_expr = AnnotatedExpression {
-        expr: a_plus_b((6, 1)),
+        expr: a_plus_b(Range::new(6, 1, 6, 1)),
         depends_on: HashSet::from(["a".into(), "b".into()]),
         mutates: HashSet::from(["t3".into()]),
     };
@@ -253,7 +247,7 @@ fn test_if() {
     );
     assert_eq!(
         annotations.expr_occurrences.get(&n1_expr.expr),
-        Some(&HashSet::from([((4, 1), (4, 1))])),
+        Some(&HashSet::from([Range::new(4, 1, 4, 1)])),
         "Available Expression found at wrong position."
     );
 }
@@ -269,8 +263,7 @@ fn test_while1() {
     let n1_expr = AnnotatedExpression {
         expr: Expr {
             expr: Expression::Int(1),
-            start: (1, 1),
-            end: (1, 1),
+            range: Range::new(1, 1, 1, 1),
         },
         depends_on: HashSet::from([]),
         mutates: HashSet::from(["a".into()]),
@@ -280,8 +273,7 @@ fn test_while1() {
     let n2_expr = AnnotatedExpression {
         expr: Expr {
             expr: Expression::Var("cond".into()),
-            start: (2, 1),
-            end: (2, 4),
+            range: Range::new(2, 1, 2, 4),
         },
         depends_on: HashSet::from(["cond".into()]),
         mutates: HashSet::from([]),
@@ -289,14 +281,14 @@ fn test_while1() {
 
     // Node 3: t = a + b
     let n3_expr = AnnotatedExpression {
-        expr: a_plus_b((3, 1)),
+        expr: a_plus_b(Range::new(3, 1, 3, 1)),
         depends_on: HashSet::from(["a".into(), "b".into()]),
         mutates: HashSet::from(["t".into()]),
     };
 
     // Node 4: after loop: t2 = a + b
     let n4_expr = AnnotatedExpression {
-        expr: a_plus_b((4, 1)),
+        expr: a_plus_b(Range::new(4, 1, 4, 1)),
         depends_on: HashSet::from(["a".into(), "b".into()]),
         mutates: HashSet::from(["t2".into()]),
     };
@@ -340,8 +332,7 @@ fn test_while2() {
     let n1_expr = AnnotatedExpression {
         expr: Expr {
             expr: Expression::Int(1),
-            start: (1, 1),
-            end: (1, 1),
+            range: Range::new(1, 1, 1, 1),
         },
         depends_on: HashSet::from([]),
         mutates: HashSet::from(["a".into()]),
@@ -351,8 +342,7 @@ fn test_while2() {
     let n2_expr = AnnotatedExpression {
         expr: Expr {
             expr: Expression::Var("cond".into()),
-            start: (2, 1),
-            end: (2, 4),
+            range: Range::new(2, 1, 2, 4),
         },
         depends_on: HashSet::from(["cond".into()]),
         mutates: HashSet::from([]),
@@ -360,7 +350,7 @@ fn test_while2() {
 
     // Node 3: t = a + b
     let n3_expr = AnnotatedExpression {
-        expr: a_plus_b((3, 1)),
+        expr: a_plus_b(Range::new(3, 1, 3, 1)),
         depends_on: HashSet::from(["a".into(), "b".into()]),
         mutates: HashSet::from(["t".into()]),
     };
@@ -371,18 +361,15 @@ fn test_while2() {
             expr: Expression::BinOp {
                 left: Box::new(Expr {
                     expr: Expression::Var("a".into()),
-                    start: (4, 1),
-                    end: (4, 1),
+                    range: Range::new(4, 1, 4, 1),
                 }),
                 op: Bop::Plus,
                 right: Box::new(Expr {
                     expr: Expression::Int(1),
-                    start: (4, 5),
-                    end: (4, 5),
+                    range: Range::new(4, 5, 4, 5),
                 }),
             },
-            start: (4, 1),
-            end: (4, 5),
+            range: Range::new(4, 1, 4, 5),
         },
         depends_on: HashSet::from(["a".into()]),
         mutates: HashSet::from(["a".into()]),
@@ -390,7 +377,7 @@ fn test_while2() {
 
     // Node 5: after loop: t2 = a + b
     let n5_expr = AnnotatedExpression {
-        expr: a_plus_b((6, 1)),
+        expr: a_plus_b(Range::new(6, 1, 6, 1)),
         depends_on: HashSet::from(["a".into(), "b".into()]),
         mutates: HashSet::from(["t2".into()]),
     };
@@ -431,7 +418,7 @@ fn test_while2() {
 fn test_subexpressions() {
     // Node 1: compute a + b
     let n1_expr = AnnotatedExpression {
-        expr: a_plus_b((1, 1)),
+        expr: a_plus_b(Range::new(1, 1, 1, 1)),
         depends_on: HashSet::from(["a".into(), "b".into()]),
         mutates: HashSet::from(["t1".into()]),
     };
@@ -439,32 +426,26 @@ fn test_subexpressions() {
     // Node 2: compute c+(a+b)+d
     let n2_expr = AnnotatedExpression {
         expr: Expr {
-            start: (2, 1),
-            end: (2, 1),
+            range: Range::new(2, 1, 2, 1),
             expr: Expression::BinOp {
                 left: Box::new(Expr {
-                    start: (2, 1),
-                    end: (2, 1),
+                    range: Range::new(2, 1, 2, 1),
                     expr: Expression::BinOp {
                         left: Box::new(Expr {
-                            start: (2, 1),
-                            end: (2, 1),
+                            range: Range::new(2, 1, 2, 1),
                             expr: Expression::Var("c".to_string()),
                         }),
                         op: Bop::Plus,
                         right: Box::new(Expr {
-                            start: (2, 1),
-                            end: (2, 1),
+                            range: Range::new(2, 1, 2, 1),
                             expr: Expression::BinOp {
                                 left: Box::new(Expr {
-                                    start: (2, 1),
-                                    end: (2, 1),
+                                    range: Range::new(2, 1, 2, 1),
                                     expr: Expression::Var("a".to_string()),
                                 }),
                                 op: Bop::Plus,
                                 right: Box::new(Expr {
-                                    start: (2, 1),
-                                    end: (2, 1),
+                                    range: Range::new(2, 1, 2, 1),
                                     expr: Expression::Var("b".to_string()),
                                 }),
                             },
@@ -473,8 +454,7 @@ fn test_subexpressions() {
                 }),
                 op: Bop::Plus,
                 right: Box::new(Expr {
-                    start: (2, 1),
-                    end: (2, 1),
+                    range: Range::new(2, 1, 2, 1),
                     expr: Expression::Var("d".to_string()),
                 }),
             },
@@ -484,7 +464,7 @@ fn test_subexpressions() {
     };
 
     let n3_expr = AnnotatedExpression {
-        expr: a_plus_b((3, 1)),
+        expr: a_plus_b(Range::new(3, 1, 3, 1)),
         depends_on: HashSet::from(["a".into(), "b".into()]),
         mutates: HashSet::from(["t3".into()]),
     };
@@ -514,7 +494,10 @@ fn test_subexpressions() {
     );
     assert_eq!(
         annotations.expr_occurrences.get(&n1_expr.expr),
-        Some(&HashSet::from([((2, 1), (2, 1)), ((3, 1), (3, 1))])),
+        Some(&HashSet::from([
+            Range::new(2, 1, 2, 1),
+            Range::new(3, 1, 3, 1)
+        ])),
         "Available Expression found at wrong position."
     );
 }
@@ -525,7 +508,7 @@ fn test_subexpressions() {
 fn test_not_subexpressions() {
     // Node 1: compute a + b
     let n1_expr = AnnotatedExpression {
-        expr: a_plus_b((1, 1)),
+        expr: a_plus_b(Range::new(1, 1, 1, 1)),
         depends_on: HashSet::from(["a".into(), "b".into()]),
         mutates: HashSet::from(["t1".into()]),
     };
@@ -533,32 +516,26 @@ fn test_not_subexpressions() {
     // Node 2: compute c+(a+b)+d
     let n2_expr = AnnotatedExpression {
         expr: Expr {
-            start: (2, 1),
-            end: (2, 1),
+            range: Range::new(2, 1, 2, 1),
             expr: Expression::BinOp {
                 left: Box::new(Expr {
-                    start: (2, 1),
-                    end: (2, 1),
+                    range: Range::new(2, 1, 2, 1),
                     expr: Expression::BinOp {
                         left: Box::new(Expr {
-                            start: (2, 1),
-                            end: (2, 1),
+                            range: Range::new(2, 1, 2, 1),
                             expr: Expression::Var("c".to_string()),
                         }),
                         op: Bop::Plus,
                         right: Box::new(Expr {
-                            start: (2, 1),
-                            end: (2, 1),
+                            range: Range::new(2, 1, 2, 1),
                             expr: Expression::BinOp {
                                 left: Box::new(Expr {
-                                    start: (2, 1),
-                                    end: (2, 1),
+                                    range: Range::new(2, 1, 2, 1),
                                     expr: Expression::Var("a".to_string()),
                                 }),
                                 op: Bop::Plus,
                                 right: Box::new(Expr {
-                                    start: (2, 1),
-                                    end: (2, 1),
+                                    range: Range::new(2, 1, 2, 1),
                                     expr: Expression::Var("b".to_string()),
                                 }),
                             },
@@ -567,8 +544,7 @@ fn test_not_subexpressions() {
                 }),
                 op: Bop::Plus,
                 right: Box::new(Expr {
-                    start: (2, 1),
-                    end: (2, 1),
+                    range: Range::new(2, 1, 2, 1),
                     expr: Expression::Var("d".to_string()),
                 }),
             },
@@ -578,7 +554,7 @@ fn test_not_subexpressions() {
     };
 
     let n3_expr = AnnotatedExpression {
-        expr: a_plus_b((3, 1)),
+        expr: a_plus_b(Range::new(3, 1, 3, 1)),
         depends_on: HashSet::from(["a".into(), "b".into()]),
         mutates: HashSet::from(["t3".into()]),
     };
@@ -608,7 +584,10 @@ fn test_not_subexpressions() {
     );
     assert_eq!(
         annotations.expr_occurrences.get(&n1_expr.expr),
-        Some(&HashSet::from([((2, 1), (2, 1)), ((3, 1), (3, 1))])),
+        Some(&HashSet::from([
+            Range::new(2, 1, 2, 1),
+            Range::new(3, 1, 3, 1)
+        ])),
         "Available Expression found at wrong position."
     );
 }
@@ -619,7 +598,7 @@ fn test_not_subexpressions() {
 fn test_parameters1() {
     // Node 1: compute a + b
     let n1_expr = AnnotatedExpression {
-        expr: a_plus_b((1, 1)),
+        expr: a_plus_b(Range::new(1, 1, 1, 1)),
         depends_on: HashSet::from(["a".into(), "b".into()]),
         mutates: HashSet::from(["t1".into()]),
     };
@@ -629,10 +608,9 @@ fn test_parameters1() {
         expr: Expr {
             expr: Expression::Call {
                 fn_name: "fn".to_string(),
-                args: vec![a_plus_b((2, 1))],
+                args: vec![a_plus_b(Range::new(2, 1, 2, 1))],
             },
-            start: (2, 1),
-            end: (2, 1),
+            range: Range::new(2, 1, 2, 1),
         },
         depends_on: HashSet::from(["a".into(), "b".into()]),
         mutates: HashSet::new(), // function call itself doesn't assign here
@@ -662,7 +640,7 @@ fn test_parameters1() {
 
     assert_eq!(
         annotations.expr_occurrences.get(&n1_expr.expr),
-        Some(&HashSet::from([((2, 1), (2, 1))])),
+        Some(&HashSet::from([Range::new(2, 1, 2, 1)])),
         "Available expression not detected in function argument."
     );
 }
@@ -673,7 +651,7 @@ fn test_parameters1() {
 fn test_parameters2() {
     // Node 1: compute a + b
     let n1_expr = AnnotatedExpression {
-        expr: a_plus_b((1, 1)),
+        expr: a_plus_b(Range::new(1, 1, 1, 1)),
         depends_on: HashSet::from(["a".into(), "b".into()]),
         mutates: HashSet::from(["t1".into()]),
     };
@@ -684,16 +662,14 @@ fn test_parameters2() {
             expr: Expression::Call {
                 fn_name: "fn".to_string(),
                 args: vec![
-                    a_plus_b((2, 1)),
+                    a_plus_b(Range::new(2, 1, 2, 1)),
                     Expr {
                         expr: Expression::Var("c".to_string()),
-                        start: (2, 1),
-                        end: (2, 1),
+                        range: Range::new(2, 1, 2, 1),
                     },
                 ],
             },
-            start: (2, 1),
-            end: (2, 1),
+            range: Range::new(2, 1, 2, 1),
         },
         depends_on: HashSet::from(["a".into(), "b".into(), "c".into()]),
         mutates: HashSet::new(),
@@ -725,7 +701,7 @@ fn test_parameters2() {
     // It should be detected at the function call site
     assert_eq!(
         annotations.expr_occurrences.get(&n1_expr.expr),
-        Some(&HashSet::from([((2, 1), (2, 1))])),
+        Some(&HashSet::from([Range::new(2, 1, 2, 1)])),
         "Available expression not detected in multi-argument function call."
     );
 }
@@ -737,19 +713,16 @@ fn test_function_call() {
     // Node 1: compute fn(a, b)
     let n1_expr = AnnotatedExpression {
         expr: Expr {
-            start: (1, 1),
-            end: (1, 1),
+            range: Range::new(1, 1, 1, 1),
             expr: Expression::Call {
                 fn_name: "fn".to_string(),
                 args: vec![
                     Expr {
-                        start: (1, 1),
-                        end: (1, 1),
+                        range: Range::new(1, 1, 1, 1),
                         expr: Expression::Var("a".to_string()),
                     },
                     Expr {
-                        start: (1, 1),
-                        end: (1, 1),
+                        range: Range::new(1, 1, 1, 1),
                         expr: Expression::Var("b".to_string()),
                     },
                 ],
@@ -762,19 +735,16 @@ fn test_function_call() {
     // Node 2: compute fn(a, b) again
     let n2_expr = AnnotatedExpression {
         expr: Expr {
-            start: (2, 1),
-            end: (2, 1),
+            range: Range::new(2, 1, 2, 1),
             expr: Expression::Call {
                 fn_name: "fn".to_string(),
                 args: vec![
                     Expr {
-                        start: (2, 1),
-                        end: (2, 1),
+                        range: Range::new(2, 1, 2, 1),
                         expr: Expression::Var("a".to_string()),
                     },
                     Expr {
-                        start: (2, 1),
-                        end: (2, 1),
+                        range: Range::new(2, 1, 2, 1),
                         expr: Expression::Var("b".to_string()),
                     },
                 ],
@@ -808,7 +778,7 @@ fn test_function_call() {
 
     assert_eq!(
         annotations.expr_occurrences.get(&n1_expr.expr),
-        Some(&HashSet::from([((2, 1), (2, 1))])),
+        Some(&HashSet::from([Range::new(2, 1, 2, 1)])),
         "Entire function call was not detected as available."
     );
 }
@@ -820,7 +790,7 @@ fn test_function_call() {
 fn test_subexpression_and_function_call() {
     // Node 1: x = a + b
     let n1_expr = AnnotatedExpression {
-        expr: a_plus_b((1, 1)),
+        expr: a_plus_b(Range::new(1, 1, 1, 1)),
         depends_on: HashSet::from(["a".into(), "b".into()]),
         mutates: HashSet::from(["x".into()]),
     };
@@ -828,11 +798,10 @@ fn test_subexpression_and_function_call() {
     // Node 2: t1 = fn(a + b)
     let n2_expr = AnnotatedExpression {
         expr: Expr {
-            start: (2, 1),
-            end: (2, 1),
+            range: Range::new(2, 1, 2, 1),
             expr: Expression::Call {
                 fn_name: "fn".to_string(),
-                args: vec![a_plus_b((2, 1))],
+                args: vec![a_plus_b(Range::new(2, 1, 2, 1))],
             },
         },
         depends_on: HashSet::from(["a".into(), "b".into()]),
@@ -842,11 +811,10 @@ fn test_subexpression_and_function_call() {
     // Node 3: t2 = fn(a + b)
     let n3_expr = AnnotatedExpression {
         expr: Expr {
-            start: (3, 1),
-            end: (3, 1),
+            range: Range::new(3, 1, 3, 1),
             expr: Expression::Call {
                 fn_name: "fn".to_string(),
-                args: vec![a_plus_b((3, 1))],
+                args: vec![a_plus_b(Range::new(3, 1, 3, 1))],
             },
         },
         depends_on: HashSet::from(["a".into(), "b".into()]),
@@ -888,7 +856,7 @@ fn test_subexpression_and_function_call() {
 fn test_branching() {
     // Node 1: x = a + b
     let n1_expr = AnnotatedExpression {
-        expr: a_plus_b((1, 1)),
+        expr: a_plus_b(Range::new(1, 1, 1, 1)),
         depends_on: HashSet::from(["a".into(), "b".into()]),
         mutates: HashSet::from(["x".into()]),
     };
@@ -896,18 +864,15 @@ fn test_branching() {
     // Node 2: y = x + 3
     let n2_expr = AnnotatedExpression {
         expr: Expr {
-            start: (2, 1),
-            end: (2, 1),
+            range: Range::new(2, 1, 2, 1),
             expr: Expression::BinOp {
                 left: Box::new(Expr {
-                    start: (2, 1),
-                    end: (2, 1),
+                    range: Range::new(2, 1, 2, 1),
                     expr: Expression::Var("x".to_string()),
                 }),
                 op: Bop::Plus,
                 right: Box::new(Expr {
-                    start: (2, 1),
-                    end: (2, 1),
+                    range: Range::new(2, 1, 2, 1),
                     expr: Expression::Int(3),
                 }),
             },
@@ -918,7 +883,7 @@ fn test_branching() {
 
     // Node 3: a + b
     let n3_expr = AnnotatedExpression {
-        expr: a_plus_b((3, 1)),
+        expr: a_plus_b(Range::new(3, 1, 3, 1)),
         depends_on: HashSet::from(["a".into(), "b".into()]),
         mutates: HashSet::new(),
     };

@@ -8,6 +8,7 @@ use thiserror::Error;
 
 use crate::ir_types::hhir::*;
 use crate::lang::ops::*;
+use crate::lang::structure::Range;
 use crate::lang::types::*;
 use crate::passes::parse::LangParser;
 use crate::passes::parse::Rule;
@@ -19,56 +20,36 @@ pub enum AstError {
     #[error("parse error: {0}")]
     Pest(#[from] Error<Rule>),
 
-    #[error("unexpected rule: expected {expected:?}, got {got:?} at {start:?}..{end:?}")]
+    #[error("unexpected rule: expected {expected:?}, got {got:?} at {range}")]
     UnexpectedRule {
         expected: &'static str,
         got: Rule,
-        start: (usize, usize),
-        end: (usize, usize),
+        range: Range,
     },
 
-    #[error("missing {expected:?} at {start:?}..{end:?}")]
+    #[error("missing {expected:?} at {range}")]
     Missing {
         expected: &'static str,
-        start: (usize, usize),
-        end: (usize, usize),
+        range: Range,
     },
 
-    #[error("invalid integer literal: {got} at {start:?}..{end:?}")]
-    InvalidInteger {
-        got: String,
-        start: (usize, usize),
-        end: (usize, usize),
-    },
+    #[error("invalid integer literal: {got} at {range}")]
+    InvalidInteger { got: String, range: Range },
 
-    #[error("invalid name: {got} at {start:?}..{end:?}")]
-    InvalidName {
-        got: String,
-        start: (usize, usize),
-        end: (usize, usize),
-    },
+    #[error("invalid name: {got} at {range}")]
+    InvalidName { got: String, range: Range },
 }
 
 trait AstExt<T> {
     /// If the Option is None, produce a `Missing` error located at
     /// `start..end`.
-    fn missing(
-        self,
-        expecting: &'static str,
-        start: (usize, usize),
-        end: (usize, usize),
-    ) -> Result<T, AstError>
+    fn missing(self, expecting: &'static str, range: Range) -> Result<T, AstError>
     where
         Self: Sized;
 }
 
 impl<T> AstExt<T> for Option<T> {
-    fn missing(
-        self,
-        expecting: &'static str,
-        start: (usize, usize),
-        end: (usize, usize),
-    ) -> Result<T, AstError>
+    fn missing(self, expecting: &'static str, range: Range) -> Result<T, AstError>
     where
         Self: Sized,
     {
@@ -76,8 +57,7 @@ impl<T> AstExt<T> for Option<T> {
             Some(v) => Ok(v),
             None => Err(AstError::Missing {
                 expected: expecting,
-                start,
-                end,
+                range,
             }),
         }
     }
@@ -92,8 +72,7 @@ impl Program {
             None => {
                 return Err(AstError::Missing {
                     expected: "root node",
-                    start: (1, 1),
-                    end: (1, 1),
+                    range: Range::new(1, 1, 1, 1),
                 });
             }
         };
@@ -117,18 +96,12 @@ pub fn build_program(pair: Pair<Rule>, src: &str) -> Result<Program, AstError> {
             Rule::EOI => continue,
             other => {
                 // debug
-                let span = child.as_span();
-                let (start_line, start_col) = span.start_pos().line_col();
-                let (end_line, end_col) = span.end_pos().line_col();
-                eprintln!(
-                    "parse error: unexpected top-level rule at {}:{} - got {:?}",
-                    start_line, start_col, other
-                );
+                let range = Range::from(child);
+                eprintln!("parse error: unexpected top-level rule at {range} - got {other:?}");
                 return Err(AstError::UnexpectedRule {
                     expected: "function",
                     got: other,
-                    start: (start_line, start_col),
-                    end: (end_line, end_col),
+                    range,
                 });
             }
         }
@@ -138,52 +111,35 @@ pub fn build_program(pair: Pair<Rule>, src: &str) -> Result<Program, AstError> {
 }
 
 fn build_function(pair: Pair<Rule>, src: &str) -> Result<Function, AstError> {
+    let range = Range::from(&pair);
     if pair.as_rule() != Rule::function {
-        let span = pair.as_span();
-        let (s_l, s_c) = span.start_pos().line_col();
-        let (e_l, e_c) = span.end_pos().line_col();
         return Err(AstError::UnexpectedRule {
             expected: "function",
             got: pair.as_rule(),
-            start: (s_l, s_c),
-            end: (e_l, e_c),
+            range,
         });
     }
-
-    // capture pair span before moving it
-    let pair_span = pair.as_span();
-    let pair_start = pair_span.start_pos().line_col();
-    let pair_end = pair_span.end_pos().line_col();
 
     let mut inner = pair.into_inner();
 
     // order in grammar: identifier, (parameter | parameters)? , type_, expression
     // first child must be identifier
-    let name_pair = inner
-        .next()
-        .missing("function name", pair_start, pair_end)?;
+    let name_pair = inner.next().missing("function name", range)?;
+    let name_range = Range::from(&name_pair);
     if name_pair.as_rule() != Rule::identifier {
-        let span = name_pair.as_span();
-        let (s_l, s_c) = span.start_pos().line_col();
-        let (e_l, e_c) = span.end_pos().line_col();
         return Err(AstError::UnexpectedRule {
             expected: "identifier",
             got: name_pair.as_rule(),
-            start: (s_l, s_c),
-            end: (e_l, e_c),
+            range: name_range,
         });
     }
     let name = name_pair.as_str().to_string();
 
     // make sure we aren't redefining internal functions
     if RESERVED_FUNCTION_NAMES.contains(&name.as_str()) {
-        let span = name_pair.as_span();
-        let (s_l, s_c) = span.start_pos().line_col();
-        let (e_l, e_c) = span.end_pos().line_col();
         return Err(AstError::InvalidName {
             got: name,
-            start: (s_l, s_c),
-            end: (e_l, e_c),
+            range: name_range,
         });
     }
 
@@ -193,13 +149,13 @@ fn build_function(pair: Pair<Rule>, src: &str) -> Result<Function, AstError> {
         let peek = inner.peek().map(|p| p.as_rule());
         match peek {
             Some(Rule::parameter) => {
-                let p = inner.next().missing("parameter", pair_start, pair_end)?;
+                let p = inner.next().missing("parameter", range)?;
                 for pp in p.into_inner() {
                     parameters.push(build_parameter(pp)?);
                 }
             }
             Some(Rule::parameters) => {
-                let p = inner.next().missing("parameter", pair_start, pair_end)?;
+                let p = inner.next().missing("parameter", range)?;
                 for pp in p.into_inner() {
                     parameters.push(build_parameter(pp)?);
                 }
@@ -212,14 +168,10 @@ fn build_function(pair: Pair<Rule>, src: &str) -> Result<Function, AstError> {
     let ty_pair = match inner.next() {
         Some(p) => {
             if p.as_rule() != Rule::type_ {
-                let span = p.as_span();
-                let (s_l, s_c) = span.start_pos().line_col();
-                let (e_l, e_c) = span.end_pos().line_col();
                 return Err(AstError::UnexpectedRule {
                     expected: "type_",
                     got: p.as_rule(),
-                    start: (s_l, s_c),
-                    end: (e_l, e_c),
+                    range: Range::from(&p),
                 });
             }
             p
@@ -228,23 +180,19 @@ fn build_function(pair: Pair<Rule>, src: &str) -> Result<Function, AstError> {
             return Err(AstError::UnexpectedRule {
                 expected: "type_",
                 got: Rule::program,
-                start: pair_start,
-                end: pair_end,
+                range,
             });
         }
     };
     let ret_type = build_type(ty_pair)?;
 
     // final child is the function body expression
-    let body_pair = inner
-        .next()
-        .missing("function body expression", pair_start, pair_end)?;
+    let body_pair = inner.next().missing("function body expression", range)?;
     let body = build_expr(body_pair, src)?;
 
     Ok(Function {
         name,
-        name_start: name_pair.as_span().start_pos().line_col(),
-        name_end: name_pair.as_span().end_pos().line_col(),
+        range: Range::from(name_pair),
         parameters,
         ret_type,
         body,
@@ -254,23 +202,16 @@ fn build_function(pair: Pair<Rule>, src: &str) -> Result<Function, AstError> {
 fn build_parameter(pair: Pair<Rule>) -> Result<Parameter, AstError> {
     assert_eq!(pair.as_rule(), Rule::parameter);
     // capture span before into_inner
-    let span = pair.as_span();
-    let start = span.start_pos().line_col();
-    let end = span.end_pos().line_col();
+    let range = Range::from(&pair);
     let mut inner = pair.into_inner();
     let name = inner
         .next()
-        .missing("parameter name", start, end)?
+        .missing("parameter name", range)?
         .as_str()
         .to_string(); // identifier
-    let ty_pair = inner.next().missing("parameter type", start, end)?;
+    let ty_pair = inner.next().missing("parameter type", range)?;
     let ty = build_type(ty_pair)?;
-    Ok(Parameter {
-        name,
-        ty,
-        start,
-        end,
-    })
+    Ok(Parameter { name, ty, range })
 }
 
 fn build_type(pair: Pair<Rule>) -> Result<Ty, AstError> {
@@ -279,17 +220,11 @@ fn build_type(pair: Pair<Rule>) -> Result<Ty, AstError> {
         "Int" => Ok(Ty::Int),
         "Bool" => Ok(Ty::Bool),
         "Unit" => Ok(Ty::Unit),
-        _ => {
-            let span = pair.as_span();
-            let (s_l, s_c) = span.start_pos().line_col();
-            let (e_l, e_c) = span.end_pos().line_col();
-            Err(AstError::UnexpectedRule {
-                expected: "type literal",
-                got: pair.as_rule(),
-                start: (s_l, s_c),
-                end: (e_l, e_c),
-            })
-        }
+        _ => Err(AstError::UnexpectedRule {
+            expected: "type literal",
+            got: pair.as_rule(),
+            range: Range::from(pair),
+        }),
     }
 }
 
@@ -299,68 +234,45 @@ fn build_statement(pair: Pair<Rule>, src: &str) -> Result<Statement, AstError> {
     assert_eq!(pair.as_rule(), Rule::statement);
     // statement = ((declaration | assignment | expression) ~ ";")
     // capture pair span before moving
-    let pair_span = pair.as_span();
-    let pair_start = pair_span.start_pos().line_col();
-    let pair_end = pair_span.end_pos().line_col();
+    let range = Range::from(&pair);
 
     let mut inner = pair.into_inner();
-    let first = inner
-        .next()
-        .missing("statement beginning", pair_start, pair_end)?;
+    let first = inner.next().missing("statement beginning", range)?;
 
+    let inner_range = Range::from(&first);
     match first.as_rule() {
         Rule::declaration => {
-            // capture decl span
-            let decl_span = first.as_span();
-            let decl_start = decl_span.start_pos().line_col();
-            let decl_end = decl_span.end_pos().line_col();
-
             let mut decl_inner = first.into_inner();
             let name = decl_inner
                 .next()
-                .missing("declaration name", decl_start, decl_end)?
+                .missing("declaration name", inner_range)?
                 .as_str()
                 .to_string(); // identifier
-            let ty = build_type(decl_inner.next().missing(
-                "declaration type",
-                decl_start,
-                decl_end,
-            )?)?;
+            let ty = build_type(decl_inner.next().missing("declaration type", inner_range)?)?;
             let expr = build_expr(
                 decl_inner
                     .next()
-                    .missing("declaration expression", decl_start, decl_end)?,
+                    .missing("declaration expression", inner_range)?,
                 src,
             )?;
             Ok(Statement::Declaration {
                 name,
-                name_start: decl_start,
-                name_end: decl_end,
+                range: inner_range,
                 ty,
                 val: expr,
             })
         }
         Rule::assignment => {
-            let as_span = first.as_span();
-            let as_start = as_span.start_pos().line_col();
-            let as_end = as_span.end_pos().line_col();
-
             let mut a_inner = first.into_inner();
             let name = a_inner
                 .next()
-                .missing("assignment name", as_start, as_end)?
+                .missing("assignment name", inner_range)?
                 .as_str()
                 .to_string(); // identifier
-            let expr = build_expr(
-                a_inner
-                    .next()
-                    .missing("assignment type", as_start, as_end)?,
-                src,
-            )?;
+            let expr = build_expr(a_inner.next().missing("assignment type", inner_range)?, src)?;
             Ok(Statement::Assignment {
                 name,
-                name_start: as_start,
-                name_end: as_end,
+                range: inner_range,
                 val: expr,
             })
         }
@@ -373,8 +285,7 @@ fn build_statement(pair: Pair<Rule>, src: &str) -> Result<Statement, AstError> {
             Err(AstError::UnexpectedRule {
                 expected: "declaration | assignment | expression",
                 got: other,
-                start: pair_start,
-                end: pair_end,
+                range: inner_range,
             })
         }
     }
@@ -385,15 +296,11 @@ fn build_statement(pair: Pair<Rule>, src: &str) -> Result<Statement, AstError> {
 // -> comparison -> add_sub -> mul_div -> power -> unary -> primary
 
 fn build_expr(pair: Pair<Rule>, src: &str) -> Result<Expr, AstError> {
+    let range = Range::from(&pair);
     match pair.as_rule() {
         Rule::expression => {
             // expression wraps logic_or
-            let span = pair.as_span();
-            let inner = pair.into_inner().next().missing(
-                "expression body",
-                span.start_pos().line_col(),
-                span.end_pos().line_col(),
-            )?;
+            let inner = pair.into_inner().next().missing("expression body", range)?;
             build_expr(inner, src)
         }
         Rule::logic_or => build_logic_or(pair, src),
@@ -406,17 +313,11 @@ fn build_expr(pair: Pair<Rule>, src: &str) -> Result<Expr, AstError> {
         Rule::power => build_power(pair, src),
         Rule::unary => build_unary(pair, src),
         Rule::primary => build_primary(pair, src),
-        other => {
-            let span = pair.as_span();
-            let (s_l, s_c) = span.start_pos().line_col();
-            let (e_l, e_c) = span.end_pos().line_col();
-            Err(AstError::UnexpectedRule {
-                expected: "expression-like rule",
-                got: other,
-                start: (s_l, s_c),
-                end: (e_l, e_c),
-            })
-        }
+        other => Err(AstError::UnexpectedRule {
+            expected: "expression-like rule",
+            got: other,
+            range,
+        }),
     }
 }
 
@@ -425,45 +326,29 @@ fn binop_fold<F>(
     mut inner: pest::iterators::Pairs<'_, Rule>,
     mut next_level: F,
     src: &str,
-    parent_start: (usize, usize),
-    parent_end: (usize, usize),
+    parent_range: Range,
 ) -> Result<Expr, AstError>
 where
     F: FnMut(Pair<Rule>, &str) -> Result<Expr, AstError>,
 {
-    // first element is left operand
-    let first_pair = match inner.next() {
-        Some(p) => p,
-        None => {
-            return Err(AstError::Missing {
-                expected: "left",
-                start: parent_start,
-                end: parent_end,
-            });
-        }
-    };
+    let first_pair = inner.next().missing("left operand", parent_range)?;
     let mut expr = next_level(first_pair, src)?;
+
     while let Some(op_pair) = inner.next() {
-        // op_pair is an operator terminal like Rule::or / Rule::add etc.
-        let rhs_pair = inner.next().ok_or(AstError::Missing {
-            expected: "right",
-            start: parent_start,
-            end: parent_end,
-        })?;
+        let rhs_pair = inner.next().missing("right operand", parent_range)?;
         let rhs = next_level(rhs_pair, src)?;
         let op = bop_from_rule(op_pair.as_rule());
-        let start = expr.start;
-        let end = rhs.end;
+
         expr = Expr {
             expr: Expression::BinOp {
                 left: Box::new(expr),
                 op,
                 right: Box::new(rhs),
             },
-            start,
-            end,
+            range: parent_range,
         };
     }
+
     Ok(expr)
 }
 
@@ -480,82 +365,63 @@ fn bop_from_rule(rule: Rule) -> Bop {
 
 // logic_or = { logic_xor ~ (or ~ logic_xor)* }
 fn build_logic_or(pair: Pair<Rule>, src: &str) -> Result<Expr, AstError> {
-    let span = pair.as_span();
-    let start = span.start_pos().line_col();
-    let end = span.end_pos().line_col();
+    let range = Range::from(&pair);
     let inner = pair.into_inner();
-    binop_fold(inner, build_logic_xor, src, start, end)
+    binop_fold(inner, build_logic_xor, src, range)
 }
 
 // logic_xor = { logic_and ~ (xor ~ logic_and)* }
 fn build_logic_xor(pair: Pair<Rule>, src: &str) -> Result<Expr, AstError> {
-    let span = pair.as_span();
-    let start = span.start_pos().line_col();
-    let end = span.end_pos().line_col();
+    let range = Range::from(&pair);
     let inner = pair.into_inner();
-    binop_fold(inner, build_logic_and, src, start, end)
+    binop_fold(inner, build_logic_and, src, range)
 }
 
 // logic_and = { equality ~ (and ~ equality)* }
 fn build_logic_and(pair: Pair<Rule>, src: &str) -> Result<Expr, AstError> {
-    let span = pair.as_span();
-    let start = span.start_pos().line_col();
-    let end = span.end_pos().line_col();
+    let range = Range::from(&pair);
     let inner = pair.into_inner();
-    binop_fold(inner, build_equality, src, start, end)
+    binop_fold(inner, build_equality, src, range)
 }
 
 // equality = { comparison ~ ( (eq | ne) ~ comparison )* }
 fn build_equality(pair: Pair<Rule>, src: &str) -> Result<Expr, AstError> {
-    let pair_span = pair.as_span();
-    let pair_start = pair_span.start_pos().line_col();
-    let pair_end = pair_span.end_pos().line_col();
-
+    let range = Range::from(&pair);
     let mut inner = pair.into_inner();
-    let mut expr = build_comparison(
-        inner
-            .next()
-            .missing("eq expression", pair_start, pair_end)?,
-        src,
-    )?;
+
+    let mut expr = build_comparison(inner.next().missing("eq expression", range)?, src)?;
+
     while let Some(op_pair) = inner.next() {
-        let rhs_pair = inner.next().missing("eq right", pair_start, pair_end)?;
+        let rhs_pair = inner.next().missing("eq right", range)?;
         let rhs = build_comparison(rhs_pair, src)?;
         let op = match op_pair.as_rule() {
             Rule::eq => Bop::Comp(CompOp::Eq),
             Rule::ne => Bop::Comp(CompOp::Ne),
             other => panic!("unexpected equality operator: {other:?}"),
         };
-        let start = expr.start;
-        let end = rhs.end;
+
         expr = Expr {
             expr: Expression::BinOp {
                 left: Box::new(expr),
                 op,
                 right: Box::new(rhs),
             },
-            start,
-            end,
+            range,
         };
     }
+
     Ok(expr)
 }
 
 // comparison = { add_sub ~ ( (gt | lt | ge | le) ~ add_sub )* }
 fn build_comparison(pair: Pair<Rule>, src: &str) -> Result<Expr, AstError> {
-    let pair_span = pair.as_span();
-    let pair_start = pair_span.start_pos().line_col();
-    let pair_end = pair_span.end_pos().line_col();
-
+    let range = Range::from(&pair);
     let mut inner = pair.into_inner();
-    let mut expr = build_add_sub(
-        inner
-            .next()
-            .missing("comp expression", pair_start, pair_end)?,
-        src,
-    )?;
+
+    let mut expr = build_add_sub(inner.next().missing("comp expression", range)?, src)?;
+
     while let Some(op_pair) = inner.next() {
-        let rhs_pair = inner.next().missing("comp right", pair_start, pair_end)?;
+        let rhs_pair = inner.next().missing("comp right", range)?;
         let rhs = build_add_sub(rhs_pair, src)?;
         let comp_op = match op_pair.as_rule() {
             Rule::gt => CompOp::Gt,
@@ -564,125 +430,96 @@ fn build_comparison(pair: Pair<Rule>, src: &str) -> Result<Expr, AstError> {
             Rule::le => CompOp::Le,
             other => panic!("unexpected comp operator: {other:?}"),
         };
-        let start = expr.start;
-        let end = rhs.end;
+
         expr = Expr {
             expr: Expression::BinOp {
                 left: Box::new(expr),
                 op: Bop::Comp(comp_op),
                 right: Box::new(rhs),
             },
-            start,
-            end,
+            range,
         };
     }
+
     Ok(expr)
 }
 
 // add_sub = { mul_div ~ ( (add | subtract) ~ mul_div )* }
 fn build_add_sub(pair: Pair<Rule>, src: &str) -> Result<Expr, AstError> {
-    let pair_span = pair.as_span();
-    let pair_start = pair_span.start_pos().line_col();
-    let pair_end = pair_span.end_pos().line_col();
-
+    let range = Range::from(&pair);
     let mut inner = pair.into_inner();
-    let mut expr = build_mul_div(
-        inner
-            .next()
-            .missing("add_sub expresison", pair_start, pair_end)?,
-        src,
-    )?;
+
+    let mut expr = build_mul_div(inner.next().missing("add_sub expression", range)?, src)?;
+
     while let Some(op_pair) = inner.next() {
-        let rhs_pair = inner
-            .next()
-            .missing("add_sub right", pair_start, pair_end)?;
+        let rhs_pair = inner.next().missing("add_sub right", range)?;
         let rhs = build_mul_div(rhs_pair, src)?;
         let op = match op_pair.as_rule() {
             Rule::add => Bop::Plus,
             Rule::subtract => Bop::Minus,
             other => panic!("unexpected add_sub op: {other:?}"),
         };
-        let start = expr.start;
-        let end = rhs.end;
+
         expr = Expr {
             expr: Expression::BinOp {
                 left: Box::new(expr),
                 op,
                 right: Box::new(rhs),
             },
-            start,
-            end,
+            range,
         };
     }
+
     Ok(expr)
 }
 
 // mul_div = { power ~ ( (multiply | divide) ~ power )* }
 fn build_mul_div(pair: Pair<Rule>, src: &str) -> Result<Expr, AstError> {
-    let pair_span = pair.as_span();
-    let pair_start = pair_span.start_pos().line_col();
-    let pair_end = pair_span.end_pos().line_col();
-
+    let range = Range::from(&pair);
     let mut inner = pair.into_inner();
-    let mut expr = build_power(
-        inner
-            .next()
-            .missing("mul_div expression", pair_start, pair_end)?,
-        src,
-    )?;
+
+    let mut expr = build_power(inner.next().missing("mul_div expression", range)?, src)?;
+
     while let Some(op_pair) = inner.next() {
-        let rhs_pair = inner
-            .next()
-            .missing("mul_div right", pair_start, pair_end)?;
+        let rhs_pair = inner.next().missing("mul_div right", range)?;
         let rhs = build_power(rhs_pair, src)?;
         let op = match op_pair.as_rule() {
             Rule::multiply => Bop::Mult,
             Rule::divide => Bop::Div,
             other => panic!("unexpected mul_div op: {other:?}"),
         };
-        let start = expr.start;
-        let end = rhs.end;
+
         expr = Expr {
             expr: Expression::BinOp {
                 left: Box::new(expr),
                 op,
                 right: Box::new(rhs),
             },
-            start,
-            end,
+            range,
         };
     }
+
     Ok(expr)
 }
 
 // power = { unary ~ (pow ~ power)? }  -> right-assoc
 fn build_power(pair: Pair<Rule>, src: &str) -> Result<Expr, AstError> {
-    let span = pair.as_span();
+    let range = Range::from(&pair);
     let mut inner = pair.into_inner();
-    let left_pair = inner.next().missing(
-        "power expression",
-        span.start_pos().line_col(),
-        span.end_pos().line_col(),
-    )?;
+
+    let left_pair = inner.next().missing("power expression", range)?;
     let left = build_unary(left_pair, src)?;
+
     if let Some(_op_pair) = inner.next() {
-        // op_pair should be pow, next is power
-        let rhs_pair = inner.next().missing(
-            "power right",
-            span.start_pos().line_col(),
-            span.end_pos().line_col(),
-        )?;
+        let rhs_pair = inner.next().missing("power right", range)?;
         let rhs = build_power(rhs_pair, src)?;
-        let start = left.start;
-        let end = rhs.end;
         Ok(Expr {
             expr: Expression::BinOp {
                 left: Box::new(left),
                 op: Bop::Pow,
                 right: Box::new(rhs),
             },
-            start,
-            end,
+            range,
         })
     } else {
         Ok(left)
@@ -692,182 +529,108 @@ fn build_power(pair: Pair<Rule>, src: &str) -> Result<Expr, AstError> {
 // unary = { (unary_operand ~ unary) | primary }
 fn build_unary(pair: Pair<Rule>, src: &str) -> Result<Expr, AstError> {
     assert_eq!(pair.as_rule(), Rule::unary);
-    let span = pair.as_span();
-    let span_start = span.start_pos().line_col();
-    let span_end = span.end_pos().line_col();
+    let range = Range::from(&pair);
 
     let mut inner = pair.into_inner();
-    let first = inner.next().missing("unary expr", span_start, span_end)?; // get the first inner fragment
+    let first = inner.next().missing("unary expr", range)?;
 
     match first.as_rule() {
-        // case where pest returns the operator wrapped in unary_operand
         Rule::unary_operand => {
-            // unary_operand contains a single child: subtract | negate
-            let op_pair =
-                first
-                    .into_inner()
-                    .next()
-                    .missing("unary operator", span_start, span_end)?;
-            match op_pair.as_rule() {
-                Rule::subtract => {
-                    let rhs = build_unary(
-                        inner.next().missing("subtract rhs", span_start, span_end)?,
-                        src,
-                    )?;
-                    let (start_line, start_col) = span_start;
-                    let (end_line, end_col) = rhs.end;
-                    Ok(Expr {
-                        expr: Expression::UnOp {
-                            op: Uop::Neg,
-                            right: Box::new(rhs),
-                        },
-                        start: (start_line, start_col),
-                        end: (end_line, end_col),
-                    })
-                }
-                Rule::negate => {
-                    let rhs = build_unary(
-                        inner.next().missing("negate rhs", span_start, span_end)?,
-                        src,
-                    )?;
-                    let (start_line, start_col) = span_start;
-                    let (end_line, end_col) = rhs.end;
-                    Ok(Expr {
-                        expr: Expression::UnOp {
-                            op: Uop::Not,
-                            right: Box::new(rhs),
-                        },
-                        start: (start_line, start_col),
-                        end: (end_line, end_col),
-                    })
-                }
+            let op_pair = first.into_inner().next().missing("unary operator", range)?;
+            let rhs = build_unary(inner.next().missing("unary rhs", range)?, src)?;
+
+            let op = match op_pair.as_rule() {
+                Rule::subtract => Uop::Neg,
+                Rule::negate => Uop::Not,
                 other => {
-                    let op_span = op_pair.as_span();
-                    let (s_l, s_c) = op_span.start_pos().line_col();
-                    let (e_l, e_c) = op_span.end_pos().line_col();
-                    Err(AstError::UnexpectedRule {
+                    return Err(AstError::UnexpectedRule {
                         expected: "subtract | negate",
                         got: other,
-                        start: (s_l, s_c),
-                        end: (e_l, e_c),
-                    })
+                        range: Range::from(&op_pair),
+                    });
                 }
-            }
+            };
+
+            Ok(Expr {
+                expr: Expression::UnOp {
+                    op,
+                    right: Box::new(rhs),
+                },
+                range,
+            })
         }
         Rule::subtract => {
-            let rhs = build_unary(
-                inner.next().missing("subtract rhs", span_start, span_end)?,
-                src,
-            )?;
-            let (start_line, start_col) = span_start;
-            let (end_line, end_col) = rhs.end;
+            let rhs = build_unary(inner.next().missing("subtract rhs", range)?, src)?;
             Ok(Expr {
                 expr: Expression::UnOp {
                     op: Uop::Neg,
                     right: Box::new(rhs),
                 },
-                start: (start_line, start_col),
-                end: (end_line, end_col),
+                range,
             })
         }
         Rule::negate => {
-            let rhs = build_unary(
-                inner.next().missing("negate rhs", span_start, span_end)?,
-                src,
-            )?;
-            let (start_line, start_col) = span_start;
-            let (end_line, end_col) = rhs.end;
+            let rhs = build_unary(inner.next().missing("negate rhs", range)?, src)?;
             Ok(Expr {
                 expr: Expression::UnOp {
                     op: Uop::Not,
                     right: Box::new(rhs),
                 },
-                start: (start_line, start_col),
-                end: (end_line, end_col),
+                range,
             })
         }
-
-        // otherwise it's a primary/parenthesized expression
         _ => build_primary(first, src),
     }
 }
 
 fn build_primary(pair: Pair<Rule>, src: &str) -> Result<Expr, AstError> {
     assert_eq!(pair.as_rule(), Rule::primary);
+    let range = Range::from(&pair);
 
-    // we need to distinguish between:
-    // - parenthesized expression: "(" expression ")"
-    // - braced block: "{" statement* expression? "}"
-    // The pair.as_str() will start with '(' or '{' accordingly, so use that.
-    // Capture the span before moving the pair with `into_inner()`.
-    let span = pair.as_span();
     let s = pair.as_str();
     if s.starts_with('{') {
-        // it's a braced block: collect statements and optional trailing expression
         let mut statements = Vec::new();
         let mut expr: Option<Box<Expr>> = None;
+
         for inner in pair.into_inner() {
             match inner.as_rule() {
-                Rule::statement => {
-                    let st = build_statement(inner, src)?;
-                    statements.push(st);
-                }
-                Rule::expression => {
-                    // trailing expression (the final expression inside the block)
-                    expr = Some(Box::new(build_expr(inner, src)?));
-                }
+                Rule::statement => statements.push(build_statement(inner, src)?),
+                Rule::expression => expr = Some(Box::new(build_expr(inner, src)?)),
                 other => {
-                    let other_span = inner.as_span();
-                    let (s_l, s_c) = other_span.start_pos().line_col();
-                    let (e_l, e_c) = other_span.end_pos().line_col();
                     return Err(AstError::UnexpectedRule {
                         expected: "statement | expression in block",
                         got: other,
-                        start: (s_l, s_c),
-                        end: (e_l, e_c),
+                        range: Range::from(&inner),
                     });
                 }
             }
         }
-        let (start_line, start_col) = span.start_pos().line_col();
-        let (end_line, end_col) = span.end_pos().line_col();
+
         return Ok(Expr {
             expr: Expression::Block { statements, expr },
-            start: (start_line, start_col),
-            end: (end_line, end_col),
+            range,
         });
     }
 
-    // not a braced block: primary has a single inner
-    let inner = pair.into_inner().next().missing(
-        "inner expression",
-        span.start_pos().line_col(),
-        span.end_pos().line_col(),
-    )?;
+    let inner = pair
+        .into_inner()
+        .next()
+        .missing("inner expression", range)?;
     match inner.as_rule() {
-        Rule::expression => build_expr(inner, src), // parenthesized expression
+        Rule::expression => build_expr(inner, src),
         Rule::ifstatement => build_if(inner, src),
         Rule::whileloop => build_while(inner, src),
         Rule::function_call => build_call(inner, src),
         Rule::number => {
             let s = inner.as_str().to_string();
-            let v = s.parse::<i64>().map_err(|_| {
-                let span = inner.as_span();
-                let (s_l, s_c) = span.start_pos().line_col();
-                let (e_l, e_c) = span.end_pos().line_col();
-                AstError::InvalidInteger {
-                    got: s.clone(),
-                    start: (s_l, s_c),
-                    end: (e_l, e_c),
-                }
+            let v = s.parse::<i64>().map_err(|_| AstError::InvalidInteger {
+                got: s.clone(),
+                range: Range::from(&inner),
             })?;
-            let span = inner.as_span();
-            let (start_line, start_col) = span.start_pos().line_col();
-            let (end_line, end_col) = span.end_pos().line_col();
+
             Ok(Expr {
                 expr: Expression::Int(v),
-                start: (start_line, start_col),
-                end: (end_line, end_col),
+                range: Range::from(&inner),
             })
         }
         Rule::boolean => {
@@ -876,76 +639,42 @@ fn build_primary(pair: Pair<Rule>, src: &str) -> Result<Expr, AstError> {
                 "false" => false,
                 other => panic!("invalid boolean literal: {other}"),
             };
-            let span = inner.as_span();
-            let (start_line, start_col) = span.start_pos().line_col();
-            let (end_line, end_col) = span.end_pos().line_col();
+
             Ok(Expr {
                 expr: Expression::Bool(b),
-                start: (start_line, start_col),
-                end: (end_line, end_col),
+                range: Range::from(&inner),
             })
         }
-        Rule::identifier => {
-            let span = inner.as_span();
-            let (start_line, start_col) = span.start_pos().line_col();
-            let (end_line, end_col) = span.end_pos().line_col();
-            Ok(Expr {
-                expr: Expression::Var(inner.as_str().to_string()),
-                start: (start_line, start_col),
-                end: (end_line, end_col),
-            })
-        }
-        other => {
-            let span = inner.as_span();
-            let (s_l, s_c) = span.start_pos().line_col();
-            let (e_l, e_c) = span.end_pos().line_col();
-            Err(AstError::UnexpectedRule {
-                expected: "primary inner",
-                got: other,
-                start: (s_l, s_c),
-                end: (e_l, e_c),
-            })
-        }
+        Rule::identifier => Ok(Expr {
+            expr: Expression::Var(inner.as_str().to_string()),
+            range: Range::from(&inner),
+        }),
+        other => Err(AstError::UnexpectedRule {
+            expected: "primary inner",
+            got: other,
+            range: Range::from(&inner),
+        }),
     }
 }
 
 fn build_if(pair: Pair<Rule>, src: &str) -> Result<Expr, AstError> {
     assert_eq!(pair.as_rule(), Rule::ifstatement);
-    // grammar: if ~ expression ~ then ~ expression ~ (else ~ expression)?
-    let span = pair.as_span();
-    let (pair_start, pair_start_col) = span.start_pos().line_col();
-    let (pair_end, pair_end_col) = span.end_pos().line_col();
+    let range = Range::from(&pair);
 
     let mut inner = pair.into_inner();
-    let cond_pair = inner.next().missing(
-        "if condition",
-        (pair_start, pair_start_col),
-        (pair_end, pair_end_col),
-    )?;
-    let then_pair = inner.next().missing(
-        "then branch",
-        (pair_start, pair_start_col),
-        (pair_end, pair_end_col),
-    )?;
+    let cond_pair = inner.next().missing("if condition", range)?;
+    let then_pair = inner.next().missing("then branch", range)?;
     let else_pair = inner.next();
 
     let cond = build_expr(cond_pair, src)?;
     let then_e = build_expr(then_pair, src)?;
     let else_e = match else_pair {
         Some(p) => build_expr(p, src)?,
-        None => {
-            // use Unit expression with span from the if pair end
-            let (end_line, end_col) = span.end_pos().line_col();
-            Expr {
-                expr: Expression::Unit,
-                start: (end_line, end_col),
-                end: (end_line, end_col),
-            }
-        }
+        None => Expr {
+            expr: Expression::Unit,
+            range,
+        },
     };
-
-    let (start_line, start_col) = span.start_pos().line_col();
-    let (end_line, end_col) = span.end_pos().line_col();
 
     Ok(Expr {
         expr: Expression::If {
@@ -953,51 +682,36 @@ fn build_if(pair: Pair<Rule>, src: &str) -> Result<Expr, AstError> {
             t: Box::new(then_e),
             f: Box::new(else_e),
         },
-        start: (start_line, start_col),
-        end: (end_line, end_col),
+        range,
     })
 }
 
 fn build_while(pair: Pair<Rule>, src: &str) -> Result<Expr, AstError> {
     assert_eq!(pair.as_rule(), Rule::whileloop);
-    // grammar: while ~ expression ~ do ~ expression
-    let span = pair.as_span();
+    let range = Range::from(&pair);
+
     let mut inner = pair.into_inner();
-    let cond_pair = inner.next().missing(
-        "while condition",
-        span.start_pos().line_col(),
-        span.end_pos().line_col(),
-    )?;
-    let body_pair = inner.next().missing(
-        "while body",
-        span.start_pos().line_col(),
-        span.end_pos().line_col(),
-    )?;
+    let cond_pair = inner.next().missing("while condition", range)?;
+    let body_pair = inner.next().missing("while body", range)?;
 
     let cond = build_expr(cond_pair, src)?;
     let body = build_expr(body_pair, src)?;
-    let (start_line, start_col) = span.start_pos().line_col();
-    let (end_line, end_col) = span.end_pos().line_col();
 
     Ok(Expr {
         expr: Expression::While {
             cond: Box::new(cond),
             body: Box::new(body),
         },
-        start: (start_line, start_col),
-        end: (end_line, end_col),
+        range,
     })
 }
 
 fn build_call(pair: Pair<Rule>, src: &str) -> Result<Expr, AstError> {
     assert_eq!(pair.as_rule(), Rule::function_call);
-    let span = pair.as_span();
+    let range = Range::from(&pair);
+
     let mut inner = pair.into_inner();
-    let name_pair = inner.next().missing(
-        "function call name",
-        span.start_pos().line_col(),
-        span.end_pos().line_col(),
-    )?;
+    let name_pair = inner.next().missing("function call name", range)?;
     let name = name_pair.as_str().to_string();
 
     let mut args = Vec::new();
@@ -1005,15 +719,11 @@ fn build_call(pair: Pair<Rule>, src: &str) -> Result<Expr, AstError> {
         args.push(build_expr(expr_pair, src)?);
     }
 
-    let (start_line, start_col) = span.start_pos().line_col();
-    let (end_line, end_col) = span.end_pos().line_col();
-
     Ok(Expr {
         expr: Expression::Call {
             fn_name: name,
             args,
         },
-        start: (start_line, start_col),
-        end: (end_line, end_col),
+        range,
     })
 }

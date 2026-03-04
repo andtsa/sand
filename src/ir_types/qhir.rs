@@ -1,27 +1,26 @@
-//! highest high intermediate representation:
-//! the abstract syntax tree IR
+//! qualified functions high intermediate representation:
+//!
+//! all function calls have been confirmed to be calling existing functions or
+//! intrinsics
 
 use std::hash::Hash;
 use std::hash::Hasher;
 
+use crate::ir_types::hhir::Parameter;
 use crate::lang::ops::*;
-use crate::lang::structure::Range;
+use crate::lang::structure::FnName;
+use crate::lang::structure::Map;
+use crate::lang::structure::Pos;
 use crate::lang::types::*;
 
 #[derive(Debug, Clone)]
-pub struct Program(pub Vec<Function>);
+pub struct Program(pub Map<FnName, QFunction>);
 
 #[derive(Debug, Clone)]
-pub struct Parameter {
-    pub name: String,
-    pub ty: Ty,
-    pub range: Range,
-}
-
-#[derive(Debug, Clone)]
-pub struct Function {
-    pub name: String,
-    pub range: Range,
+pub struct QFunction {
+    pub name: FnName,
+    pub name_start: Pos,
+    pub name_end: Pos,
     pub parameters: Vec<Parameter>,
     pub ret_type: Ty,
     pub body: Expr,
@@ -31,14 +30,16 @@ pub struct Function {
 pub enum Statement {
     Declaration {
         name: String,
-        range: Range,
+        name_start: Pos,
+        name_end: Pos,
         ty: Ty,
         val: Expr,
     },
 
     Assignment {
         name: String,
-        range: Range,
+        name_start: Pos,
+        name_end: Pos,
         val: Expr,
     },
 
@@ -49,7 +50,8 @@ pub enum Statement {
 #[derive(Debug, Clone)]
 pub struct Expr {
     pub expr: Expression,
-    pub range: Range,
+    pub start: Pos,
+    pub end: Pos,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -73,7 +75,7 @@ pub enum Expression {
         right: Box<Expr>,
     },
     Call {
-        fn_name: String,
+        fn_ref: FnName,
         args: Vec<Expr>,
     },
     Var(String),

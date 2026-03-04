@@ -9,7 +9,7 @@ def fib(x: Int): Int := {
         + fib(x - 2)
 }
 
-def main(): Unit := {
+def main(): Int := {
     let a: Int = 10;
     
     // we do not have lambdas, 

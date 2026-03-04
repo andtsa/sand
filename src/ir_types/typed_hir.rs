@@ -4,36 +4,34 @@
 //! - uniquify has already been run, so no name clashes
 //! - is SSA form (each variable is assigned to exactly once)
 
-use std::collections::BTreeMap;
 use std::hash::Hash;
 use std::hash::Hasher;
 
+use crate::lang::intrinsics::Intrinsic;
 use crate::lang::ops::*;
+use crate::lang::structure::FnName;
+use crate::lang::structure::Map;
+use crate::lang::structure::Range;
+use crate::lang::structure::VarName;
 use crate::lang::types::*;
-
-pub type FnName = String;
-pub type VarName = String;
 
 #[derive(Debug, Clone)]
 pub struct TypedProgram {
-    pub avail_fns: Vec<FnName>,
-    pub avail_vars: BTreeMap<VarName, Ty>,
-    pub functions: BTreeMap<FnName, TypedFunction>,
+    pub avail_vars: Map<VarName, Ty>,
+    pub functions: Map<FnName, TypedFunction>,
 }
 
 #[derive(Debug, Clone)]
 pub struct Parameter {
     pub name: VarName,
     pub ty: Ty,
-    pub start: (usize, usize),
-    pub end: (usize, usize),
+    pub range: Range,
 }
 
 #[derive(Debug, Clone)]
 pub struct TypedFunction {
     pub name: FnName,
-    pub name_start: (usize, usize),
-    pub name_end: (usize, usize),
+    pub range: Range,
     pub parameters: Vec<Parameter>,
     pub ret_type: Ty,
     pub body: Expr,
@@ -43,16 +41,14 @@ pub struct TypedFunction {
 pub enum Statement {
     Declaration {
         name: VarName,
-        name_start: (usize, usize),
-        name_end: (usize, usize),
+        range: Range,
         ty: Ty,
         val: Expr,
     },
 
     Assignment {
         name: VarName,
-        name_start: (usize, usize),
-        name_end: (usize, usize),
+        range: Range,
         val: Expr,
     },
 
@@ -64,8 +60,7 @@ pub enum Statement {
 pub struct Expr {
     pub expr: Expression,
     pub ty: Ty,
-    pub start: (usize, usize),
-    pub end: (usize, usize),
+    pub range: Range,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -92,7 +87,12 @@ pub enum Expression {
         fn_name: FnName,
         args: Vec<Expr>,
     },
-    Var(VarName),
+    IntrinsicCall {
+        fn_name: Intrinsic,
+        args: Vec<Expr>,
+    },
+    /// resolved variable reference
+    RVar(VarName),
     Int(i64),
     Bool(bool),
     Unit,

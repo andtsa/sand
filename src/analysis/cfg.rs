@@ -16,6 +16,7 @@ use crate::ir_types::hhir::Expression;
 use crate::ir_types::hhir::Function;
 use crate::ir_types::hhir::Program;
 use crate::ir_types::hhir::Statement;
+use crate::lang::structure::Pos;
 
 pub fn construct_cfg(ast: &Program) -> Result<Graph<AnnotatedExpression, (), Directed>> {
     let mut graph = Graph::<AnnotatedExpression, (), Directed>::new();
@@ -32,8 +33,7 @@ pub fn construct_cfg(ast: &Program) -> Result<Graph<AnnotatedExpression, (), Dir
         let entry_annotated = AnnotatedExpression {
             expr: Expr {
                 expr: Expression::Unit,
-                start: (0, 0),
-                end: (0, 0),
+                range: Default::default(),
             },
             depends_on: HashSet::new(),
             mutates: HashSet::new(),
@@ -43,8 +43,7 @@ pub fn construct_cfg(ast: &Program) -> Result<Graph<AnnotatedExpression, (), Dir
         let exit_annotated = AnnotatedExpression {
             expr: Expr {
                 expr: Expression::Unit,
-                start: (0, 0),
-                end: (0, 0),
+                range: Default::default(),
             },
             depends_on: HashSet::new(),
             mutates: HashSet::new(),

@@ -6,24 +6,22 @@ use sand::ir_types::hhir::Expr;
 use sand::ir_types::hhir::Expression;
 use sand::ir_types::hhir::Program;
 use sand::lang::ops::Bop;
+use sand::lang::structure::Range;
 
-fn a_plus_b(start: (usize, usize)) -> Expr {
+fn a_plus_b(range: Range) -> Expr {
     Expr {
         expr: Expression::BinOp {
             left: Box::new(Expr {
                 expr: Expression::Var("a".to_string()),
-                start,
-                end: start,
+                range,
             }),
             op: Bop::Plus,
             right: Box::new(Expr {
                 expr: Expression::Var("b".to_string()),
-                start,
-                end: start,
+                range,
             }),
         },
-        start,
-        end: start,
+        range,
     }
 }
 
@@ -41,18 +39,15 @@ fn test_simple() {
         expr: Expression::BinOp {
             left: Box::new(Expr {
                 expr: Expression::Int(1),
-                start: (0, 0),
-                end: (0, 0),
+                range: Default::default(),
             }),
             op: Bop::Plus,
             right: Box::new(Expr {
                 expr: Expression::Int(2),
-                start: (0, 0),
-                end: (0, 0),
+                range: Default::default(),
             }),
         },
-        start: (0, 0),
-        end: (0, 0),
+        range: Default::default(),
     };
 
     let program = Program::parse(src).unwrap();
@@ -121,7 +116,7 @@ fn test_if() {
         }
     "#;
 
-    let expr = a_plus_b((0, 0));
+    let expr = a_plus_b(Range::new(0, 0, 0, 0));
 
     let program = Program::parse(src).unwrap();
     let cfg = construct_cfg(&program).unwrap();
@@ -142,7 +137,7 @@ fn test_if() {
     );
     assert_eq!(
         annotations.expr_occurrences.get(&expr),
-        Some(&HashSet::from([((6, 22), (6, 25))])),
+        Some(&HashSet::from([Range::new(6, 22, 6, 25)])),
         "Available expression identified at wrong position."
     );
 }
@@ -187,14 +182,14 @@ fn test_params() {
         }
     "#;
 
-    let expr1 = a_plus_b((0, 0));
+    let expr1 = a_plus_b(Range::new(0, 0, 0, 0));
     let expr2 = Expr {
         expr: Expression::Call {
             fn_name: "fn".to_string(),
-            args: vec![a_plus_b((3, 1))],
+            args: vec![a_plus_b(Range::new(1, 3, 1, 3))],
         },
-        start: (0, 0),
-        end: (0, 0),
+
+        range: Default::default(),
     };
 
     let program = Program::parse(src).unwrap();
@@ -284,7 +279,7 @@ fn test_function_intersection() {
     }
     "#;
 
-    let expr = a_plus_b((0, 0));
+    let expr = a_plus_b(Range::new(0, 0, 0, 0));
 
     let program = Program::parse(src).unwrap();
     let cfg = construct_cfg(&program).unwrap();
@@ -316,7 +311,7 @@ fn test_block() {
     }
     "#;
 
-    let expr = a_plus_b((0, 0));
+    let expr = a_plus_b(Range::new(0, 0, 0, 0));
 
     let program = Program::parse(src).unwrap();
     let cfg = construct_cfg(&program).unwrap();

@@ -11,16 +11,17 @@ use crate::analysis::cfg;
 use crate::analysis::interactions::find_interactions;
 use crate::ir_types::hhir::Expr;
 use crate::ir_types::hhir::Program;
+use crate::lang::structure::Range;
 
 pub mod analysis;
 pub mod interpreter;
 pub mod ir_types;
+pub mod lang;
 pub mod lsp;
 pub mod passes;
 pub mod util;
-pub mod lang;
 
-pub type TupleSpan = ((usize, usize), (usize, usize));
+pub type TupleSpan = Range;
 #[derive(Debug, Clone, Default)]
 pub struct ProgramAnnotations {
     /// Map from each expression to all its occurrences in the source code

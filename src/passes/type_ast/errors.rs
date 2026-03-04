@@ -2,34 +2,31 @@
 
 use std::error::Error;
 
+use crate::lang::structure::Range;
 use crate::lang::types::Ty;
 
 #[derive(Debug)]
 pub enum AstTypeError {
     UnboundVariable {
         name: String,
-        start: (usize, usize),
-        end: (usize, usize),
+        range: Range,
     },
     UndefinedFunction {
         name: String,
-        start: (usize, usize),
-        end: (usize, usize),
+        range: Range,
     },
     UniquifyError(crate::passes::uniquify::reserved::UniquifyError),
     TypeError {
         message: String,
         expected: Ty,
         found: Ty,
-        start: (usize, usize),
-        end: (usize, usize),
+        range: Range,
     },
     FunctionCallTypeError {
         message: String,
         expected: Vec<Ty>,
         found: Vec<Ty>,
-        start: (usize, usize),
-        end: (usize, usize),
+        range: Range,
     },
 }
 
@@ -37,45 +34,35 @@ impl std::fmt::Display for AstTypeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use AstTypeError::*;
         match self {
-            UnboundVariable { name, start, end } => {
-                write!(
-                    f,
-                    "unbound variable '{}' at span {:?}-{:?}",
-                    name, start, end
-                )
+            UnboundVariable { name, range } => {
+                write!(f, "unbound variable '{name}' at {range}",)
             }
-            UndefinedFunction { name, start, end } => {
-                write!(
-                    f,
-                    "undefined function '{}' at span {:?}-{:?}",
-                    name, start, end
-                )
+            UndefinedFunction { name, range } => {
+                write!(f, "undefined function '{name}' at {range}",)
             }
             UniquifyError(e) => write!(f, "uniquify error: {}", e),
             TypeError {
                 message,
                 expected,
                 found,
-                start,
-                end,
+                range,
             } => {
                 write!(
                     f,
-                    "type error at {:?}-{:?}: {} (expected {:?}, found {:?})",
-                    start, end, message, expected, found
+                    "type error at {range}: {} (expected {:?}, found {:?})",
+                    message, expected, found
                 )
             }
             FunctionCallTypeError {
                 message,
                 expected,
                 found,
-                start,
-                end,
+                range,
             } => {
                 write!(
                     f,
-                    "function call type error at {:?}-{:?}: {} (expected argument types {:?}, found argument types {:?})",
-                    start, end, message, expected, found
+                    "function call type error at {range}: {} (expected argument types {:?}, found argument types {:?})",
+                    message, expected, found
                 )
             }
         }

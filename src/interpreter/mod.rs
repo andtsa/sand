@@ -182,24 +182,13 @@ impl Program {
                 let mut ret_expr = Expression::Unit;
                 for stmt in statements {
                     match stmt {
-                        Statement::Declaration {
-                            name,
-                            name_start: _,
-                            name_end: _,
-                            ty: _,
-                            val,
-                        } => {
+                        Statement::Declaration { name, val, .. } => {
                             let evaluated_val = val.evaluate(self, &local_env)?;
                             local_env
                                 .borrow_mut()
                                 .add_variable(name.clone(), evaluated_val);
                         }
-                        Statement::Assignment {
-                            name,
-                            name_start: _,
-                            name_end: _,
-                            val,
-                        } => {
+                        Statement::Assignment { name, val, .. } => {
                             let evaluated_val = val.evaluate(self, &local_env)?;
                             local_env.borrow_mut().assign(name.clone(), evaluated_val)?;
                         }

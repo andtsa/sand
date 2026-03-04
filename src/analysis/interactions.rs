@@ -118,7 +118,7 @@ pub fn find_interactions(
                 expr_occurrences
                     .entry(sub.clone())
                     .or_default()
-                    .insert((sub.start, sub.end));
+                    .insert(sub.range);
             }
         }
     }

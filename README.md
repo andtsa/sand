@@ -142,5 +142,13 @@ status: basic implementation done
 
 ## todo
 
+- a LOT.
+- resolve function calls in one place
+- split uniquify pass into one for function names and one for variable names
+- ...
+- add module system
+- ...
 - SSA pass
+- ...
+- llvm codegen
 

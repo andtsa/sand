@@ -26,17 +26,17 @@ def main(): Int := {
 
     x * x + 5 - {
         192 * 555;
-        while false do print(0);
+        // while false do print(0);
         5
     };
  
     x * x;
-    192*555;
+    192*555 + false;
 
     if true then {
         x * x
     } else {
-        print(0);
+        // print(0);
         192 * 555
     }
 }

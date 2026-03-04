@@ -6,41 +6,42 @@ use crate::ir_types::hhir::Expr;
 use crate::ir_types::hhir::Expression;
 use crate::ir_types::hhir::Program;
 use crate::ir_types::hhir::Statement;
+use crate::lang::structure::Range;
 
 pub const RESERVED_FUNCTION_NAMES: [&str; 6] =
     ["print", "println", "printf", "scanf", "read", "readline"];
 
-pub type SeenMap = BTreeMap<String, ((usize, usize), (usize, usize))>;
+pub type SeenMap = BTreeMap<String, Range>;
 
 /// errors produced by the uniquify / reserved-name checking passes
 #[derive(Debug)]
 pub enum UniquifyError {
     UnboundVariable {
         name: String,
-        at: ((usize, usize), (usize, usize)),
+        at: Range,
     },
     UndefinedFunction {
         name: String,
-        at: ((usize, usize), (usize, usize)),
+        at: Range,
     },
     DuplicateFunction {
         name: String,
-        first_instance: ((usize, usize), (usize, usize)),
-        second_instance: ((usize, usize), (usize, usize)),
+        first_instance: Range,
+        second_instance: Range,
     },
     IllegalFunctionName {
         name: String,
-        at: ((usize, usize), (usize, usize)),
+        at: Range,
     },
     DuplicateParameterName {
         name: String,
-        first_instance: ((usize, usize), (usize, usize)),
-        second_instance: ((usize, usize), (usize, usize)),
+        first_instance: Range,
+        second_instance: Range,
     },
     DuplicateVariableName {
         name: String,
-        first_instance: ((usize, usize), (usize, usize)),
-        second_instance: ((usize, usize), (usize, usize)),
+        first_instance: Range,
+        second_instance: Range,
     },
 }
 
@@ -49,18 +50,10 @@ impl std::fmt::Display for UniquifyError {
         use UniquifyError::*;
         match self {
             UnboundVariable { name, at } => {
-                write!(
-                    f,
-                    "unbound variable '{}' at span {:?}-{:?}",
-                    name, at.0, at.1
-                )
+                write!(f, "unbound variable '{name}' at {at}")
             }
             UndefinedFunction { name, at } => {
-                write!(
-                    f,
-                    "undefined function '{}' at span {:?}-{:?}",
-                    name, at.0, at.1
-                )
+                write!(f, "undefined function '{name}' at {at}")
             }
             DuplicateFunction {
                 name,
@@ -68,15 +61,10 @@ impl std::fmt::Display for UniquifyError {
                 second_instance,
             } => write!(
                 f,
-                "duplicate function '{}' at spans {:?}-{:?} and {:?}-{:?}",
-                name, first_instance.0, first_instance.1, second_instance.0, second_instance.1
+                "duplicate function '{name}' at {first_instance} and {second_instance}"
             ),
             IllegalFunctionName { name, at } => {
-                write!(
-                    f,
-                    "illegal function name '{}' at span {:?}-{:?}",
-                    name, at.0, at.1
-                )
+                write!(f, "illegal function name '{name}' at {at}")
             }
             DuplicateParameterName {
                 name,
@@ -84,8 +72,7 @@ impl std::fmt::Display for UniquifyError {
                 second_instance,
             } => write!(
                 f,
-                "duplicate parameter '{}' at spans {:?}-{:?} and {:?}-{:?}",
-                name, first_instance.0, first_instance.1, second_instance.0, second_instance.1
+                "duplicate parameter '{name}' at {first_instance} and {second_instance}"
             ),
             DuplicateVariableName {
                 name,
@@ -93,8 +80,7 @@ impl std::fmt::Display for UniquifyError {
                 second_instance,
             } => write!(
                 f,
-                "duplicate variable '{}' at spans {:?}-{:?} and {:?}-{:?}",
-                name, first_instance.0, first_instance.1, second_instance.0, second_instance.1
+                "duplicate variable '{name}' at {first_instance} and {second_instance}",
             ),
         }
     }
@@ -119,7 +105,7 @@ pub fn assert_unique(prog: &Program) -> Result<(), UniquifyError> {
         if RESERVED_FUNCTION_NAMES.contains(&func.name.as_str()) {
             return Err(UniquifyError::IllegalFunctionName {
                 name: func.name.clone(),
-                at: (func.name_start, func.name_end),
+                at: func.range,
             });
         }
 
@@ -127,11 +113,11 @@ pub fn assert_unique(prog: &Program) -> Result<(), UniquifyError> {
             return Err(UniquifyError::DuplicateFunction {
                 name: func.name.clone(),
                 first_instance: *first_span,
-                second_instance: (func.name_start, func.name_end),
+                second_instance: func.range,
             });
         }
         // record this function's name span
-        seen_funs.insert(func.name.clone(), (func.name_start, func.name_end));
+        seen_funs.insert(func.name.clone(), func.range);
 
         // check parameters for duplicates within the same function,
         // mapping parameter name -> (start,end)
@@ -141,10 +127,10 @@ pub fn assert_unique(prog: &Program) -> Result<(), UniquifyError> {
                 return Err(UniquifyError::DuplicateParameterName {
                     name: param.name.clone(),
                     first_instance: *first,
-                    second_instance: (param.start, param.end),
+                    second_instance: param.range,
                 });
             }
-            param_seen.insert(param.name.clone(), (param.start, param.end));
+            param_seen.insert(param.name.clone(), param.range);
         }
 
         // check the function body using a name->span map for locals
@@ -218,8 +204,7 @@ pub fn check_stmt(stmt: &Statement, seen: &mut SeenMap) -> Result<(), UniquifyEr
     match stmt {
         Statement::Declaration {
             name,
-            name_start,
-            name_end,
+            range,
             ty: _,
             val,
         } => {
@@ -227,19 +212,14 @@ pub fn check_stmt(stmt: &Statement, seen: &mut SeenMap) -> Result<(), UniquifyEr
                 return Err(UniquifyError::DuplicateVariableName {
                     name: name.clone(),
                     first_instance: *first_span,
-                    second_instance: (*name_start, *name_end),
+                    second_instance: *range,
                 });
             }
-            seen.insert(name.clone(), (*name_start, *name_end));
+            seen.insert(name.clone(), *range);
             check_expr(val, seen)
         }
 
-        Statement::Assignment {
-            name: _,
-            name_start: _,
-            name_end: _,
-            val,
-        } => {
+        Statement::Assignment { name: _, val, .. } => {
             // assignment doesn't declare a new variable; it should refer to an existing one
             // uniqueness checker only needs to traverse the RHS expression
             check_expr(val, seen)

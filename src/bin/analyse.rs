@@ -7,9 +7,11 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+use sand::TupleSpan;
 use sand::analysis::interactions::has_other_side_effects;
 use sand::ir_types::hhir::Expr;
 use sand::ir_types::hhir::Program;
+use sand::lang::structure::Range;
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -33,7 +35,7 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-type OccurenceMap = HashMap<Expr, HashSet<((usize, usize), (usize, usize))>>;
+type OccurenceMap = HashMap<Expr, HashSet<TupleSpan>>;
 
 fn visualise_annotations(text: &str, repeated_expressions: &OccurenceMap) -> String {
     // collect lines preserving newline characters
@@ -55,7 +57,7 @@ fn visualise_annotations(text: &str, repeated_expressions: &OccurenceMap) -> Str
         if has_other_side_effects(expr) {
             continue;
         }
-        for &((sl, sc), (el, ec)) in occs.iter() {
+        for ((sl, sc), (el, ec)) in occs.iter().map(Range::destruct) {
             if sl == 0 || el == 0 {
                 continue;
             }
