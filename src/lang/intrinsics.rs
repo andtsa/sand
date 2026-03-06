@@ -12,6 +12,9 @@ use crate::lang::types::Ty;
 
 pub static INTRINSICS: LazyLock<Map<Intrinsic, (FnName, FnSig)>> = LazyLock::new(intrinsics);
 
+pub const RESERVED_FUNCTION_NAMES: [&str; 6] =
+    ["print", "println", "printf", "scanf", "read", "readline"];
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Intrinsic {
     Print,
@@ -66,4 +69,8 @@ impl TryFrom<&str> for Intrinsic {
             _ => Err(()),
         }
     }
+}
+
+pub fn fn_name_allowed(name: &str) -> bool {
+    !RESERVED_FUNCTION_NAMES.contains(&name) && Intrinsic::try_from(name).is_err()
 }

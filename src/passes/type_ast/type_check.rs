@@ -123,20 +123,16 @@ pub(super) fn check_expr(expr: &Expr, prog: &TypedProgram) -> Result<Ty, AstType
             let left_ty = check_expr(left, prog)?;
             let right_ty = check_expr(right, prog)?;
 
-            match op.accepts_types(left_ty, right_ty) {
-                Err(expected_ty) => {
-                    return Err(AstTypeError::TypeError {
-                        message: format!(
-                            "Operator '{:?}' does not accept types {:?} and {:?}",
-                            op, left_ty, right_ty
-                        ),
-                        expected: expected_ty,
-                        found: left_ty,
-                        range: expr.range,
-                    });
-                }
-                Ok(ret_ty) => Ok(ret_ty),
-            }
+            op.accepts_types(left_ty, right_ty)
+                .map_err(|expected_ty| AstTypeError::TypeError {
+                    message: format!(
+                        "Operator '{:?}' does not accept types {:?} and {:?}",
+                        op, left_ty, right_ty
+                    ),
+                    expected: expected_ty,
+                    found: left_ty,
+                    range: expr.range,
+                })
         }
         Expression::UnOp { op, right } => {
             let right_ty = check_expr(right, prog)?;

@@ -4,7 +4,7 @@ use sand::analysis::cfg::construct_cfg;
 use sand::analysis::interactions::find_interactions;
 use sand::ir_types::hhir::Expr;
 use sand::ir_types::hhir::Expression;
-use sand::ir_types::hhir::Program;
+use sand::ir_types::hhir::ProgramModule;
 use sand::lang::ops::Bop;
 use sand::lang::structure::Range;
 
@@ -50,7 +50,7 @@ fn test_simple() {
         range: Default::default(),
     };
 
-    let program = Program::parse(src).unwrap();
+    let program = ProgramModule::parse(src).unwrap();
     let cfg = construct_cfg(&program).unwrap();
 
     // Debug output
@@ -83,7 +83,7 @@ fn test_simple_kill() {
         }
     "#;
 
-    let program = Program::parse(src).unwrap();
+    let program = ProgramModule::parse(src).unwrap();
     let cfg = construct_cfg(&program).unwrap();
 
     // Debug output
@@ -118,7 +118,7 @@ fn test_if() {
 
     let expr = a_plus_b(Range::new(0, 0, 0, 0));
 
-    let program = Program::parse(src).unwrap();
+    let program = ProgramModule::parse(src).unwrap();
     let cfg = construct_cfg(&program).unwrap();
 
     println!("{:?}", cfg);
@@ -153,7 +153,7 @@ fn test_while() {
         }
     "#;
 
-    let program = Program::parse(src).unwrap();
+    let program = ProgramModule::parse(src).unwrap();
     let cfg = construct_cfg(&program).unwrap();
 
     println!("{:?}", cfg);
@@ -192,7 +192,7 @@ fn test_params() {
         range: Default::default(),
     };
 
-    let program = Program::parse(src).unwrap();
+    let program = ProgramModule::parse(src).unwrap();
     let cfg = construct_cfg(&program).unwrap();
 
     println!("{:?}", cfg);
@@ -246,7 +246,7 @@ fn test_function_simple() {
         }
     "#;
 
-    let program = Program::parse(src).unwrap();
+    let program = ProgramModule::parse(src).unwrap();
     let cfg = construct_cfg(&program).unwrap();
 
     println!("{:?}", cfg);
@@ -281,7 +281,7 @@ fn test_function_intersection() {
 
     let expr = a_plus_b(Range::new(0, 0, 0, 0));
 
-    let program = Program::parse(src).unwrap();
+    let program = ProgramModule::parse(src).unwrap();
     let cfg = construct_cfg(&program).unwrap();
     let annotations = find_interactions(cfg).unwrap();
 
@@ -313,7 +313,7 @@ fn test_block() {
 
     let expr = a_plus_b(Range::new(0, 0, 0, 0));
 
-    let program = Program::parse(src).unwrap();
+    let program = ProgramModule::parse(src).unwrap();
     let cfg = construct_cfg(&program).unwrap();
     let annotations = find_interactions(cfg).unwrap();
 

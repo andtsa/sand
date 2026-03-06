@@ -9,13 +9,13 @@ use anyhow::anyhow;
 use crate::ir_types::hhir::*;
 use crate::lang::ops::*;
 
-impl Program {
+impl ProgramModule {
     /// run the main function of the program and return an expression
     /// that's either Int, Bool, or Unit
     pub fn interpret(&self) -> anyhow::Result<Expression> {
         // find the main function
         let main_fn = self
-            .0
+            .functions
             .iter()
             .find(|f| f.name == "main")
             .ok_or_else(|| anyhow!("no main function found"))?;
@@ -80,12 +80,12 @@ impl Env {
 }
 
 impl Expr {
-    pub fn evaluate(&self, prog: &Program, env: &EnvRef) -> anyhow::Result<Expression> {
+    pub fn evaluate(&self, prog: &ProgramModule, env: &EnvRef) -> anyhow::Result<Expression> {
         prog.evaluate(&self.expr, env)
     }
 }
 
-impl Program {
+impl ProgramModule {
     /// evaluate the expression and return the resulting expression
     pub fn evaluate(&self, expr: &Expression, env: &EnvRef) -> anyhow::Result<Expression> {
         match expr {
@@ -220,10 +220,10 @@ impl Program {
                         }
                         Ok(Expression::Unit)
                     }
-                    x if self.0.iter().any(|f| f.name == x) => {
+                    x if self.functions.iter().any(|f| f.name == x) => {
                         // user-defined function call
                         let function = self
-                            .0
+                            .functions
                             .iter()
                             .find(|f| f.name == x)
                             .ok_or_else(|| anyhow!("function not found: {}", x))?;

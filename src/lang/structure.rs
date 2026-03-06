@@ -7,12 +7,13 @@ use std::path::PathBuf;
 use pest::RuleType;
 use pest::Span;
 use pest::iterators::Pair;
+use tower_lsp::lsp_types::Url;
 
 use crate::ir_types::hhir::Parameter;
 use crate::lang::intrinsics::Intrinsic;
 use crate::lang::types::Ty;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ModuleRef {
     name: String,
 }
@@ -33,7 +34,6 @@ pub struct Range {
 pub struct FileRef {
     path: PathBuf,
     name: String,
-    module: ModuleRef,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -200,5 +200,42 @@ impl Display for Range {
 impl Display for Pos {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}:{}", self.line, self.col)
+    }
+}
+
+impl From<Span<'_>> for ModuleRef {
+    fn from(value: Span<'_>) -> Self {
+        ModuleRef {
+            name: value.as_str().to_string(),
+        }
+    }
+}
+
+impl From<&FileRef> for ModuleRef {
+    fn from(value: &FileRef) -> Self {
+        ModuleRef {
+            name: value.name.clone(),
+        }
+    }
+}
+
+impl From<Url> for ModuleRef {
+    fn from(value: Url) -> Self {
+        let name = value
+            .path_segments()
+            .and_then(|mut s| s.next_back())
+            .unwrap_or("unknown")
+            .to_string();
+        ModuleRef {
+            name, //: value.path().to_string()
+        }
+    }
+}
+
+impl ModuleRef {
+    pub fn main() -> Self {
+        ModuleRef {
+            name: "main".to_string(),
+        }
     }
 }

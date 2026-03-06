@@ -14,18 +14,18 @@ use crate::analysis::annotate::get_dependencies;
 use crate::ir_types::hhir::Expr;
 use crate::ir_types::hhir::Expression;
 use crate::ir_types::hhir::Function;
-use crate::ir_types::hhir::Program;
+use crate::ir_types::hhir::ProgramModule;
 use crate::ir_types::hhir::Statement;
 use crate::lang::structure::Pos;
 
-pub fn construct_cfg(ast: &Program) -> Result<Graph<AnnotatedExpression, (), Directed>> {
+pub fn construct_cfg(ast: &ProgramModule) -> Result<Graph<AnnotatedExpression, (), Directed>> {
     let mut graph = Graph::<AnnotatedExpression, (), Directed>::new();
     let mut function_entries = HashMap::new();
     let mut function_exits = HashMap::new();
 
     // AE Analysis expects that the entry to the main function is always at
     // IndexNode(0)
-    let mut funcs_sorted: Vec<&Function> = ast.0.iter().collect();
+    let mut funcs_sorted: Vec<&Function> = ast.functions.iter().collect();
     funcs_sorted.sort_by_key(|f| if f.name == "main" { 0 } else { 1 });
 
     // Add entry and exit nodes for every function
@@ -55,7 +55,7 @@ pub fn construct_cfg(ast: &Program) -> Result<Graph<AnnotatedExpression, (), Dir
     }
 
     // Create cfg for each function and connect them if needed
-    for func in &ast.0 {
+    for func in &ast.functions {
         let entry = function_entries[&func.name];
         let exit = function_exits[&func.name];
 

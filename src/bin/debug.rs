@@ -1,5 +1,5 @@
 #![allow(unused)]
-use sand::ir_types::hhir::Program;
+use sand::ir_types::hhir::ProgramModule;
 use sand::ir_types::typed_hir::TypedProgram;
 use sand::passes::parse::Rule;
 
@@ -103,10 +103,10 @@ def main(): Int := {
     x
 }"#;
 
-    let program = Program::parse(_test_4)?;
+    let program = ProgramModule::parse(_test_4)?;
     // println!("{:#?}", program);
 
-    let uniquified = Program::uniquify(&program)?;
+    let uniquified = ProgramModule::uniquify(&program)?;
     // let typed = TypedProgram::from_ast_program(&uniquified)?;
     println!("{:#?}", uniquified);
     // println!("{:#?}", typed);

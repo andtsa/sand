@@ -92,7 +92,6 @@ parameters = { parameter ~ ("," ~ parameter)* ~ ","? }
 
 function = { "def" ~ identifier ~ "(" ~ parameters? ~ ")" ~ ":" ~ type_ ~ ":=" ~ expression }
 
-// programs are built from functions
-// since at least once function must be present to parse,
-// the evaluation just has to find the main function
-program = { SOI ~ function+ ~ EOI }
+module = { "module" ~ identifier ~ ";"? }
+
+program = { SOI ~ (function | module)* ~ EOI }

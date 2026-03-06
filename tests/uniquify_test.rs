@@ -10,7 +10,7 @@ use sand::passes::uniquify::reserved::assert_unique;
 /// # Arguments
 /// * 'original' - The original program AST.
 /// * 'uniquified' - The program AST after being passed through uniquify.
-fn assert_uniquify_sound(original: &Program, uniquified: &Program) -> bool {
+fn assert_uniquify_sound(original: &ProgramModule, uniquified: &ProgramModule) -> bool {
     let value1 = original.interpret().unwrap();
     let value2 = uniquified.interpret().unwrap();
     value1 == value2
@@ -26,7 +26,7 @@ fn correctness1() -> Result<()> {
         let x: Int = 5;
         x
     }"#;
-    let original: Program = Program::parse(src).unwrap();
+    let original: ProgramModule = ProgramModule::parse(src).unwrap();
     let uniquified = original.uniquify()?;
     assert!(assert_unique(&uniquified).is_ok());
     assert!(assert_uniquify_sound(&original, &uniquified));
@@ -42,7 +42,7 @@ fn correctness2() -> Result<()> {
         let y: Int = 2;
         let z: Int = x + y;
     }"#;
-    let original: Program = Program::parse(src).unwrap();
+    let original: ProgramModule = ProgramModule::parse(src).unwrap();
     let uniquified = original.uniquify()?;
     assert!(assert_unique(&uniquified).is_ok());
     assert!(assert_uniquify_sound(&original, &uniquified));
@@ -64,7 +64,7 @@ fn correctness3() -> Result<()> {
         a = 3;
         x
     }"#;
-    let original: Program = Program::parse(src).unwrap();
+    let original: ProgramModule = ProgramModule::parse(src).unwrap();
     let uniquified = original.uniquify()?;
     assert!(assert_unique(&uniquified).is_ok());
     assert!(assert_uniquify_sound(&original, &uniquified));
@@ -87,7 +87,7 @@ fn correctness4() -> Result<()> {
         };
         x
     }"#;
-    let original: Program = Program::parse(src).unwrap();
+    let original: ProgramModule = ProgramModule::parse(src).unwrap();
     let uniquified = original.uniquify()?;
     assert!(assert_unique(&uniquified).is_ok());
     assert!(assert_uniquify_sound(&original, &uniquified));
@@ -106,7 +106,7 @@ fn correctness5() -> Result<()> {
             2
         };
     }"#;
-    let original: Program = Program::parse(src).unwrap();
+    let original: ProgramModule = ProgramModule::parse(src).unwrap();
     let uniquified = original.uniquify()?;
     assert!(assert_unique(&uniquified).is_ok());
     assert!(assert_uniquify_sound(&original, &uniquified));
@@ -127,7 +127,7 @@ fn correctness6() -> Result<()> {
         };
         d
     }"#;
-    let original: Program = Program::parse(src).unwrap();
+    let original: ProgramModule = ProgramModule::parse(src).unwrap();
     let uniquified = original.uniquify()?;
     assert!(assert_unique(&uniquified).is_ok());
     assert!(assert_uniquify_sound(&original, &uniquified));
@@ -156,7 +156,7 @@ fn correctness7() -> Result<()> {
             a
         };
     }"#;
-    let original: Program = Program::parse(src).unwrap();
+    let original: ProgramModule = ProgramModule::parse(src).unwrap();
     let uniquified = original.uniquify()?;
     assert!(assert_unique(&uniquified).is_ok());
     assert!(assert_uniquify_sound(&original, &uniquified));
@@ -196,7 +196,7 @@ fn correctness8() -> Result<()> {
        sum
     }
     "#;
-    let original: Program = Program::parse(src).unwrap();
+    let original: ProgramModule = ProgramModule::parse(src).unwrap();
     let uniquified = original.uniquify()?;
     assert!(assert_unique(&uniquified).is_ok());
     assert!(assert_uniquify_sound(&original, &uniquified));
@@ -215,7 +215,7 @@ fn correctness9() -> Result<()> {
         let fib: Int = fib(x);
         fib
     }"#;
-    let original: Program = Program::parse(src).unwrap();
+    let original: ProgramModule = ProgramModule::parse(src).unwrap();
     let uniquified = original.uniquify()?;
     assert!(assert_unique(&uniquified).is_ok());
     assert!(assert_uniquify_sound(&original, &uniquified));
@@ -234,7 +234,7 @@ fn correctness10() -> Result<()> {
 
         even(x)
     }"#;
-    let original: Program = Program::parse(src).unwrap();
+    let original: ProgramModule = ProgramModule::parse(src).unwrap();
     let uniquified = original.uniquify()?;
     assert!(assert_unique(&uniquified).is_ok());
     assert!(assert_uniquify_sound(&original, &uniquified));
@@ -254,7 +254,7 @@ fn correctness11() -> Result<()> {
     }
 
     def odd(x: Int): Bool := if x == 0 then false else even(x - 1)"#;
-    let original: Program = Program::parse(src).unwrap();
+    let original: ProgramModule = ProgramModule::parse(src).unwrap();
     let uniquified = original.uniquify()?;
     assert!(assert_unique(&uniquified).is_ok());
     assert!(assert_uniquify_sound(&original, &uniquified));
@@ -280,7 +280,7 @@ fn correctness12() -> Result<()> {
         x
     }
     "#;
-    let original: Program = Program::parse(src).unwrap();
+    let original: ProgramModule = ProgramModule::parse(src).unwrap();
     let uniquified = original.uniquify()?;
     assert!(assert_unique(&uniquified).is_ok());
     Ok(())
@@ -295,7 +295,7 @@ fn correctness13() -> Result<()> {
        a
     }
     "#;
-    let original: Program = Program::parse(src).unwrap();
+    let original: ProgramModule = ProgramModule::parse(src).unwrap();
     let uniquified = original.uniquify()?;
     assert!(assert_unique(&uniquified).is_ok());
     assert!(assert_uniquify_sound(&original, &uniquified));
@@ -318,7 +318,7 @@ fn correctness14() -> Result<()> {
        }) then true else false
     }
     "#;
-    let original: Program = Program::parse(src).unwrap();
+    let original: ProgramModule = ProgramModule::parse(src).unwrap();
     let uniquified = original.uniquify()?;
     assert!(assert_unique(&uniquified).is_ok());
     assert!(assert_uniquify_sound(&original, &uniquified));
@@ -341,7 +341,7 @@ fn correctness15() -> Result<()> {
        }) then b else a
     }
     "#;
-    let original: Program = Program::parse(src).unwrap();
+    let original: ProgramModule = ProgramModule::parse(src).unwrap();
     let result = original.uniquify();
     assert!(result.is_err());
     Ok(())

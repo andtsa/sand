@@ -6,7 +6,6 @@ pub mod reserved;
 use std::collections::BTreeMap;
 
 use crate::ir_types::hhir::*;
-use crate::passes::uniquify::reserved::RESERVED_FUNCTION_NAMES;
 use crate::passes::uniquify::reserved::UniquifyError;
 use crate::passes::uniquify::reserved::assert_unique;
 
@@ -19,10 +18,9 @@ struct Context {
     /// is the current scope.
     var_scopes: Vec<BTreeMap<String, String>>,
 
-    /// Function and variable names live in different namespaces in order to
-    /// allow function name shadowing without problems
-    fun_scopes: BTreeMap<String, String>,
-
+    // /// Function and variable names live in different namespaces in order to
+    // /// allow function name shadowing without problems
+    // fun_scopes: BTreeMap<String, String>,
     /// A global counter used for generating unique names across the program.
     counter: usize,
 }
@@ -33,15 +31,15 @@ impl Context {
     /// # Returns
     /// An initialized empty Context.
     fn new() -> Self {
-        let mut global = BTreeMap::new();
+        // let mut global = BTreeMap::new();
 
-        for &name in RESERVED_FUNCTION_NAMES.iter() {
-            global.insert(name.to_string(), name.to_string());
-        }
+        // for &name in RESERVED_FUNCTION_NAMES.iter() {
+        //     global.insert(name.to_string(), name.to_string());
+        // }
 
         Self {
             var_scopes: vec![BTreeMap::new()],
-            fun_scopes: global,
+            // fun_scopes: global,
             counter: 0,
         }
     }
@@ -101,35 +99,35 @@ impl Context {
         None
     }
 
-    /// Binds a given function to a newly generated unique name and stores it
-    /// in the current function scope.
-    /// # Arguments
-    /// * 'name' - The original identifier to bind.
-    /// # Returns
-    /// The newly generated unique identifier as a string.
-    pub fn bind_fun(&mut self, name: &str) -> String {
-        let new_name = if name == "main" || RESERVED_FUNCTION_NAMES.contains(&name) {
-            name.to_string()
-        } else {
-            self.rename(name)
-        };
-        self.fun_scopes.insert(name.to_string(), new_name.clone());
-        new_name
-    }
+    // /// Binds a given function to a newly generated unique name and stores it
+    // /// in the current function scope.
+    // /// # Arguments
+    // /// * 'name' - The original identifier to bind.
+    // /// # Returns
+    // /// The newly generated unique identifier as a string.
+    // pub fn bind_fun(&mut self, name: &str) -> String {
+    //     let new_name = if name == "main" ||
+    // RESERVED_FUNCTION_NAMES.contains(&name) {         name.to_string()
+    //     } else {
+    //         self.rename(name)
+    //     };
+    //     self.fun_scopes.insert(name.to_string(), new_name.clone());
+    //     new_name
+    // }
 
-    /// Looks up the unique name associated with a function in the global scope
-    /// # Arguments
-    /// * 'name' - The original identifier to look up.
-    /// # Returns
-    /// The currently active unique name for that identifier, or None if not
-    /// defined.
-    pub fn lookup_fun_opt(&self, name: &str) -> Option<String> {
-        self.fun_scopes.get(name).cloned()
-    }
+    // /// Looks up the unique name associated with a function in the global scope
+    // /// # Arguments
+    // /// * 'name' - The original identifier to look up.
+    // /// # Returns
+    // /// The currently active unique name for that identifier, or None if not
+    // /// defined.
+    // pub fn lookup_fun_opt(&self, name: &str) -> Option<String> {
+    //     self.fun_scopes.get(name).cloned()
+    // }
 }
 
 /// Offers the uniquify pass publicly via Program::uniquify
-impl Program {
+impl ProgramModule {
     /// Produces a version of the program where all variable and function names
     /// are unique.
     /// # Returns
@@ -140,17 +138,21 @@ impl Program {
 
         // First, bind all function names
         // Helps with recursive / mutually recursive functions
-        for f in &self.0 {
-            u.bind_fun(&f.name);
-        }
+        // for f in &self.functions {
+        //     u.bind_fun(&f.name);
+        // }
 
         // Then, enter those functions and uniquify them
         let mut functions = Vec::new();
-        for f in &self.0 {
+        for f in &self.functions {
             functions.push(uniquify_function(f, &mut u)?);
         }
 
-        let ast = Program(functions);
+        let ast = ProgramModule {
+            functions,
+            module_name: self.module_name.clone(),
+        };
+
         // propagate uniqueness errors from the reserved checks
         assert_unique(&ast)?;
         Ok(ast)
@@ -179,18 +181,18 @@ fn uniquify_function(f: &Function, u: &mut Context) -> Result<Function, Uniquify
 
     u.exit_scope();
 
-    let name = match u.lookup_fun_opt(&f.name) {
-        Some(n) => n,
-        None => {
-            return Err(UniquifyError::UndefinedFunction {
-                name: f.name.clone(),
-                at: f.range,
-            });
-        }
-    };
+    // let name = match u.lookup_fun_opt(&f.name) {
+    //     Some(n) => n,
+    //     None => {
+    //         return Err(UniquifyError::UndefinedFunction {
+    //             name: f.name.clone(),
+    //             at: f.range,
+    //         });
+    //     }
+    // };
 
     Ok(Function {
-        name,
+        name: f.name.clone(),
         range: f.range,
         parameters,
         ret_type: f.ret_type,
@@ -229,19 +231,19 @@ fn uniquify_expr(e: &Expr, u: &mut Context) -> Result<Expr, UniquifyError> {
         },
 
         Expression::Call { fn_name, args } => {
-            let mapped = match u.lookup_fun_opt(fn_name) {
-                Some(n) => n,
-                None => {
-                    return Err(UniquifyError::UndefinedFunction {
-                        name: fn_name.clone(),
-                        at: e.range,
-                    });
-                }
-            };
+            // let mapped = match u.lookup_fun_opt(fn_name) {
+            //     Some(n) => n,
+            //     None => {
+            //         return Err(UniquifyError::UndefinedFunction {
+            //             name: fn_name.clone(),
+            //             at: e.range,
+            //         });
+            //     }
+            // };
             let args_res: Result<Vec<Expr>, UniquifyError> =
                 args.iter().map(|a| uniquify_expr(a, u)).collect();
             Expression::Call {
-                fn_name: mapped,
+                fn_name: fn_name.clone(),
                 args: args_res?,
             }
         }

@@ -1,4 +1,4 @@
-use sand::ir_types::hhir::Program;
+use sand::ir_types::hhir::ProgramModule;
 
 mod common;
 
@@ -9,7 +9,7 @@ fn uniquify_consistent() -> anyhow::Result<()> {
     for example in examples {
         let code = common::open_example_from_file(example);
 
-        let program = Program::parse(&code)?;
+        let program = ProgramModule::parse(&code)?;
 
         let result_a = program.interpret()?;
 

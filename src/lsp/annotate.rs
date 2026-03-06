@@ -7,7 +7,7 @@ use tower_lsp::lsp_types::Range;
 use crate::ProgramAnnotations;
 use crate::analyse;
 use crate::analysis::interactions::has_other_side_effects;
-use crate::ir_types::hhir::Program;
+use crate::ir_types::hhir::ProgramModule;
 use crate::lsp::util::lsp_range_from_pest;
 
 /// if an expression without side effects appears multiple times in the code,
@@ -30,7 +30,7 @@ use crate::lsp::util::lsp_range_from_pest;
 /// ```
 /// in this example, both instances of `x ^ x` should be highlighted,
 /// indicating a reused value
-pub fn annotate_reused_expressions(text: &str, ast: &Program) -> Vec<Diagnostic> {
+pub fn annotate_reused_expressions(text: &str, ast: &ProgramModule) -> Vec<Diagnostic> {
     let annotations: ProgramAnnotations = match analyse(ast) {
         Ok(a) => a,
         Err(e) => {

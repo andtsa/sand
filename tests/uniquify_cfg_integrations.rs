@@ -6,7 +6,7 @@ use petgraph::graph::NodeIndex;
 use petgraph::visit::EdgeRef;
 use sand::AnnotatedExpression;
 use sand::analysis::cfg::construct_cfg;
-use sand::ir_types::hhir::Program;
+use sand::ir_types::hhir::ProgramModule;
 use sand::passes::uniquify::reserved::SeenMap;
 use sand::passes::uniquify::reserved::UniquifyError;
 use sand::passes::uniquify::reserved::assert_unique;
@@ -59,7 +59,7 @@ fn simple() {
     }
     "#;
 
-    let program = Program::parse(src).unwrap();
+    let program = ProgramModule::parse(src).unwrap();
     let uniquified = program.uniquify().unwrap();
     assert!(assert_unique(&uniquified).is_ok());
 
@@ -86,7 +86,7 @@ fn if_statement() {
     }
     "#;
 
-    let program = Program::parse(src).unwrap();
+    let program = ProgramModule::parse(src).unwrap();
     let uniquified = program.uniquify().unwrap();
     assert!(assert_unique(&uniquified).is_ok());
 
@@ -113,7 +113,7 @@ fn while_loop() {
     }
     "#;
 
-    let program = Program::parse(src).unwrap();
+    let program = ProgramModule::parse(src).unwrap();
     let uniquified = program.uniquify().unwrap();
     assert!(assert_unique(&uniquified).is_ok());
 
@@ -141,7 +141,7 @@ fn functions() {
     }
     "#;
 
-    let program = Program::parse(src).unwrap();
+    let program = ProgramModule::parse(src).unwrap();
     let uniquified = program.uniquify().unwrap();
     assert!(assert_unique(&uniquified).is_ok());
 
@@ -184,7 +184,7 @@ fn complex() {
     }
     "#;
 
-    let program = Program::parse(src).unwrap();
+    let program = ProgramModule::parse(src).unwrap();
     let uniquified = program.uniquify().unwrap();
     assert!(assert_unique(&uniquified).is_ok());
 
@@ -211,7 +211,7 @@ fn blocks() {
     }
     "#;
 
-    let program = Program::parse(src).unwrap();
+    let program = ProgramModule::parse(src).unwrap();
     let uniquified = program.uniquify().unwrap();
     assert!(assert_unique(&uniquified).is_ok());
 

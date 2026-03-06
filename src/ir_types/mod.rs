@@ -4,4 +4,5 @@
 
 pub mod hhir;
 // pub mod qhir;
+pub mod ssa;
 pub mod typed_hir;

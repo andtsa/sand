@@ -5,13 +5,13 @@ mod common;
 use std::hint::black_box;
 
 use common::open_example_from_file;
-use sand::ir_types::hhir::Program;
+use sand::ir_types::hhir::ProgramModule;
 use sand::ir_types::typed_hir::TypedProgram;
 
 fn test_layers(file: &str) {
     let code = open_example_from_file(file);
 
-    let p = Program::parse(&code).unwrap();
+    let p = ProgramModule::parse(&code).unwrap();
     let u = p.uniquify().unwrap();
 
     let t = TypedProgram::from_ast_program(&u).unwrap();

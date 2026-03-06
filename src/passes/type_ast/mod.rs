@@ -6,7 +6,6 @@
 
 mod check_intrinsic;
 mod errors;
-mod ssa;
 mod type_check;
 mod var_types;
 
@@ -26,11 +25,11 @@ use crate::passes::type_ast::var_types::VarMap;
 use crate::passes::uniquify::reserved::assert_unique;
 
 impl typed_hir::TypedProgram {
-    pub fn from_ast_program(ast: &hhir::Program) -> Result<Self, AstTypeError> {
+    pub fn from_ast_program(ast: &hhir::ProgramModule) -> Result<Self, AstTypeError> {
         assert_unique(ast).map_err(AstTypeError::UniquifyError)?;
 
         let avail_fns = ast
-            .0
+            .functions
             .iter()
             .map(|f| {
                 (
@@ -42,7 +41,7 @@ impl typed_hir::TypedProgram {
 
         let mut avail_vars = Map::new(); // variables are only available within function bodies, so we can start with an empty map here and fill it in as we go through the functions
         let fn_list = ast
-            .0
+            .functions
             .iter()
             .map(|f| annotate_function(f, &avail_fns, &mut avail_vars))
             .collect::<Result<Vec<(FnName, TypedFunction)>, _>>()?;

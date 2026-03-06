@@ -3,7 +3,7 @@ use std::fs;
 use petgraph::dot::Config;
 use petgraph::dot::Dot;
 use sand::analysis::cfg;
-use sand::ir_types::hhir::Program;
+use sand::ir_types::hhir::ProgramModule;
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -13,7 +13,7 @@ fn main() -> anyhow::Result<()> {
     }
 
     let src = fs::read_to_string(&args[1])?;
-    let ast = Program::parse(&src)?;
+    let ast = ProgramModule::parse(&src)?;
     let cfg = cfg::construct_cfg(&ast)?;
 
     let dot = format!(

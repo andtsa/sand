@@ -2,7 +2,7 @@
 #![allow(dead_code)]
 
 use sand::ir_types::hhir::Expression;
-use sand::ir_types::hhir::Program;
+use sand::ir_types::hhir::ProgramModule;
 
 pub fn open_example_from_file(name: &str) -> String {
     let path = format!("examples/{}.sand", name);
@@ -10,7 +10,7 @@ pub fn open_example_from_file(name: &str) -> String {
 }
 
 pub fn interpret_example(name: &str) -> anyhow::Result<Expression> {
-    let program = Program::parse(&open_example_from_file(name))?;
+    let program = ProgramModule::parse(&open_example_from_file(name))?;
     let result = program.interpret()?;
     Ok(result)
 }

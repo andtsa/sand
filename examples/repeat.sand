@@ -5,10 +5,10 @@ def main(): Unit := {
     5 + 9; 
     5 + 9;
     1 + f(1, 5 + 9);
-    f(5) + 9 ;
+    f(5, 9) + 8;
 
 
-    f(1, f(5) + 9);
+    f(f(5, 9) + 9);
     let n: Unit = 4;
     n = f(n);
     n = f(n);
@@ -16,6 +16,7 @@ def main(): Unit := {
     5 + 9
 }
 
-def f(x: Int): Int := {
-    f(x) + f(x)
+def f(x: Int, y: Int): Int := {
+    if x > y then 2 else
+    f(x - y, y - x) + f(y - x, x - y)
 }

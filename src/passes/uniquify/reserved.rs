@@ -4,12 +4,10 @@ use std::collections::BTreeMap;
 
 use crate::ir_types::hhir::Expr;
 use crate::ir_types::hhir::Expression;
-use crate::ir_types::hhir::Program;
+use crate::ir_types::hhir::ProgramModule;
 use crate::ir_types::hhir::Statement;
+use crate::lang::intrinsics::fn_name_allowed;
 use crate::lang::structure::Range;
-
-pub const RESERVED_FUNCTION_NAMES: [&str; 6] =
-    ["print", "println", "printf", "scanf", "read", "readline"];
 
 pub type SeenMap = BTreeMap<String, Range>;
 
@@ -96,13 +94,13 @@ impl std::error::Error for UniquifyError {}
 ///
 /// # Returns
 /// 'Ok(())' if all names are unique; otherwise, 'Err' with a `UniquifyError`
-pub fn assert_unique(prog: &Program) -> Result<(), UniquifyError> {
+pub fn assert_unique(prog: &ProgramModule) -> Result<(), UniquifyError> {
     // Map function name -> (start,end) of first occurrence
     let mut seen_funs: SeenMap = BTreeMap::new();
 
-    for func in &prog.0 {
+    for func in &prog.functions {
         // if function uses an internal reserved name -> illegal
-        if RESERVED_FUNCTION_NAMES.contains(&func.name.as_str()) {
+        if !fn_name_allowed(&func.name) {
             return Err(UniquifyError::IllegalFunctionName {
                 name: func.name.clone(),
                 at: func.range,
@@ -150,6 +148,7 @@ pub fn assert_unique(prog: &Program) -> Result<(), UniquifyError> {
 /// 'Ok(())' if all names are unique, otherwise `UniquifyError`.
 pub fn check_expr(expr: &Expr, seen: &mut SeenMap) -> Result<(), UniquifyError> {
     match &expr.expr {
+        Expression::Int(_) | Expression::Bool(_) | Expression::Unit | Expression::Var(_) => {}
         Expression::If { cond, t, f } => {
             check_expr(cond, seen)?;
             check_expr(t, seen)?;
@@ -188,7 +187,6 @@ pub fn check_expr(expr: &Expr, seen: &mut SeenMap) -> Result<(), UniquifyError> 
                 check_expr(e, &mut block_seen)?;
             }
         }
-        _ => {}
     }
     Ok(())
 }

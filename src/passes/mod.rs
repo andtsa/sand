@@ -2,5 +2,6 @@
 
 pub mod build_ast;
 pub mod parse;
+pub mod ssa;
 pub mod type_ast;
 pub mod uniquify;

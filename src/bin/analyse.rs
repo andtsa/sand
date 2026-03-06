@@ -10,7 +10,7 @@ use std::collections::HashSet;
 use sand::TupleSpan;
 use sand::analysis::interactions::has_other_side_effects;
 use sand::ir_types::hhir::Expr;
-use sand::ir_types::hhir::Program;
+use sand::ir_types::hhir::ProgramModule;
 use sand::lang::structure::Range;
 
 fn main() -> anyhow::Result<()> {
@@ -24,7 +24,7 @@ fn main() -> anyhow::Result<()> {
     let program_src = std::fs::read_to_string(input_file)
         .map_err(|e| anyhow::anyhow!("failed to read input file {}: {}", input_file, e))?;
 
-    let ast = Program::parse(&program_src)?.uniquify()?;
+    let ast = ProgramModule::parse(&program_src)?.uniquify()?;
     let annotations = sand::analyse(&ast)?;
 
     println!(

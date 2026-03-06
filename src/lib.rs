@@ -10,7 +10,7 @@ use petgraph::graph::NodeIndex;
 use crate::analysis::cfg;
 use crate::analysis::interactions::find_interactions;
 use crate::ir_types::hhir::Expr;
-use crate::ir_types::hhir::Program;
+use crate::ir_types::hhir::ProgramModule;
 use crate::lang::structure::Range;
 
 pub mod analysis;
@@ -55,7 +55,7 @@ impl Hash for AnnotatedExpression {
 }
 
 #[allow(unused)]
-pub fn analyse(ast: &Program) -> anyhow::Result<ProgramAnnotations> {
+pub fn analyse(ast: &ProgramModule) -> anyhow::Result<ProgramAnnotations> {
     // create the "control flow graph" - the order in which expressions are
     // evaluated. for example:
     // ```
@@ -88,7 +88,7 @@ pub fn analyse(ast: &Program) -> anyhow::Result<ProgramAnnotations> {
     Ok(annotations)
 }
 
-pub fn visualise_cfg(program: &Program) -> anyhow::Result<String> {
+pub fn visualise_cfg(program: &ProgramModule) -> anyhow::Result<String> {
     // construct the CFG
     let cfg = cfg::construct_cfg(program)?;
 

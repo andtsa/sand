@@ -8,6 +8,8 @@ use tower_lsp::LanguageServer;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 
+use crate::lang::structure::ModuleRef;
+
 pub mod annotate;
 pub mod ast;
 pub mod backend;
@@ -48,22 +50,24 @@ impl LanguageServer for Backend {
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let uri = params.text_document.uri;
         let text = params.text_document.text;
+        let mod_name = ModuleRef::from(uri.clone());
 
         self.documents
             .write()
             .await
             .insert(uri.clone(), text.clone());
-        self.check_document(uri, text).await;
+        self.check_document(uri, text, mod_name).await;
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
         let uri = params.text_document.uri;
         let text = params.content_changes[0].text.clone();
+        let mod_name = ModuleRef::from(uri.clone());
 
         self.documents
             .write()
             .await
             .insert(uri.clone(), text.clone());
-        self.check_document(uri, text).await;
+        self.check_document(uri, text, mod_name).await;
     }
 }

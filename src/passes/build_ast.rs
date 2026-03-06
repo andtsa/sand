@@ -7,12 +7,14 @@ use pest::iterators::Pair;
 use thiserror::Error;
 
 use crate::ir_types::hhir::*;
+use crate::lang::intrinsics;
 use crate::lang::ops::*;
+use crate::lang::structure::Map;
+use crate::lang::structure::ModuleRef;
 use crate::lang::structure::Range;
 use crate::lang::types::*;
 use crate::passes::parse::LangParser;
 use crate::passes::parse::Rule;
-use crate::passes::uniquify::reserved::RESERVED_FUNCTION_NAMES;
 
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Error)]
@@ -63,8 +65,8 @@ impl<T> AstExt<T> for Option<T> {
     }
 }
 
-impl Program {
-    pub fn parse(src: &str) -> Result<Self, AstError> {
+impl ProgramModule {
+    pub fn parse_module(src: &str, mod_ref: ModuleRef) -> Result<Vec<Self>, AstError> {
         let mut pairs = LangParser::parse(Rule::program, src)?;
 
         let program_pair = match pairs.next() {
@@ -77,18 +79,66 @@ impl Program {
             }
         };
 
-        build_program(program_pair, src)
+        let map = build_program(program_pair, src, mod_ref)?;
+        Ok(map
+            .into_iter()
+            .map(|(module_name, functions)| ProgramModule {
+                functions,
+                module_name,
+            })
+            .collect::<Vec<_>>())
+    }
+
+    pub fn parse(src: &str) -> Result<Self, AstError> {
+        let modules = Self::parse_module(src, ModuleRef::main())?;
+        if modules.len() == 1 {
+            Ok(modules.into_iter().next().unwrap())
+        } else {
+            Err(AstError::UnexpectedRule {
+                expected: "exactly one module",
+                got: Rule::program,
+                range: Range::new(1, 1, 1, 1),
+            })
+        }
     }
 }
 
 // ============== top level ==============
 
-pub fn build_program(pair: Pair<Rule>, src: &str) -> Result<Program, AstError> {
+pub fn build_program(
+    pair: Pair<Rule>,
+    src: &str,
+    default_module: ModuleRef,
+) -> Result<Map<ModuleRef, Vec<Function>>, AstError> {
     assert_eq!(pair.as_rule(), Rule::program);
 
+    let mut mods = Map::new();
     let mut funcs = Vec::new();
+    let mut current_module = default_module;
     for child in pair.into_inner() {
         match child.as_rule() {
+            Rule::module => {
+                // parse module name
+                let child_span = child.as_span();
+                let modname_pair = child
+                    .into_inner()
+                    .next()
+                    .missing("module name", Range::from(child_span))?;
+                let mod_span = modname_pair.as_span();
+                if modname_pair.as_rule() != Rule::identifier {
+                    return Err(AstError::UnexpectedRule {
+                        expected: "identifier",
+                        got: modname_pair.as_rule(),
+                        range: Range::from(&modname_pair),
+                    });
+                }
+                // if we have an existing module, save it before starting the new one
+                if !funcs.is_empty() {
+                    mods.insert(current_module.clone(), funcs);
+                    funcs = Vec::new();
+                }
+                current_module = ModuleRef::from(mod_span);
+            }
             Rule::function => {
                 funcs.push(build_function(child, src)?);
             }
@@ -99,7 +149,7 @@ pub fn build_program(pair: Pair<Rule>, src: &str) -> Result<Program, AstError> {
                 let range = Range::from(child);
                 eprintln!("parse error: unexpected top-level rule at {range} - got {other:?}");
                 return Err(AstError::UnexpectedRule {
-                    expected: "function",
+                    expected: "function or module declaration",
                     got: other,
                     range,
                 });
@@ -107,7 +157,11 @@ pub fn build_program(pair: Pair<Rule>, src: &str) -> Result<Program, AstError> {
         }
     }
 
-    Ok(Program(funcs))
+    if !funcs.is_empty() {
+        mods.insert(current_module, funcs);
+    }
+
+    Ok(mods)
 }
 
 fn build_function(pair: Pair<Rule>, src: &str) -> Result<Function, AstError> {
@@ -136,7 +190,7 @@ fn build_function(pair: Pair<Rule>, src: &str) -> Result<Function, AstError> {
     let name = name_pair.as_str().to_string();
 
     // make sure we aren't redefining internal functions
-    if RESERVED_FUNCTION_NAMES.contains(&name.as_str()) {
+    if !intrinsics::fn_name_allowed(&name) {
         return Err(AstError::InvalidName {
             got: name,
             range: name_range,

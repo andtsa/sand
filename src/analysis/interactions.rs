@@ -15,7 +15,7 @@ use crate::ProgramAnnotations;
 use crate::TupleSpan;
 use crate::ir_types::hhir::Expr;
 use crate::ir_types::hhir::Expression;
-use crate::passes::uniquify::reserved::RESERVED_FUNCTION_NAMES;
+use crate::lang::intrinsics::RESERVED_FUNCTION_NAMES;
 
 pub fn find_interactions(
     cfg: Graph<AnnotatedExpression, (), Directed>,

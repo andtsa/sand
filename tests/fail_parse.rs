@@ -1,7 +1,7 @@
-use sand::ir_types::hhir::Program;
+use sand::ir_types::hhir::ProgramModule;
 
 #[test]
 fn gibberish() {
     let program = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    assert!(Program::parse(program).is_err());
+    assert!(ProgramModule::parse(program).is_err());
 }
