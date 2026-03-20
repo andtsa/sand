@@ -3,7 +3,9 @@ use std::fs;
 use petgraph::dot::Config;
 use petgraph::dot::Dot;
 use sand::analysis::cfg;
-use sand::ir_types::hhir::ProgramModule;
+use sand::compile_hir;
+use sand::compiler::context::CompileCtx;
+use sand::compiler::structure::Map;
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -13,8 +15,10 @@ fn main() -> anyhow::Result<()> {
     }
 
     let src = fs::read_to_string(&args[1])?;
-    let ast = ProgramModule::parse(&src)?;
-    let cfg = cfg::construct_cfg(&ast)?;
+    let mut ctx = CompileCtx::initial();
+    let fr = ctx.register_dummy_file();
+    let ast = compile_hir(Map::from([(fr, src.as_str())]), &mut ctx)?;
+    let cfg = cfg::construct_cfg(&ctx, &ast);
 
     let dot = format!(
         "{:?}",

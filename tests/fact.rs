@@ -1,7 +1,7 @@
 //! tests for examples in examples/
 
 mod common;
-use sand::ir_types::hhir::Expression;
+use sand::ir_types::typed_hir::Expression;
 
 #[test]
 fn fact() -> anyhow::Result<()> {

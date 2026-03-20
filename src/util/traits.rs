@@ -1,6 +1,5 @@
 use std::fmt;
 
-use crate::AnnotatedExpression;
 use crate::ir_types::hhir::*;
 use crate::lang::ops::*;
 use crate::lang::types::*;
@@ -24,7 +23,7 @@ impl fmt::Display for Expression {
                 write!(f, "()")
             }
             Expression::Var(name) => {
-                write!(f, "{}", name)
+                write!(f, "{:?}", name)
             }
             Expression::BinOp { left, op, right } => {
                 write!(f, "({} {} {})", left.expr, op, right.expr)
@@ -47,7 +46,7 @@ impl fmt::Display for Expression {
                 write!(f, "(while {} do {})", cond.expr, body.expr)
             }
             Expression::Call { fn_name, args } => {
-                write!(f, "{}(", fn_name)?;
+                write!(f, "{:?}(", fn_name)?;
                 for (i, arg) in args.iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
@@ -74,10 +73,10 @@ impl fmt::Display for Statement {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Statement::Declaration { name, ty, val, .. } => {
-                write!(f, "let {}: {} = {}", name, ty, val.expr)
+                write!(f, "let {:?}: {} = {}", name, ty, val.expr)
             }
             Statement::Assignment { name, val, .. } => {
-                write!(f, "{} = {}", name, val.expr)
+                write!(f, "{:?} = {}", name, val.expr)
             }
             Statement::Expr(expr) => {
                 write!(f, "{}", expr.expr)
@@ -133,42 +132,5 @@ impl fmt::Display for Ty {
             Ty::Top => write!(f, "Top"),
             Ty::Bottom => write!(f, "Bottom"),
         }
-    }
-}
-
-impl fmt::Display for AnnotatedExpression {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.expr)?;
-
-        if !self.depends_on.is_empty() || !self.mutates.is_empty() {
-            write!(f, " [")?;
-
-            if !self.depends_on.is_empty() {
-                write!(
-                    f,
-                    "deps: {}",
-                    self.depends_on
-                        .iter()
-                        .cloned()
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )?;
-            }
-
-            if !self.mutates.is_empty() {
-                if !self.depends_on.is_empty() {
-                    write!(f, "; ")?;
-                }
-                write!(
-                    f,
-                    "muts: {}",
-                    self.mutates.iter().cloned().collect::<Vec<_>>().join(", ")
-                )?;
-            }
-
-            write!(f, "]")?;
-        }
-
-        Ok(())
     }
 }

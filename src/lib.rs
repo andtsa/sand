@@ -1,19 +1,19 @@
-//! analysis logic
+//! the sand compiler
+#![allow(clippy::result_large_err)]
 
-use std::collections::HashMap;
-use std::collections::HashSet;
-use std::hash::Hash;
-use std::hash::Hasher;
+use thiserror::Error;
 
-use petgraph::graph::NodeIndex;
-
-use crate::analysis::cfg;
-use crate::analysis::interactions::find_interactions;
-use crate::ir_types::hhir::Expr;
-use crate::ir_types::hhir::ProgramModule;
-use crate::lang::structure::Range;
+use crate::compiler::context::CompileCtx;
+use crate::compiler::structure::FileRef;
+use crate::compiler::structure::Map;
+use crate::compiler::structure::ModuleRef;
+use crate::ir_types::hhir;
+use crate::ir_types::qhir;
+use crate::ir_types::typed_hir;
+use crate::ir_types::typed_hir::TypedProgram;
 
 pub mod analysis;
+pub mod compiler;
 pub mod interpreter;
 pub mod ir_types;
 pub mod lang;
@@ -21,79 +21,70 @@ pub mod lsp;
 pub mod passes;
 pub mod util;
 
-pub type TupleSpan = Range;
-#[derive(Debug, Clone, Default)]
-pub struct ProgramAnnotations {
-    /// Map from each expression to all its occurrences in the source code
-    pub expr_occurrences: HashMap<Expr, HashSet<TupleSpan>>,
+pub use util::bugs::*;
 
-    /// Available-expressions set at each CFG node
-    pub available_at: HashMap<NodeIndex, HashSet<Expr>>,
+#[derive(Debug, Error)]
+#[error("compilation error: {source}")]
+pub struct SandError {
+    pub context: SandErrorContext,
+    pub source: SandErrorSource,
 }
 
-#[derive(Debug, Clone)]
-pub struct AnnotatedExpression {
-    pub expr: Expr,
-    /// which variables does this expression depend on
-    pub depends_on: HashSet<String>,
-    /// which variables does this expression mutate
-    pub mutates: HashSet<String>,
+#[derive(Debug, Default)]
+pub struct SandErrorContext {
+    pub module: Option<ModuleRef>,
+    pub file: Option<FileRef>,
 }
 
-impl PartialEq for AnnotatedExpression {
-    fn eq(&self, other: &Self) -> bool {
-        self.expr == other.expr
+#[derive(Debug, Error)]
+pub enum SandErrorSource {
+    #[error("parse error: {0}")]
+    AstParseError(#[from] passes::build_ast::AstError),
+
+    #[error("qualify error: {0}")]
+    QualifyError(#[from] passes::qualify::error::QualifyError),
+
+    #[error("type error: {0}")]
+    TypeError(#[from] passes::type_ast::AstTypeError),
+}
+
+pub fn compile_hir<'run, 'proj>(
+    code: Map<FileRef, &'_ str>,
+    ctx: &'run mut CompileCtx<'proj>,
+) -> Result<TypedProgram, SandError> {
+    let mut modules = Vec::new();
+    for (file, source) in code {
+        let err_ctx = SandErrorContext {
+            module: None,
+            file: Some(file),
+        };
+        modules.append(
+            &mut hhir::ProgramModule::parse_source_file(ctx, source, file)
+                .map_err(|e| err_ctx.wrap_err(e))?,
+        );
     }
+
+    let program = qhir::Program::combine(ctx, modules)
+        .map_err(|e| SandErrorContext::with_module(e.source_module().index).wrap_err(e))?;
+
+    let typed_program = typed_hir::TypedProgram::from_ast_program(ctx, program)
+        .map_err(|e| SandErrorContext::with_module(e.module).wrap_err(e.error))?;
+
+    Ok(typed_program)
 }
 
-impl Eq for AnnotatedExpression {}
-
-impl Hash for AnnotatedExpression {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.expr.hash(state);
+impl SandErrorContext {
+    pub fn with_module(module: ModuleRef) -> Self {
+        Self {
+            module: Some(module),
+            file: None,
+        }
     }
-}
 
-#[allow(unused)]
-pub fn analyse(ast: &ProgramModule) -> anyhow::Result<ProgramAnnotations> {
-    // create the "control flow graph" - the order in which expressions are
-    // evaluated. for example:
-    // ```
-    // let x = {
-    //   let y = 5;
-    //   y + 2
-    // };
-    // x * 3
-    // ```
-    // here the order of evaluation is
-    // // 1. `let y = 5;`
-    // // 2. `y + 2`
-    // // 3. `let x = { ... };`
-    // // 4. `x * 3`
-    //
-    // note that we need to traverse the AST recursively,
-    // meaning that in the AST `a + (b * c)` we need to consider all of
-    // `a`, `b`, `c`, `b * c`, and `a + (b * c)` as separate expressions.
-    //
-    // additionally, the control flow graph should branch for conditionals and
-    // loops, and indicate indirection for function calls.
-    let cfg = cfg::construct_cfg(ast)?;
-
-    // we iterate through the above graph,
-    // and for every expression we count how many times it appeared,
-    // keeping track of whether the variables it depends on are in the
-    // same state as the other instances of the expression.
-    let annotations: ProgramAnnotations = find_interactions(cfg)?;
-
-    Ok(annotations)
-}
-
-pub fn visualise_cfg(program: &ProgramModule) -> anyhow::Result<String> {
-    // construct the CFG
-    let cfg = cfg::construct_cfg(program)?;
-
-    // convert to dot format
-    let dot = petgraph::dot::Dot::new(&cfg);
-
-    Ok(format!("{dot:?}"))
+    pub fn wrap_err<E: Into<SandErrorSource>>(self, err: E) -> SandError {
+        SandError {
+            context: self,
+            source: err.into(),
+        }
+    }
 }

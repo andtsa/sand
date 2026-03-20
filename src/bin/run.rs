@@ -1,5 +1,9 @@
 //! run a program
 
+use sand::compile_hir;
+use sand::compiler::context::CompileCtx;
+use sand::compiler::structure::Map;
+
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.len() != 2 {
@@ -11,11 +15,11 @@ fn main() -> anyhow::Result<()> {
     let program_src = std::fs::read_to_string(input_file)
         .map_err(|e| anyhow::anyhow!("failed to read input file {}: {}", input_file, e))?;
 
-    let program = sand::ir_types::hhir::ProgramModule::parse(&program_src)?;
+    let mut ctx = CompileCtx::initial();
+    let fr = ctx.register_dummy_file();
+    let ast = compile_hir(Map::from([(fr, program_src.as_str())]), &mut ctx)?;
 
-    let output = program.interpret()?;
-
-    println!("{output:?}");
+    println!("{:?}", ast.interpret(&ctx));
 
     Ok(())
 }

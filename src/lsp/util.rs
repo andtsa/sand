@@ -3,8 +3,8 @@
 use pest::error::LineColLocation;
 use tower_lsp::lsp_types::*;
 
-use crate::lang::structure::Pos;
-use crate::lang::structure::Range as LangRange;
+use crate::compiler::structure::Pos;
+use crate::compiler::structure::Range as LangRange;
 use crate::passes::parse::Rule;
 
 pub(super) fn lsp_position_from_pest(text: &str, pos: Pos) -> Position {

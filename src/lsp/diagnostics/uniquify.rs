@@ -2,15 +2,19 @@
 
 use tower_lsp::lsp_types::*;
 
+use crate::compiler::context::CompileCtx;
+use crate::lsp::diagnostics::Diagnostics;
 use crate::lsp::util::lsp_range_from_pest;
-use crate::passes::uniquify::reserved::UniquifyError;
+use crate::passes::qualify::uniquify::error::UniquifyError;
 
 pub(super) fn uniquify_error_to_diagnostic(
-    uri: &Url,
+    _ctx: &CompileCtx,
+    uri: Url,
     text: &str,
     err: UniquifyError,
-) -> Vec<Diagnostic> {
+) -> Diagnostics {
     use UniquifyError::*;
+    let mut diagnostics = Diagnostics::default();
     match err {
         UnboundVariable { name, at } => {
             let range = lsp_range_from_pest(text, at);
@@ -24,14 +28,17 @@ pub(super) fn uniquify_error_to_diagnostic(
                 message: "no binding found for this variable".into(),
             };
 
-            vec![Diagnostic {
-                range,
-                severity: Some(DiagnosticSeverity::ERROR),
-                source: Some("sand".into()),
-                message,
-                related_information: Some(vec![related]),
-                ..Default::default()
-            }]
+            diagnostics.add_one(
+                uri,
+                Diagnostic {
+                    range,
+                    severity: Some(DiagnosticSeverity::ERROR),
+                    source: Some("sand".into()),
+                    message,
+                    related_information: Some(vec![related]),
+                    ..Default::default()
+                },
+            );
         }
 
         UndefinedFunction { name, at } => {
@@ -46,14 +53,17 @@ pub(super) fn uniquify_error_to_diagnostic(
                 message: "no function with this name was found".into(),
             };
 
-            vec![Diagnostic {
-                range,
-                severity: Some(DiagnosticSeverity::ERROR),
-                source: Some("sand".into()),
-                message,
-                related_information: Some(vec![related]),
-                ..Default::default()
-            }]
+            diagnostics.add_one(
+                uri,
+                Diagnostic {
+                    range,
+                    severity: Some(DiagnosticSeverity::ERROR),
+                    source: Some("sand".into()),
+                    message,
+                    related_information: Some(vec![related]),
+                    ..Default::default()
+                },
+            );
         }
 
         DuplicateFunction {
@@ -74,14 +84,17 @@ pub(super) fn uniquify_error_to_diagnostic(
                 message: "first declaration is here".into(),
             };
 
-            vec![Diagnostic {
-                range: second_range,
-                severity: Some(DiagnosticSeverity::ERROR),
-                source: Some("sand".into()),
-                message,
-                related_information: Some(vec![related]),
-                ..Default::default()
-            }]
+            diagnostics.add_one(
+                uri,
+                Diagnostic {
+                    range: second_range,
+                    severity: Some(DiagnosticSeverity::ERROR),
+                    source: Some("sand".into()),
+                    message,
+                    related_information: Some(vec![related]),
+                    ..Default::default()
+                },
+            );
         }
 
         IllegalFunctionName { name, at } => {
@@ -96,14 +109,17 @@ pub(super) fn uniquify_error_to_diagnostic(
                 message: "function name is reserved".into(),
             };
 
-            vec![Diagnostic {
-                range,
-                severity: Some(DiagnosticSeverity::ERROR),
-                source: Some("sand".into()),
-                message,
-                related_information: Some(vec![related]),
-                ..Default::default()
-            }]
+            diagnostics.add_one(
+                uri,
+                Diagnostic {
+                    range,
+                    severity: Some(DiagnosticSeverity::ERROR),
+                    source: Some("sand".into()),
+                    message,
+                    related_information: Some(vec![related]),
+                    ..Default::default()
+                },
+            );
         }
 
         DuplicateParameterName {
@@ -124,14 +140,17 @@ pub(super) fn uniquify_error_to_diagnostic(
                 message: "first parameter with this name is here".into(),
             };
 
-            vec![Diagnostic {
-                range: second_range,
-                severity: Some(DiagnosticSeverity::ERROR),
-                source: Some("sand".into()),
-                message,
-                related_information: Some(vec![related]),
-                ..Default::default()
-            }]
+            diagnostics.add_one(
+                uri,
+                Diagnostic {
+                    range: second_range,
+                    severity: Some(DiagnosticSeverity::ERROR),
+                    source: Some("sand".into()),
+                    message,
+                    related_information: Some(vec![related]),
+                    ..Default::default()
+                },
+            );
         }
 
         DuplicateVariableName {
@@ -152,14 +171,19 @@ pub(super) fn uniquify_error_to_diagnostic(
                 message: "first declaration is here".into(),
             };
 
-            vec![Diagnostic {
-                range: second_range,
-                severity: Some(DiagnosticSeverity::ERROR),
-                source: Some("sand".into()),
-                message,
-                related_information: Some(vec![related]),
-                ..Default::default()
-            }]
+            diagnostics.add_one(
+                uri,
+                Diagnostic {
+                    range: second_range,
+                    severity: Some(DiagnosticSeverity::ERROR),
+                    source: Some("sand".into()),
+                    message,
+                    related_information: Some(vec![related]),
+                    ..Default::default()
+                },
+            );
         }
     }
+
+    diagnostics
 }

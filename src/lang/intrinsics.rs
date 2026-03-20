@@ -4,13 +4,11 @@
 use std::fmt::Display;
 use std::sync::LazyLock;
 
-use crate::ir_types::hhir::Parameter;
-use crate::lang::structure::FnName;
-use crate::lang::structure::FnSig;
-use crate::lang::structure::Map;
+use crate::compiler::structure::FnName;
+use crate::compiler::structure::Map;
 use crate::lang::types::Ty;
 
-pub static INTRINSICS: LazyLock<Map<Intrinsic, (FnName, FnSig)>> = LazyLock::new(intrinsics);
+pub static INTRINSICS: LazyLock<Map<Intrinsic, (FnName, IntrinsicSig)>> = LazyLock::new(intrinsics);
 
 pub const RESERVED_FUNCTION_NAMES: [&str; 6] =
     ["print", "println", "printf", "scanf", "read", "readline"];
@@ -21,29 +19,27 @@ pub enum Intrinsic {
     Println,
 }
 
-fn intrinsics() -> Map<Intrinsic, (FnName, FnSig)> {
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct IntrinsicSig {
+    pub args: Vec<Ty>,
+    pub ret_ty: Ty,
+}
+
+fn intrinsics() -> Map<Intrinsic, (FnName, IntrinsicSig)> {
     [
         (
             Intrinsic::Print,
-            FnSig::with(
-                &[Parameter {
-                    name: "something".to_string(),
-                    ty: Ty::Top,
-                    range: Default::default(),
-                }],
-                Ty::Unit,
-            ),
+            IntrinsicSig {
+                args: vec![Ty::Top],
+                ret_ty: Ty::Unit,
+            },
         ),
         (
             Intrinsic::Println,
-            FnSig::with(
-                &[Parameter {
-                    name: "something".to_string(),
-                    ty: Ty::Top,
-                    range: Default::default(),
-                }],
-                Ty::Unit,
-            ),
+            IntrinsicSig {
+                args: vec![Ty::Top],
+                ret_ty: Ty::Unit,
+            },
         ),
     ]
     .into_iter()

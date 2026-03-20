@@ -48,6 +48,7 @@ whileloop = {
 }
 
 function_call = { identifier ~ "(" ~ (expression ~ ("," ~ expression)*)? ~ ")" }
+external_function_call = { identifier ~ "::" ~ identifier ~ "(" ~ (expression ~ ("," ~ expression)*)? ~ ")" }
 
 // precedence chaining
 primary = {
@@ -55,6 +56,7 @@ primary = {
   | ifstatement
   | whileloop
   | function_call
+  | external_function_call
   | number
   | boolean
   | identifier

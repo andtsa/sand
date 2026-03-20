@@ -7,47 +7,42 @@
 use std::hash::Hash;
 use std::hash::Hasher;
 
+use crate::compiler::structure::FunRef;
+use crate::compiler::structure::Map;
+use crate::compiler::structure::ModuleRef;
+use crate::compiler::structure::Range;
+use crate::compiler::structure::UniqVar;
+use crate::ir_types::qhir::Parameter;
 use crate::lang::intrinsics::Intrinsic;
 use crate::lang::ops::*;
-use crate::lang::structure::FnName;
-use crate::lang::structure::Map;
-use crate::lang::structure::Range;
-use crate::lang::structure::VarName;
 use crate::lang::types::*;
 
 #[derive(Debug, Clone)]
 pub struct TypedProgram {
-    pub avail_vars: Map<VarName, Ty>,
-    pub functions: Map<FnName, TypedFunction>,
-}
-
-#[derive(Debug, Clone)]
-pub struct Parameter {
-    pub name: VarName,
-    pub ty: Ty,
-    pub range: Range,
+    pub functions: Map<FunRef, TypedFunction>,
 }
 
 #[derive(Debug, Clone)]
 pub struct TypedFunction {
-    pub name: FnName,
+    pub name: FunRef,
     pub range: Range,
     pub parameters: Vec<Parameter>,
     pub ret_type: Ty,
     pub body: Expr,
+    pub src_module: ModuleRef,
 }
 
 #[derive(Debug, Clone)]
 pub enum Statement {
     Declaration {
-        name: VarName,
+        name: UniqVar,
         range: Range,
         ty: Ty,
         val: Expr,
     },
 
     Assignment {
-        name: VarName,
+        name: UniqVar,
         range: Range,
         val: Expr,
     },
@@ -84,15 +79,14 @@ pub enum Expression {
         right: Box<Expr>,
     },
     Call {
-        fn_name: FnName,
+        fn_name: FunRef,
         args: Vec<Expr>,
     },
     IntrinsicCall {
         fn_name: Intrinsic,
         args: Vec<Expr>,
     },
-    /// resolved variable reference
-    RVar(VarName),
+    Var(UniqVar),
     Int(i64),
     Bool(bool),
     Unit,

@@ -6,18 +6,21 @@ use std::rc::Rc;
 
 use anyhow::anyhow;
 
-use crate::ir_types::hhir::*;
+use crate::compiler::context::CompileCtx;
+use crate::compiler::structure::UniqVar;
+use crate::ir_types::typed_hir::*;
+use crate::lang::intrinsics::Intrinsic;
 use crate::lang::ops::*;
 
-impl ProgramModule {
+impl TypedProgram {
     /// run the main function of the program and return an expression
     /// that's either Int, Bool, or Unit
-    pub fn interpret(&self) -> anyhow::Result<Expression> {
+    pub fn interpret(&self, ctx: &CompileCtx) -> anyhow::Result<Expression> {
         // find the main function
-        let main_fn = self
+        let (_, main_fn) = self
             .functions
             .iter()
-            .find(|f| f.name == "main")
+            .find(|(f, _)| ctx.is_main(**f))
             .ok_or_else(|| anyhow!("no main function found"))?;
 
         // empty environment
@@ -32,7 +35,7 @@ pub type EnvRef = Rc<RefCell<Env>>;
 
 #[derive(Debug)]
 pub struct Env {
-    data: BTreeMap<String, Expression>,
+    data: BTreeMap<UniqVar, Expression>,
     /// pointer to the outer environment
     outer: Option<EnvRef>,
 }
@@ -52,7 +55,7 @@ impl Env {
         }))
     }
 
-    fn assign(&mut self, name: String, val: Expression) -> anyhow::Result<()> {
+    fn assign(&mut self, name: UniqVar, val: Expression) -> anyhow::Result<()> {
         #[allow(clippy::map_entry)]
         if self.data.contains_key(&name) {
             self.data.insert(name, val);
@@ -60,11 +63,11 @@ impl Env {
         } else if let Some(ref outer) = self.outer {
             outer.borrow_mut().assign(name, val)
         } else {
-            Err(anyhow::anyhow!("variable not found: {}", name))
+            Err(anyhow::anyhow!("variable not found: {:?}", name))
         }
     }
 
-    fn get(&self, name: &str) -> Option<Expression> {
+    fn get(&self, name: &UniqVar) -> Option<Expression> {
         if let Some(v) = self.data.get(name) {
             Some(v.clone())
         } else if let Some(ref outer) = self.outer {
@@ -74,18 +77,18 @@ impl Env {
         }
     }
 
-    fn add_variable(&mut self, name: String, val: Expression) {
+    fn add_variable(&mut self, name: UniqVar, val: Expression) {
         self.data.insert(name, val);
     }
 }
 
 impl Expr {
-    pub fn evaluate(&self, prog: &ProgramModule, env: &EnvRef) -> anyhow::Result<Expression> {
+    pub fn evaluate(&self, prog: &TypedProgram, env: &EnvRef) -> anyhow::Result<Expression> {
         prog.evaluate(&self.expr, env)
     }
 }
 
-impl ProgramModule {
+impl TypedProgram {
     /// evaluate the expression and return the resulting expression
     pub fn evaluate(&self, expr: &Expression, env: &EnvRef) -> anyhow::Result<Expression> {
         match expr {
@@ -173,7 +176,7 @@ impl ProgramModule {
                 if let Some(val) = env.borrow().get(name) {
                     Ok(val)
                 } else {
-                    Err(anyhow!("undefined variable: {}", name))
+                    Err(anyhow!("undefined variable: {:?}", name))
                 }
             }
 
@@ -184,13 +187,11 @@ impl ProgramModule {
                     match stmt {
                         Statement::Declaration { name, val, .. } => {
                             let evaluated_val = val.evaluate(self, &local_env)?;
-                            local_env
-                                .borrow_mut()
-                                .add_variable(name.clone(), evaluated_val);
+                            local_env.borrow_mut().add_variable(*name, evaluated_val);
                         }
                         Statement::Assignment { name, val, .. } => {
                             let evaluated_val = val.evaluate(self, &local_env)?;
-                            local_env.borrow_mut().assign(name.clone(), evaluated_val)?;
+                            local_env.borrow_mut().assign(*name, evaluated_val)?;
                         }
                         Statement::Expr(e) => {
                             ret_expr = e.evaluate(self, &local_env)?;
@@ -204,55 +205,45 @@ impl ProgramModule {
                 }
             }
             Expression::Call { fn_name, args } => {
-                match fn_name.as_str() {
-                    "println" => {
-                        for arg in args {
-                            let val = arg.evaluate(self, env)?;
-                            print!("{:?} ", val);
-                        }
-                        println!();
-                        Ok(Expression::Unit)
-                    }
-                    "print" => {
-                        for arg in args {
-                            let val = arg.evaluate(self, env)?;
-                            print!("{:?} ", val);
-                        }
-                        Ok(Expression::Unit)
-                    }
-                    x if self.functions.iter().any(|f| f.name == x) => {
-                        // user-defined function call
-                        let function = self
-                            .functions
-                            .iter()
-                            .find(|f| f.name == x)
-                            .ok_or_else(|| anyhow!("function not found: {}", x))?;
+                let function = &self.functions[fn_name];
 
-                        if args.len() != function.parameters.len() {
-                            return Err(anyhow!(
-                                "function {} expects {} arguments, got {}",
-                                x,
-                                function.parameters.len(),
-                                args.len()
-                            ));
-                        }
-
-                        let local_env = Env::new();
-
-                        // evaluate arguments and bind to parameters
-                        for (param, arg) in function.parameters.iter().zip(args.iter()) {
-                            let arg_val = arg.evaluate(self, env)?;
-                            local_env
-                                .borrow_mut()
-                                .add_variable(param.name.clone(), arg_val);
-                        }
-
-                        // evaluate function body
-                        function.body.evaluate(self, &local_env)
-                    }
-                    _ => Err(anyhow!("undefined function: {}", fn_name)),
+                if args.len() != function.parameters.len() {
+                    return Err(anyhow!(
+                        "function {:?} expects {} arguments, got {}",
+                        function.name,
+                        function.parameters.len(),
+                        args.len()
+                    ));
                 }
+
+                let local_env = Env::new();
+
+                // evaluate arguments and bind to parameters
+                for (param, arg) in function.parameters.iter().zip(args.iter()) {
+                    let arg_val = arg.evaluate(self, env)?;
+                    local_env.borrow_mut().add_variable(param.name, arg_val);
+                }
+
+                // evaluate function body
+                function.body.evaluate(self, &local_env)
             }
+            Expression::IntrinsicCall { fn_name, args } => match fn_name {
+                Intrinsic::Println => {
+                    for arg in args {
+                        let val = arg.evaluate(self, env)?;
+                        print!("{:?} ", val);
+                    }
+                    println!();
+                    Ok(Expression::Unit)
+                }
+                Intrinsic::Print => {
+                    for arg in args {
+                        let val = arg.evaluate(self, env)?;
+                        print!("{:?} ", val);
+                    }
+                    Ok(Expression::Unit)
+                }
+            },
         }
     }
 }

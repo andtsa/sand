@@ -1,45 +1,56 @@
 //! qualified functions high intermediate representation:
 //!
-//! all function calls have been confirmed to be calling existing functions or
-//! intrinsics
+//! all modules are combined,
+//! all function calls have been confirmed
+//! to be calling existing functions or intrinsics,
+//! functions and variables all have unique identifiers
 
 use std::hash::Hash;
 use std::hash::Hasher;
 
-use crate::ir_types::hhir::Parameter;
+use crate::compiler::structure::FunRef;
+use crate::compiler::structure::Map;
+use crate::compiler::structure::ModuleRef;
+use crate::compiler::structure::Range;
+use crate::compiler::structure::UniqVar;
+use crate::lang::intrinsics::Intrinsic;
 use crate::lang::ops::*;
-use crate::lang::structure::FnName;
-use crate::lang::structure::Map;
-use crate::lang::structure::Pos;
 use crate::lang::types::*;
 
 #[derive(Debug, Clone)]
-pub struct Program(pub Map<FnName, QFunction>);
+pub struct Program {
+    pub functions: Map<FunRef, Function>,
+}
 
-#[derive(Debug, Clone)]
-pub struct QFunction {
-    pub name: FnName,
-    pub name_start: Pos,
-    pub name_end: Pos,
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Parameter {
+    pub name: UniqVar,
+    pub ty: Ty,
+    pub range: Range,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Function {
+    pub name: FunRef,
+    pub range: Range,
     pub parameters: Vec<Parameter>,
     pub ret_type: Ty,
     pub body: Expr,
+    pub src_module: ModuleRef,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialOrd, Ord)]
 pub enum Statement {
     Declaration {
-        name: String,
-        name_start: Pos,
-        name_end: Pos,
+        name: UniqVar,
+        range: Range,
         ty: Ty,
         val: Expr,
     },
 
     Assignment {
-        name: String,
-        name_start: Pos,
-        name_end: Pos,
+        name: UniqVar,
+        range: Range,
         val: Expr,
     },
 
@@ -47,14 +58,13 @@ pub enum Statement {
 }
 
 /// `Expr` wraps an `Expression` and carries start/end positions (line,col)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialOrd, Ord)]
 pub struct Expr {
     pub expr: Expression,
-    pub start: Pos,
-    pub end: Pos,
+    pub range: Range,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Expression {
     If {
         cond: Box<Expr>,
@@ -75,10 +85,14 @@ pub enum Expression {
         right: Box<Expr>,
     },
     Call {
-        fn_ref: FnName,
+        fn_name: FunRef,
         args: Vec<Expr>,
     },
-    Var(String),
+    IntrinsicCall {
+        fn_name: Intrinsic,
+        args: Vec<Expr>,
+    },
+    Var(UniqVar),
     Int(i64),
     Bool(bool),
     Unit,
@@ -95,8 +109,10 @@ impl Hash for Statement {
         use Statement::*;
         std::mem::discriminant(self).hash(state);
         match self {
-            Declaration { name, ty, val, .. } => {
-                name.hash(state);
+            Declaration {
+                name: var, ty, val, ..
+            } => {
+                var.hash(state);
                 ty.hash(state);
                 val.hash(state);
             }

@@ -1,19 +1,20 @@
 use std::collections::HashSet;
 
-use crate::ir_types::hhir::Expr;
-use crate::ir_types::hhir::Expression;
-use crate::ir_types::hhir::Statement;
+use crate::compiler::structure::UniqVar;
+use crate::ir_types::typed_hir::Expr;
+use crate::ir_types::typed_hir::Expression;
+use crate::ir_types::typed_hir::Statement;
 
-pub fn get_dependencies(expr: &Expr) -> HashSet<String> {
+pub fn get_dependencies(expr: &Expr) -> HashSet<UniqVar> {
     let mut dependencies = HashSet::new();
     collect_dependencies(&expr.expr, &mut dependencies);
     dependencies
 }
 
-pub fn collect_dependencies(expr: &Expression, dependencies: &mut HashSet<String>) {
+pub fn collect_dependencies(expr: &Expression, dependencies: &mut HashSet<UniqVar>) {
     match expr {
         Expression::Var(name) => {
-            dependencies.insert(name.clone());
+            dependencies.insert(*name);
         }
         Expression::BinOp { left, right, .. } => {
             collect_dependencies(&left.expr, dependencies);
@@ -31,7 +32,7 @@ pub fn collect_dependencies(expr: &Expression, dependencies: &mut HashSet<String
             collect_dependencies(&cond.expr, dependencies);
             collect_dependencies(&body.expr, dependencies);
         }
-        Expression::Call { args, .. } => {
+        Expression::Call { args, .. } | Expression::IntrinsicCall { args, .. } => {
             for arg in args {
                 collect_dependencies(&arg.expr, dependencies);
             }
@@ -58,30 +59,30 @@ pub fn collect_dependencies(expr: &Expression, dependencies: &mut HashSet<String
     }
 }
 
-pub fn get_mutations_stmt(stmt: &Statement) -> HashSet<String> {
+pub fn get_mutations_stmt(stmt: &Statement) -> HashSet<UniqVar> {
     match stmt {
-        Statement::Declaration { name, .. } => HashSet::from([name.clone()]),
-        Statement::Assignment { name, .. } => HashSet::from([name.clone()]),
+        Statement::Declaration { name, .. } => HashSet::from([*name]),
+        Statement::Assignment { name, .. } => HashSet::from([*name]),
         Statement::Expr(_) => HashSet::new(),
     }
 }
 
-pub fn get_mutations_expr(expr: &Expr) -> HashSet<String> {
+pub fn get_mutations_expr(expr: &Expr) -> HashSet<UniqVar> {
     let mut mutations = HashSet::new();
     collect_mutations(&expr.expr, &mut mutations);
     mutations
 }
 
-fn collect_mutations(expr: &Expression, mutations: &mut HashSet<String>) {
+fn collect_mutations(expr: &Expression, mutations: &mut HashSet<UniqVar>) {
     match expr {
         Expression::Block { statements, expr } => {
             for stmt in statements {
                 match stmt {
                     Statement::Declaration { name, .. } => {
-                        mutations.insert(name.clone());
+                        mutations.insert(*name);
                     }
                     Statement::Assignment { name, .. } => {
-                        mutations.insert(name.clone());
+                        mutations.insert(*name);
                     }
                     Statement::Expr(e) => {
                         collect_mutations(&e.expr, mutations);

@@ -2,11 +2,19 @@
 
 use tower_lsp::lsp_types::*;
 
+use crate::compiler::context::CompileCtx;
+use crate::lsp::diagnostics::Diagnostics;
 use crate::lsp::util::lsp_range_from_pest;
 use crate::passes::type_ast::AstTypeError;
 
-pub fn type_error_to_diagnostic(uri: &Url, text: &str, err: AstTypeError) -> Vec<Diagnostic> {
+pub fn type_error_to_diagnostic(
+    _ctx: &CompileCtx,
+    uri: Url,
+    text: &str,
+    err: AstTypeError,
+) -> Diagnostics {
     use crate::passes::type_ast::AstTypeError::*;
+    let mut diagnostics = Diagnostics::default();
     match err {
         UnboundVariable { name, range } => {
             let range = lsp_range_from_pest(text, range);
@@ -20,14 +28,17 @@ pub fn type_error_to_diagnostic(uri: &Url, text: &str, err: AstTypeError) -> Vec
                 message: "no binding found for this variable".into(),
             };
 
-            vec![Diagnostic {
-                range,
-                severity: Some(DiagnosticSeverity::ERROR),
-                source: Some("sand".into()),
-                message,
-                related_information: Some(vec![related]),
-                ..Default::default()
-            }]
+            diagnostics.add_one(
+                uri,
+                Diagnostic {
+                    range,
+                    severity: Some(DiagnosticSeverity::ERROR),
+                    source: Some("sand".into()),
+                    message,
+                    related_information: Some(vec![related]),
+                    ..Default::default()
+                },
+            );
         }
         UndefinedFunction { name, range } => {
             let range = lsp_range_from_pest(text, range);
@@ -41,22 +52,18 @@ pub fn type_error_to_diagnostic(uri: &Url, text: &str, err: AstTypeError) -> Vec
                 message: "no function with this name was found".into(),
             };
 
-            vec![Diagnostic {
-                range,
-                severity: Some(DiagnosticSeverity::ERROR),
-                source: Some("sand".into()),
-                message,
-                related_information: Some(vec![related]),
-                ..Default::default()
-            }]
+            diagnostics.add_one(
+                uri,
+                Diagnostic {
+                    range,
+                    severity: Some(DiagnosticSeverity::ERROR),
+                    source: Some("sand".into()),
+                    message,
+                    related_information: Some(vec![related]),
+                    ..Default::default()
+                },
+            );
         }
-        UniquifyError(e) => vec![Diagnostic {
-            range: Range::default(),
-            severity: Some(DiagnosticSeverity::ERROR),
-            source: Some("sand".into()),
-            message: format!("uniquify error: {}", e),
-            ..Default::default()
-        }],
         TypeError {
             message,
             expected,
@@ -73,14 +80,17 @@ pub fn type_error_to_diagnostic(uri: &Url, text: &str, err: AstTypeError) -> Vec
                 message: format!("expected type: {:?}, found type: {:?}", expected, found),
             };
 
-            vec![Diagnostic {
-                range,
-                severity: Some(DiagnosticSeverity::ERROR),
-                source: Some("sand".into()),
-                message: format!("{} (expected {:?}, found {:?})", message, expected, found),
-                related_information: Some(vec![related]),
-                ..Default::default()
-            }]
+            diagnostics.add_one(
+                uri,
+                Diagnostic {
+                    range,
+                    severity: Some(DiagnosticSeverity::ERROR),
+                    source: Some("sand".into()),
+                    message: format!("{} (expected {:?}, found {:?})", message, expected, found),
+                    related_information: Some(vec![related]),
+                    ..Default::default()
+                },
+            );
         }
         FunctionCallTypeError {
             message,
@@ -101,14 +111,18 @@ pub fn type_error_to_diagnostic(uri: &Url, text: &str, err: AstTypeError) -> Vec
                 ),
             };
 
-            vec![Diagnostic {
-                range,
-                severity: Some(DiagnosticSeverity::ERROR),
-                source: Some("sand".into()),
-                message: format!("{} (expected {:?}, found {:?})", message, expected, found),
-                related_information: Some(vec![related]),
-                ..Default::default()
-            }]
+            diagnostics.add_one(
+                uri,
+                Diagnostic {
+                    range,
+                    severity: Some(DiagnosticSeverity::ERROR),
+                    source: Some("sand".into()),
+                    message: format!("{} (expected {:?}, found {:?})", message, expected, found),
+                    related_information: Some(vec![related]),
+                    ..Default::default()
+                },
+            );
         }
     }
+    diagnostics
 }

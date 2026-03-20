@@ -1,10 +1,12 @@
 //! check that the types of a TypedProgram AST actually make sense
 
+use crate::compiler::context::CompileCtx;
+use crate::compiler::structure::Range;
 use crate::ir_types::typed_hir::*;
 use crate::lang::intrinsics::INTRINSICS;
-use crate::lang::structure::Range;
 use crate::lang::types::Ty;
 use crate::passes::type_ast::AstTypeError;
+use crate::passes::type_ast::errors::TypeError;
 
 fn expect_type(
     found: Ty,
@@ -43,16 +45,16 @@ fn expect_same_type(
 }
 
 fn check_call_args(
+    ctx: &CompileCtx,
     fn_name: String,
     args: &[Expr],
     expected: &[Ty],
     ret_ty: Ty,
-    prog: &TypedProgram,
     range: Range,
 ) -> Result<Ty, AstTypeError> {
     let arg_tys = args
         .iter()
-        .map(|arg| check_expr(arg, prog))
+        .map(|arg| check_expr(ctx, arg))
         .collect::<Result<Vec<_>, _>>()?;
 
     if arg_tys.len() != expected.len() {
@@ -89,39 +91,45 @@ fn check_call_args(
     Ok(ret_ty)
 }
 
-pub(super) fn check_program(prog: &TypedProgram) -> Result<(), AstTypeError> {
+pub(super) fn check_program(ctx: &CompileCtx, prog: &TypedProgram) -> Result<(), TypeError> {
     for func in prog.functions.values() {
-        check_function(func, prog)?;
+        check_function(ctx, func)?;
     }
     Ok(())
 }
 
-pub(super) fn check_function(
-    func: &TypedFunction,
-    prog: &TypedProgram,
-) -> Result<(), AstTypeError> {
+pub(super) fn check_function(ctx: &CompileCtx, func: &TypedFunction) -> Result<(), TypeError> {
     // check that the function's return type matches the type of its body expression
-    let body_ty = check_expr(&func.body, prog)?;
+    let body_ty = check_expr(ctx, &func.body).map_err(|e| TypeError {
+        error: e,
+        module: func.src_module,
+    })?;
     if body_ty.type_neq(&func.ret_type) {
-        return Err(AstTypeError::TypeError {
+        let err = AstTypeError::TypeError {
             message: format!(
                 "Function '{}' has return type {:?} but body has type {:?}",
-                func.name, func.ret_type, body_ty
+                ctx.original_fun_name(func.name),
+                func.ret_type,
+                body_ty
             ),
             expected: func.ret_type,
             found: body_ty,
             range: func.range,
+        };
+        return Err(TypeError {
+            error: err,
+            module: func.src_module,
         });
     }
 
     Ok(())
 }
 
-pub(super) fn check_expr(expr: &Expr, prog: &TypedProgram) -> Result<Ty, AstTypeError> {
+pub(super) fn check_expr(ctx: &CompileCtx, expr: &Expr) -> Result<Ty, AstTypeError> {
     match &expr.expr {
         Expression::BinOp { left, op, right } => {
-            let left_ty = check_expr(left, prog)?;
-            let right_ty = check_expr(right, prog)?;
+            let left_ty = check_expr(ctx, left)?;
+            let right_ty = check_expr(ctx, right)?;
 
             op.accepts_types(left_ty, right_ty)
                 .map_err(|expected_ty| AstTypeError::TypeError {
@@ -135,7 +143,7 @@ pub(super) fn check_expr(expr: &Expr, prog: &TypedProgram) -> Result<Ty, AstType
                 })
         }
         Expression::UnOp { op, right } => {
-            let right_ty = check_expr(right, prog)?;
+            let right_ty = check_expr(ctx, right)?;
 
             if let Err(expected_ty) = op.accepts_type(right_ty) {
                 return Err(AstTypeError::TypeError {
@@ -149,7 +157,7 @@ pub(super) fn check_expr(expr: &Expr, prog: &TypedProgram) -> Result<Ty, AstType
             Ok(right_ty)
         }
         Expression::If { cond, t, f } => {
-            let cond_ty = check_expr(cond, prog)?;
+            let cond_ty = check_expr(ctx, cond)?;
             expect_type(
                 cond_ty,
                 Ty::Bool,
@@ -157,8 +165,8 @@ pub(super) fn check_expr(expr: &Expr, prog: &TypedProgram) -> Result<Ty, AstType
                 cond.range,
             )?;
 
-            let t_ty = check_expr(t, prog)?;
-            let f_ty = check_expr(f, prog)?;
+            let t_ty = check_expr(ctx, t)?;
+            let f_ty = check_expr(ctx, f)?;
             expect_same_type(
                 t_ty,
                 f_ty,
@@ -172,7 +180,7 @@ pub(super) fn check_expr(expr: &Expr, prog: &TypedProgram) -> Result<Ty, AstType
             )
         }
         Expression::While { cond, body } => {
-            let cond_ty = check_expr(cond, prog)?;
+            let cond_ty = check_expr(ctx, cond)?;
             if cond_ty != Ty::Bool {
                 return Err(AstTypeError::TypeError {
                     message: format!(
@@ -184,42 +192,34 @@ pub(super) fn check_expr(expr: &Expr, prog: &TypedProgram) -> Result<Ty, AstType
                     range: cond.range,
                 });
             }
-            check_expr(body, prog)
+            check_expr(ctx, body)
         }
         Expression::Call { fn_name, args } => {
-            let func =
-                prog.functions
-                    .get(fn_name)
-                    .ok_or_else(|| AstTypeError::UndefinedFunction {
-                        name: fn_name.to_string(),
-                        range: expr.range,
-                    })?;
+            let fun_sig = ctx.fun_sig(fn_name);
 
-            let expected: Vec<Ty> = func.parameters.iter().map(|p| p.ty).collect();
+            let expected: Vec<Ty> = fun_sig.args.iter().map(|p| p.1).collect();
             check_call_args(
-                fn_name.to_string(),
+                ctx,
+                ctx.original_fun_name(*fn_name),
                 args,
                 &expected,
-                func.ret_type,
-                prog,
+                fun_sig.ret_ty,
                 expr.range,
             )
         }
 
         Expression::IntrinsicCall { fn_name, args } => {
             let (_fn_ref, fn_sig) = &INTRINSICS[fn_name];
-            let expected: Vec<Ty> = fn_sig.args.iter().map(|(_, ty)| *ty).collect();
             check_call_args(
+                ctx,
                 fn_name.to_string(),
                 args,
-                &expected,
+                &fn_sig.args,
                 fn_sig.ret_ty,
-                prog,
                 expr.range,
             )
         }
         Expression::Block { statements, expr } => {
-            let mut block_scope = prog.clone();
             for stmt in statements {
                 match stmt {
                     Statement::Declaration {
@@ -228,47 +228,50 @@ pub(super) fn check_expr(expr: &Expr, prog: &TypedProgram) -> Result<Ty, AstType
                         val,
                         range,
                     } => {
-                        let val_ty = check_expr(val, &block_scope)?;
+                        let val_ty = check_expr(ctx, val)?;
                         if val_ty.type_neq(ty) {
                             return Err(AstTypeError::TypeError {
                                 message: format!(
                                     "Declared variable '{}' has type {:?} but initializer has type {:?}",
-                                    name, ty, val_ty
+                                    ctx.uniq_variable_name(*name),
+                                    ty,
+                                    val_ty
                                 ),
                                 expected: *ty,
                                 found: val_ty,
                                 range: *range,
                             });
                         }
-                        block_scope.avail_vars.insert(name.clone(), *ty);
                     }
                     Statement::Assignment { name, val, range } => {
-                        let var_ty = block_scope.avail_vars.get(name).ok_or_else(|| {
+                        let var_ty = ctx.get_var_type(name).ok_or_else(|| {
                             AstTypeError::UnboundVariable {
-                                name: name.to_string(),
+                                name: ctx.uniq_variable_name(*name),
                                 range: *range,
                             }
                         })?;
-                        let val_ty = check_expr(val, &block_scope)?;
-                        if val_ty.type_neq(var_ty) {
+                        let val_ty = check_expr(ctx, val)?;
+                        if val_ty.type_neq(&var_ty) {
                             return Err(AstTypeError::TypeError {
                                 message: format!(
                                     "Variable '{}' has type {:?} but assigned value has type {:?}",
-                                    name, var_ty, val_ty
+                                    ctx.uniq_variable_name(*name),
+                                    var_ty,
+                                    val_ty
                                 ),
-                                expected: *var_ty,
+                                expected: var_ty,
                                 found: val_ty,
                                 range: *range,
                             });
                         }
                     }
                     Statement::Expr(e) => {
-                        check_expr(e, &block_scope)?;
+                        check_expr(ctx, e)?;
                     }
                 }
             }
             if let Some(e) = expr {
-                check_expr(e, &block_scope)
+                check_expr(ctx, e)
             } else {
                 Ok(Ty::Unit)
             }
@@ -276,12 +279,6 @@ pub(super) fn check_expr(expr: &Expr, prog: &TypedProgram) -> Result<Ty, AstType
         Expression::Int(_) => Ok(Ty::Int),
         Expression::Bool(_) => Ok(Ty::Bool),
         Expression::Unit => Ok(Ty::Unit),
-        Expression::RVar(name) => match prog.avail_vars.get(name) {
-            Some(ty) => Ok(*ty),
-            None => Err(AstTypeError::UnboundVariable {
-                name: name.to_string(),
-                range: expr.range,
-            }),
-        },
+        Expression::Var(name) => Ok(ctx.var_type(name)),
     }
 }

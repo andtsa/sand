@@ -1,36 +1,39 @@
 //! the uniquify pass of the compiler
 //!
 //! takes a program AST and ensures all variable and function names are unique
-pub mod reserved;
+// pub mod reserved;
+
+pub mod error;
 
 use std::collections::BTreeMap;
 
+use crate::compiler::context::CompileCtx;
+use crate::compiler::structure::UniqVar;
+use crate::internal_bug;
 use crate::ir_types::hhir::*;
-use crate::passes::uniquify::reserved::UniquifyError;
-use crate::passes::uniquify::reserved::assert_unique;
+use crate::passes::qualify::uniquify::error::UniquifyError;
 
 /// A helper struct that captures the active scopes for all identifiers at the
 /// program's various levels and offers the functionality to keep track of and
 /// rename them.
-struct Context {
+struct UniqCtx<'uniq, 'run> {
     /// Each scope is represented as a BTreeMap from original names to renamed
     /// names and are stored in a stack-like vector, where the last element
     /// is the current scope.
-    var_scopes: Vec<BTreeMap<String, String>>,
+    var_scopes: Vec<BTreeMap<String, UniqVar>>,
 
     // /// Function and variable names live in different namespaces in order to
     // /// allow function name shadowing without problems
     // fun_scopes: BTreeMap<String, String>,
-    /// A global counter used for generating unique names across the program.
-    counter: usize,
+    compile_ctx: &'uniq mut CompileCtx<'run>,
 }
 
-impl Context {
+impl<'uniq, 'run> UniqCtx<'uniq, 'run> {
     /// Create a new Context, initialize its counter to zero, and push two empty
     /// BTreeMaps as the variable and function scopes.
     /// # Returns
     /// An initialized empty Context.
-    fn new() -> Self {
+    fn new(ctx: &'uniq mut CompileCtx<'run>) -> Self {
         // let mut global = BTreeMap::new();
 
         // for &name in RESERVED_FUNCTION_NAMES.iter() {
@@ -38,22 +41,9 @@ impl Context {
         // }
 
         Self {
+            compile_ctx: ctx,
             var_scopes: vec![BTreeMap::new()],
-            // fun_scopes: global,
-            counter: 0,
         }
-    }
-
-    /// Generates a new unique name for a given identifier by appending to it
-    /// the current counter
-    /// # Arguments
-    /// * 'name' - The identifier to be renamed
-    /// # Returns
-    /// The string containing the identifier's new name
-    fn rename(&mut self, name: &str) -> String {
-        let id = self.counter;
-        self.counter += 1;
-        format!("{}_{}", name, id)
     }
 
     /// Pushes a new empty scope onto the scope stack when entering a new block
@@ -73,14 +63,18 @@ impl Context {
     /// # Arguments
     /// * 'name' - The original identifier to bind.
     /// # Returns
-    /// The newly generated unique identifier as a string.
-    fn bind_var(&mut self, name: &str) -> String {
-        let new_name = self.rename(name);
-        self.var_scopes
-            .last_mut()
-            .unwrap()
-            .insert(name.to_string(), new_name.clone());
-        new_name
+    /// The newly generated unique identifier
+    fn bind_var(&mut self, name: &HirVar) -> UniqVar {
+        let ovref = match name {
+            HirVar::Decl(ovref) => *ovref,
+            x => internal_bug!("uniquify binding a non-declaration {x:?}"),
+        };
+
+        let seen_as = self.compile_ctx.original_var_name(ovref);
+        let uniq = self.compile_ctx.uniquify_original_variable(ovref);
+
+        self.var_scopes.last_mut().unwrap().insert(seen_as, uniq);
+        uniq
     }
 
     /// Looks up the unique name associated with a variable in the scope
@@ -90,13 +84,24 @@ impl Context {
     /// # Returns
     /// The currently active unique name for that identifier, or None if not
     /// bound.
-    pub fn lookup_var_opt(&self, name: &str) -> Option<String> {
+    pub fn lookup_var_opt(&self, name: &HirVar) -> Option<UniqVar> {
+        let HirVar::Unqualified(str_name) = name else {
+            internal_bug!("uniquify tried resolving {name:?}");
+        };
         for scope in self.var_scopes.iter().rev() {
-            if let Some(n) = scope.get(name) {
-                return Some(n.clone());
+            if let Some(n) = scope.get(str_name) {
+                return Some(*n);
             }
         }
         None
+    }
+
+    pub fn display_hir_var(&self, hv: &HirVar) -> String {
+        match hv {
+            HirVar::Decl(ovref) => self.compile_ctx.original_var_name(*ovref),
+            HirVar::Uniq(uv) => self.compile_ctx.uniq_variable_name(*uv),
+            HirVar::Unqualified(s) => s.to_string(),
+        }
     }
 
     // /// Binds a given function to a newly generated unique name and stores it
@@ -133,16 +138,9 @@ impl ProgramModule {
     /// # Returns
     /// A new Program AST with all its names uniquified but with the same
     /// functionality.
-    pub fn uniquify(&self) -> Result<Self, UniquifyError> {
-        let mut u = Context::new();
+    pub fn uniquify<'run>(&self, ctx: &mut CompileCtx<'run>) -> Result<Self, UniquifyError> {
+        let mut u = UniqCtx::new(ctx);
 
-        // First, bind all function names
-        // Helps with recursive / mutually recursive functions
-        // for f in &self.functions {
-        //     u.bind_fun(&f.name);
-        // }
-
-        // Then, enter those functions and uniquify them
         let mut functions = Vec::new();
         for f in &self.functions {
             functions.push(uniquify_function(f, &mut u)?);
@@ -150,11 +148,9 @@ impl ProgramModule {
 
         let ast = ProgramModule {
             functions,
-            module_name: self.module_name.clone(),
+            module_name: self.module_name,
         };
 
-        // propagate uniqueness errors from the reserved checks
-        assert_unique(&ast)?;
         Ok(ast)
     }
 }
@@ -165,14 +161,14 @@ impl ProgramModule {
 /// * 'u' - The entire current Context.
 /// # Returns
 /// A new Function`AST with all identifiers uniquely renamed.
-fn uniquify_function(f: &Function, u: &mut Context) -> Result<Function, UniquifyError> {
+fn uniquify_function(f: &Function, u: &mut UniqCtx) -> Result<Function, UniquifyError> {
     u.enter_scope();
 
     let mut parameters: Vec<Parameter> = Vec::new();
     for p in &f.parameters {
         let new_name = u.bind_var(&p.name);
         parameters.push(Parameter {
-            name: new_name,
+            name: HirVar::Uniq(new_name),
             ty: p.ty,
             range: p.range,
         });
@@ -181,18 +177,8 @@ fn uniquify_function(f: &Function, u: &mut Context) -> Result<Function, Uniquify
 
     u.exit_scope();
 
-    // let name = match u.lookup_fun_opt(&f.name) {
-    //     Some(n) => n,
-    //     None => {
-    //         return Err(UniquifyError::UndefinedFunction {
-    //             name: f.name.clone(),
-    //             at: f.range,
-    //         });
-    //     }
-    // };
-
     Ok(Function {
-        name: f.name.clone(),
+        name: f.name,
         range: f.range,
         parameters,
         ret_type: f.ret_type,
@@ -206,7 +192,7 @@ fn uniquify_function(f: &Function, u: &mut Context) -> Result<Function, Uniquify
 /// * 'u' - The entire current Context.
 /// # Returns
 /// A new 'Expr' with all identifiers renamed according to scope rules.
-fn uniquify_expr(e: &Expr, u: &mut Context) -> Result<Expr, UniquifyError> {
+fn uniquify_expr(e: &Expr, u: &mut UniqCtx) -> Result<Expr, UniquifyError> {
     let expr = match &e.expr {
         Expression::If { cond, t, f } => Expression::If {
             cond: Box::new(uniquify_expr(cond, u)?),
@@ -231,15 +217,6 @@ fn uniquify_expr(e: &Expr, u: &mut Context) -> Result<Expr, UniquifyError> {
         },
 
         Expression::Call { fn_name, args } => {
-            // let mapped = match u.lookup_fun_opt(fn_name) {
-            //     Some(n) => n,
-            //     None => {
-            //         return Err(UniquifyError::UndefinedFunction {
-            //             name: fn_name.clone(),
-            //             at: e.range,
-            //         });
-            //     }
-            // };
             let args_res: Result<Vec<Expr>, UniquifyError> =
                 args.iter().map(|a| uniquify_expr(a, u)).collect();
             Expression::Call {
@@ -253,12 +230,12 @@ fn uniquify_expr(e: &Expr, u: &mut Context) -> Result<Expr, UniquifyError> {
                 Some(n) => n,
                 None => {
                     return Err(UniquifyError::UnboundVariable {
-                        name: name.clone(),
+                        name: u.display_hir_var(name),
                         at: e.range,
                     });
                 }
             };
-            Expression::Var(mapped)
+            Expression::Var(HirVar::Uniq(mapped))
         }
         Expression::Int(i) => Expression::Int(*i),
         Expression::Bool(b) => Expression::Bool(*b),
@@ -298,7 +275,7 @@ fn uniquify_expr(e: &Expr, u: &mut Context) -> Result<Expr, UniquifyError> {
 /// * 'u' - The entire current Context.
 /// # Returns
 /// A new Statement with variable names uniquely renamed
-fn uniquify_stmt(stmt: &Statement, u: &mut Context) -> Result<Statement, UniquifyError> {
+fn uniquify_stmt(stmt: &Statement, u: &mut UniqCtx) -> Result<Statement, UniquifyError> {
     match stmt {
         Statement::Declaration {
             name,
@@ -309,7 +286,7 @@ fn uniquify_stmt(stmt: &Statement, u: &mut Context) -> Result<Statement, Uniquif
             let val = uniquify_expr(val, u)?;
             let new_name = u.bind_var(name);
             Ok(Statement::Declaration {
-                name: new_name,
+                name: HirVar::Uniq(new_name),
                 range: *range,
                 ty: *ty,
                 val,
@@ -321,14 +298,14 @@ fn uniquify_stmt(stmt: &Statement, u: &mut Context) -> Result<Statement, Uniquif
                 Some(n) => n,
                 None => {
                     return Err(UniquifyError::UnboundVariable {
-                        name: name.clone(),
+                        name: u.display_hir_var(name),
                         at: *range,
                     });
                 }
             };
             let val = uniquify_expr(val, u)?;
             Ok(Statement::Assignment {
-                name: mapped,
+                name: HirVar::Uniq(mapped),
                 range: *range,
                 val,
             })

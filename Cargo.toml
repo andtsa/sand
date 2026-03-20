@@ -11,7 +11,9 @@ anyhow = "1"
 pest = "2.8.4"
 pest_derive = "2.8.4"
 petgraph = "0.8.3"
-take-if = "1.0.0"
+take-if = "1"
 thiserror = "2"
 tower-lsp = "0.20.0"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-std"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-std", "fs"] }
+toml = "1"
+serde = "1.0.228"

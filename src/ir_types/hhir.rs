@@ -4,9 +4,12 @@
 use std::hash::Hash;
 use std::hash::Hasher;
 
+use crate::compiler::structure::FunRef;
+use crate::compiler::structure::ModuleRef;
+use crate::compiler::structure::OriginalVarRef;
+use crate::compiler::structure::Range;
+use crate::compiler::structure::UniqVar;
 use crate::lang::ops::*;
-use crate::lang::structure::ModuleRef;
-use crate::lang::structure::Range;
 use crate::lang::types::*;
 
 #[derive(Debug, Clone)]
@@ -15,16 +18,29 @@ pub struct ProgramModule {
     pub module_name: ModuleRef,
 }
 
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub enum HirVar {
+    Decl(OriginalVarRef),
+    Unqualified(String),
+    Uniq(UniqVar),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum HirFnCall {
+    Local(String),
+    External { module: String, name: String },
+}
+
 #[derive(Debug, Clone)]
 pub struct Parameter {
-    pub name: String,
+    pub name: HirVar,
     pub ty: Ty,
     pub range: Range,
 }
 
 #[derive(Debug, Clone)]
 pub struct Function {
-    pub name: String,
+    pub name: FunRef,
     pub range: Range,
     pub parameters: Vec<Parameter>,
     pub ret_type: Ty,
@@ -34,14 +50,14 @@ pub struct Function {
 #[derive(Debug, Clone)]
 pub enum Statement {
     Declaration {
-        name: String,
+        name: HirVar,
         range: Range,
         ty: Ty,
         val: Expr,
     },
 
     Assignment {
-        name: String,
+        name: HirVar,
         range: Range,
         val: Expr,
     },
@@ -77,10 +93,10 @@ pub enum Expression {
         right: Box<Expr>,
     },
     Call {
-        fn_name: String,
+        fn_name: HirFnCall,
         args: Vec<Expr>,
     },
-    Var(String),
+    Var(HirVar),
     Int(i64),
     Bool(bool),
     Unit,
@@ -90,6 +106,12 @@ pub enum Expression {
     },
 }
 
+impl HirVar {
+    pub fn is_uniq(&self) -> bool {
+        matches!(self, HirVar::Uniq(_))
+    }
+}
+
 impl Eq for Statement {}
 
 impl Hash for Statement {
@@ -97,8 +119,10 @@ impl Hash for Statement {
         use Statement::*;
         std::mem::discriminant(self).hash(state);
         match self {
-            Declaration { name, ty, val, .. } => {
-                name.hash(state);
+            Declaration {
+                name: var, ty, val, ..
+            } => {
+                var.hash(state);
                 ty.hash(state);
                 val.hash(state);
             }

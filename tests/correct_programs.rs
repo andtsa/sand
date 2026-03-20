@@ -5,16 +5,18 @@ mod common;
 use std::hint::black_box;
 
 use common::open_example_from_file;
+use sand::compiler::context::CompileCtx;
 use sand::ir_types::hhir::ProgramModule;
+use sand::ir_types::qhir;
 use sand::ir_types::typed_hir::TypedProgram;
 
 fn test_layers(file: &str) {
     let code = open_example_from_file(file);
+    let mut ctx = CompileCtx::initial();
 
-    let p = ProgramModule::parse(&code).unwrap();
-    let u = p.uniquify().unwrap();
-
-    let t = TypedProgram::from_ast_program(&u).unwrap();
+    let p = ProgramModule::parse_stub(&mut ctx, &code).unwrap();
+    let q = qhir::Program::combine(&mut ctx, vec![p]).unwrap();
+    let t = TypedProgram::from_ast_program(&mut ctx, q).unwrap();
 
     // println!("{t:?}");
     black_box(t);

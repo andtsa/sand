@@ -1,4 +1,5 @@
 #![allow(unused)]
+use sand::compiler::context::CompileCtx;
 use sand::ir_types::hhir::ProgramModule;
 use sand::ir_types::typed_hir::TypedProgram;
 use sand::passes::parse::Rule;
@@ -103,15 +104,16 @@ def main(): Int := {
     x
 }"#;
 
-    let program = ProgramModule::parse(_test_4)?;
+    let ctx = &mut CompileCtx::initial();
+    let program = ProgramModule::parse_stub(ctx, _test_4)?;
     // println!("{:#?}", program);
 
-    let uniquified = ProgramModule::uniquify(&program)?;
+    let uniquified = ProgramModule::uniquify(&program, ctx)?;
     // let typed = TypedProgram::from_ast_program(&uniquified)?;
     println!("{:#?}", uniquified);
     // println!("{:#?}", typed);
 
-    let eval_u = uniquified.interpret()?;
+    // let eval_u = uniquified.interpret()?;
     // let eval_p = program.interpret()?;
     // println!(
     //     "Program evaluated to: {:?}\nUniquified evaluated to: {:?}",

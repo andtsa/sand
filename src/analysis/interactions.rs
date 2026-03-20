@@ -10,16 +10,15 @@ use petgraph::Directed;
 use petgraph::Graph;
 use petgraph::graph::NodeIndex;
 
-use crate::AnnotatedExpression;
-use crate::ProgramAnnotations;
-use crate::TupleSpan;
-use crate::ir_types::hhir::Expr;
-use crate::ir_types::hhir::Expression;
+use crate::analysis::AnnotatedExpression;
+use crate::analysis::ProgramAnnotations;
+use crate::compiler::structure::ModuleRef;
+use crate::compiler::structure::Range;
+use crate::ir_types::typed_hir::Expr;
+use crate::ir_types::typed_hir::Expression;
 use crate::lang::intrinsics::RESERVED_FUNCTION_NAMES;
 
-pub fn find_interactions(
-    cfg: Graph<AnnotatedExpression, (), Directed>,
-) -> anyhow::Result<ProgramAnnotations> {
+pub fn find_interactions(cfg: Graph<AnnotatedExpression, (), Directed>) -> ProgramAnnotations {
     let mut in_sets: HashMap<NodeIndex, HashSet<AnnotatedExpression>> = HashMap::new();
     let mut out_sets: HashMap<NodeIndex, HashSet<AnnotatedExpression>> = HashMap::new();
 
@@ -43,30 +42,38 @@ pub fn find_interactions(
         // In set : The intersection of predecessors
         let preds: Vec<_> = cfg.neighbors_directed(n, petgraph::Incoming).collect();
 
-        let new_in = if preds.is_empty() {
+        let new_in: HashSet<AnnotatedExpression> = if preds.is_empty() {
             HashSet::new()
         } else {
-            preds
-                .iter()
-                .map(|p| out_sets[p].clone())
-                .reduce(|a, b| a.intersection(&b).cloned().collect())
-                .unwrap()
+            let mut result = out_sets[&preds[0]].clone();
+            for i in 1..preds.len() {
+                result = result
+                    .intersection(&out_sets[&preds[i]])
+                    .cloned()
+                    .collect::<HashSet<AnnotatedExpression>>();
+            }
+            result
         };
 
         // println!("{:?}", &cfg[n].expr);
         // println!("{:?}: New in: {:?}", n, &new_in);
 
-        let expr = &cfg[n];
+        let Some(expr) = &cfg.node_weight(n) else {
+            continue;
+        };
 
         // Gen set: A set with only the node's expression itself if it can be memoized
-        let mut generated = HashSet::new();
+        let mut generated: HashSet<AnnotatedExpression> = HashSet::new();
         if is_candidate(&expr.expr) {
-            generated.insert(expr.clone());
+            generated.insert((*expr).clone());
         }
 
         // println!("{:?}: Generated: {:?}", n, &generated);
 
-        let in_gen_union: HashSet<_> = new_in.union(&generated).cloned().collect();
+        let mut in_gen_union = new_in.clone();
+        for g in generated {
+            in_gen_union.insert(g);
+        }
 
         // Kill set : Expressions with at least one rewritten variable
         let mut killed = HashSet::new();
@@ -95,7 +102,7 @@ pub fn find_interactions(
     }
 
     // Collect redundancies
-    let mut expr_occurrences: HashMap<Expr, HashSet<TupleSpan>> = HashMap::new();
+    let mut expr_occurrences: HashMap<Expr, HashSet<(ModuleRef, Range)>> = HashMap::new();
     let mut available_at: HashMap<NodeIndex, HashSet<Expr>> = HashMap::new();
 
     for n in cfg.node_indices() {
@@ -118,16 +125,16 @@ pub fn find_interactions(
                 expr_occurrences
                     .entry(sub.clone())
                     .or_default()
-                    .insert(sub.range);
+                    .insert((node.module, sub.range));
             }
         }
     }
 
     // Construct ProgramAnnotations directly
-    Ok(ProgramAnnotations {
+    ProgramAnnotations {
         expr_occurrences,
         available_at,
-    })
+    }
 }
 
 fn is_candidate(expr: &Expr) -> bool {

@@ -7,11 +7,14 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
-use sand::TupleSpan;
+use sand::analysis::analyse;
 use sand::analysis::interactions::has_other_side_effects;
-use sand::ir_types::hhir::Expr;
-use sand::ir_types::hhir::ProgramModule;
-use sand::lang::structure::Range;
+use sand::compile_hir;
+use sand::compiler::context::CompileCtx;
+use sand::compiler::structure::Map;
+use sand::compiler::structure::ModuleRef;
+use sand::compiler::structure::Range;
+use sand::ir_types::typed_hir::Expr;
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -24,8 +27,10 @@ fn main() -> anyhow::Result<()> {
     let program_src = std::fs::read_to_string(input_file)
         .map_err(|e| anyhow::anyhow!("failed to read input file {}: {}", input_file, e))?;
 
-    let ast = ProgramModule::parse(&program_src)?.uniquify()?;
-    let annotations = sand::analyse(&ast)?;
+    let mut ctx = CompileCtx::initial();
+    let fr = ctx.register_dummy_file();
+    let ast = compile_hir(Map::from([(fr, program_src.as_str())]), &mut ctx)?;
+    let annotations = analyse(&ctx, &ast);
 
     println!(
         "Program Annotations:\n{}",
@@ -35,7 +40,7 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-type OccurenceMap = HashMap<Expr, HashSet<TupleSpan>>;
+type OccurenceMap = HashMap<Expr, HashSet<(ModuleRef, Range)>>;
 
 fn visualise_annotations(text: &str, repeated_expressions: &OccurenceMap) -> String {
     // collect lines preserving newline characters
@@ -57,7 +62,7 @@ fn visualise_annotations(text: &str, repeated_expressions: &OccurenceMap) -> Str
         if has_other_side_effects(expr) {
             continue;
         }
-        for ((sl, sc), (el, ec)) in occs.iter().map(Range::destruct) {
+        for ((sl, sc), (el, ec)) in occs.iter().map(|(_, r)| r.destruct()) {
             if sl == 0 || el == 0 {
                 continue;
             }
