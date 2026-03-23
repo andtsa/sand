@@ -94,7 +94,7 @@ impl ProgramModule {
             }
         };
 
-        let dm = ctx.default_module(file)?;
+        let dm = ctx.default_module(file);
 
         let map = build_program(ctx, program_pair, src, dm, file)?;
         Ok(map
@@ -107,7 +107,7 @@ impl ProgramModule {
     }
 
     pub fn parse_stub<'run>(ctx: &mut CompileCtx<'run>, src: &str) -> Result<Self, AstError> {
-        let fr = ctx.register_dummy_file();
+        let fr = ctx.dummy_file();
         let modules = Self::parse_source_file(ctx, src, fr)?;
         if modules.len() == 1 {
             Ok(modules.into_iter().next().unwrap())
@@ -761,7 +761,7 @@ fn build_primary<'run>(
         Rule::expression => build_expr(ctx, inner, src),
         Rule::ifstatement => build_if(ctx, inner, src),
         Rule::whileloop => build_while(ctx, inner, src),
-        Rule::function_call => build_call(ctx, inner, src),
+        Rule::function_call | Rule::external_function_call => build_call(ctx, inner, src),
         Rule::number => {
             let s = inner.as_str().to_string();
             let v = s.parse::<i64>().map_err(|_| AstError::InvalidInteger {

@@ -2,8 +2,8 @@
 //!
 //! each pass takes in one IR and produces another (possibly the same) IR.
 
+pub mod cfgmir;
+pub mod display;
 pub mod hhir;
 pub mod qhir;
-// pub mod ssa;
-pub mod cfgmir;
 pub mod typed_hir;

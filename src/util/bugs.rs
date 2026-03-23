@@ -2,7 +2,11 @@
 
 #[track_caller]
 pub fn internal_bug_fmt(args: std::fmt::Arguments<'_>) -> ! {
-    panic!("internal compiler bug: {}", args);
+    panic!(
+        "internal compiler bug: {}\nfrom: {}",
+        args,
+        std::panic::Location::caller()
+    );
 }
 
 #[macro_export]

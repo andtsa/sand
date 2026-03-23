@@ -1,4 +1,3 @@
-
 def mod(a: Int, m: Int): Int :=
     a - (a / m) * m
 
@@ -62,7 +61,6 @@ def modexp(base: Int, exp: Int, m: Int): Int :=
 
     result
 }
-
 
 def rsa_encrypt(msg: Int): Int :=
 {

@@ -17,11 +17,11 @@ wip
 
 **output:**
 ```
-Map<FileName, CodeFile>,
+Map<FileRef, CodeFile>,
 Config
 ```
 
-status: not implemented
+status: partially implemented in the LSP module, but still scattered between compiler/context.rs and lsp/. probably need to unify those two or make a separate module.
 
 ### parse files
 
@@ -32,10 +32,10 @@ input: previous pass
 
 output:
 ```
-Map<FileName, Result<Pairs<'i, Rule>, Error<Rule>>>
+Map<FileRef, Result<Pairs<'i, Rule>, Error<Rule>>>
 ```
 
-status: parsing implemented with pest, no file handling exists
+status: parsing implemented with pest, currently this is combined with the pass below, I don't think it's worth it to separate them.
 
 ### build ASTs
 
@@ -47,10 +47,9 @@ output:
 ```
 Map<FileName, Result<Map<FnName, Function>, AstError>>
 Map<FnName, FnSig>
-
 ```
 
-status: implemented for single file
+status: implemented but with newer signatures; need to update documentation to reflect changes
 
 ### qualify functions
 input: 
@@ -73,7 +72,7 @@ Map<FileName, Result<Map<FnName, Function>, QfError>>
 Map<FnName, FnSig>
 ```
 
-status: not implemented as a pass, but function name uniquifying exists in the uniquify step
+status: implemented but with slightly different semantics, need to update documentation
 
 ### merge modules
 input: 
@@ -90,7 +89,7 @@ Map<FnName, FnSig>
 
 this might not be a separate pass as it is very small.
 
-status: not implemented
+status: implemented as a first step of the previous pass
 
 ### uniquify function bodies
 input:
@@ -107,7 +106,7 @@ Map<FnName, Result<Function, UniquifyError>>
 Map<FnName, FnSig>
 ```
 
-status: done but needs refactoring to separate out uniquifying function names
+status: done, currently a substep of the qualify pass
 
 ### build typed ast
 
@@ -123,7 +122,7 @@ TypedProgram
 AstTypeError
 ```
 
-status: done but needs cleaning up
+status: done
 
 ### type check
 
@@ -143,12 +142,11 @@ status: basic implementation done
 ## todo
 
 - a LOT.
-- resolve function calls in one place
-- split uniquify pass into one for function names and one for variable names
-- ...
-- add module system
-- ...
-- SSA pass
+- fix LSP,
+- improve diagnostics
+- MIR lowering (explicate control)
+- SSA MIR
 - ...
 - llvm codegen
+- write more tests
 

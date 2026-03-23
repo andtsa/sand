@@ -28,7 +28,7 @@ fn main() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("failed to read input file {}: {}", input_file, e))?;
 
     let mut ctx = CompileCtx::initial();
-    let fr = ctx.register_dummy_file();
+    let fr = ctx.dummy_file();
     let ast = compile_hir(Map::from([(fr, program_src.as_str())]), &mut ctx)?;
     let annotations = analyse(&ctx, &ast);
 

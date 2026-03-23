@@ -1,10 +1,16 @@
 //! helper methods
 
+use bimap::BiBTreeMap;
 use pest::error::LineColLocation;
 use tower_lsp::lsp_types::*;
 
+use crate::compiler::context::CompileCtx;
+use crate::compiler::structure::FileRef;
+use crate::compiler::structure::ModuleRef;
 use crate::compiler::structure::Pos;
 use crate::compiler::structure::Range as LangRange;
+use crate::lsp::LastCompilation;
+use crate::lsp::diagnostics::Diagnostics;
 use crate::passes::parse::Rule;
 
 pub(super) fn lsp_position_from_pest(text: &str, pos: Pos) -> Position {
@@ -53,4 +59,22 @@ pub(super) fn parse_error_to_diagnostic(text: &str, err: pest::error::Error<Rule
         message: err.variant.message().into(),
         ..Default::default()
     }
+}
+
+impl<'run> LastCompilation<'run> {
+    pub fn diagnostics(&self) -> &Diagnostics {
+        match self {
+            LastCompilation::Success { diagnostics, .. } => diagnostics,
+            LastCompilation::Failure { diagnostics } => diagnostics,
+        }
+    }
+}
+
+pub(super) fn url_of_module_unchecked(
+    module: ModuleRef,
+    ctx: &CompileCtx,
+    file_map: &BiBTreeMap<Url, FileRef>,
+) -> Url {
+    let file = ctx.file_of_module(module);
+    file_map.get_by_right(&file).cloned().unwrap()
 }

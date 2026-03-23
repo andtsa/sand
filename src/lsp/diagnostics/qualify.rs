@@ -1,15 +1,19 @@
 //! convert qualify errors to LSP diagnostics
 
+use bimap::BiBTreeMap;
 use tower_lsp::lsp_types::*;
 
 use crate::compiler::context::CompileCtx;
+use crate::compiler::structure::FileRef;
 use crate::lsp::diagnostics::Diagnostics;
 use crate::lsp::diagnostics::uniquify::uniquify_error_to_diagnostic;
 use crate::lsp::util::lsp_range_from_pest;
+use crate::lsp::util::url_of_module_unchecked;
 use crate::passes::qualify::error::QualifyError;
 
 pub fn qualify_error_to_diagnostics(
     ctx: &CompileCtx,
+    file_map: &BiBTreeMap<Url, FileRef>,
     uri: Url,
     text: &str,
     err: QualifyError,
@@ -52,14 +56,14 @@ pub fn qualify_error_to_diagnostics(
             let links = vec![
                 DiagnosticRelatedInformation {
                     location: Location {
-                        uri: ctx.url_of_module(first_module.index),
+                        uri: url_of_module_unchecked(first_module.index, ctx, file_map),
                         range: lsp_range_from_pest(text, first),
                     },
                     message: "first main function is here".to_string(),
                 },
                 DiagnosticRelatedInformation {
                     location: Location {
-                        uri: ctx.url_of_module(second_module.index),
+                        uri: url_of_module_unchecked(second_module.index, ctx, file_map),
                         range: lsp_range_from_pest(text, second),
                     },
                     message: "second main function is here".to_string(),

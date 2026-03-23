@@ -1,8 +1,9 @@
-//! run a program
+//! lower a source file to CFG-MIR and print it
 
 use sand::compile_hir;
 use sand::compiler::context::CompileCtx;
 use sand::compiler::structure::Map;
+use sand::ir_types::cfgmir::MirProgram;
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -11,15 +12,15 @@ fn main() -> anyhow::Result<()> {
         std::process::exit(1);
     }
 
-    let input_file = &args[1];
-    let program_src = std::fs::read_to_string(input_file)
-        .map_err(|e| anyhow::anyhow!("failed to read input file {}: {}", input_file, e))?;
+    let src = std::fs::read_to_string(&args[1])
+        .map_err(|e| anyhow::anyhow!("failed to read {}: {}", args[1], e))?;
 
     let mut ctx = CompileCtx::initial();
     let fr = ctx.dummy_file();
-    let ast = compile_hir(Map::from([(fr, program_src.as_str())]), &mut ctx)?;
+    let ast = compile_hir(Map::from([(fr, src.as_str())]), &mut ctx)?;
+    let mir = MirProgram::from_typed_program(&ast);
 
-    println!("{:?}", ast.interpret(&ctx));
+    print!("{}", mir.dump(&ctx));
 
     Ok(())
 }

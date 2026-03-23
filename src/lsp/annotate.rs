@@ -1,7 +1,5 @@
 //! generate diagnostics for expression annotation
 
-use std::ops::Deref;
-
 use tower_lsp::lsp_types::Diagnostic;
 use tower_lsp::lsp_types::DiagnosticSeverity;
 use tower_lsp::lsp_types::MessageType;
@@ -9,6 +7,7 @@ use tower_lsp::lsp_types::MessageType;
 use crate::analysis::ProgramAnnotations;
 use crate::analysis::analyse;
 use crate::analysis::interactions::has_other_side_effects;
+use crate::compiler::context::CompileCtx;
 use crate::ir_types::typed_hir::TypedProgram;
 use crate::lsp::Backend;
 use crate::lsp::diagnostics::Diagnostics;
@@ -36,8 +35,24 @@ impl Backend<'_> {
     /// ```
     /// in this example, both instances of `x ^ x` should be highlighted,
     /// indicating a reused value
-    pub async fn annotate_reused_expressions(&self, ast: &TypedProgram) -> Diagnostics {
-        let annotations: ProgramAnnotations = analyse(self.context.read().await.deref(), ast);
+    pub async fn annotate_reused_expressions<'run, 'lsp>(
+        &'run self,
+        ctx: &'run CompileCtx<'lsp>,
+        ast: &TypedProgram,
+    ) -> Diagnostics {
+        self.log(
+            MessageType::LOG,
+            "analyzing expressions for reuse patterns".to_string(),
+        )
+        .await;
+
+        let annotations: ProgramAnnotations = analyse(ctx, ast);
+        let expr_count = annotations.expr_occurrences.len();
+        self.log(
+            MessageType::LOG,
+            format!("found {} expressions to analyze", expr_count),
+        )
+        .await;
 
         // produce diagnostics for keys with more than one occurrence
         let mut diagnostics: Diagnostics = Diagnostics::default();
@@ -52,12 +67,13 @@ impl Backend<'_> {
             }
 
             for (module, range) in occs {
-                let Some(uri) = self.modules.read().await.get(&module).cloned() else {
-                    self.log(MessageType::ERROR, format!("module {module:?} not found"))
-                        .await;
-                    continue;
-                };
-                if let Some(text) = self.project_files.read().await.get(&uri) {
+                let uri = self
+                    .context
+                    .read()
+                    .await
+                    .url_of_file(ctx.file_of_module(module))
+                    .clone();
+                if let Some(text) = self.file_contents.read().await.get(&uri) {
                     let range = lsp_range_from_pest(text, range);
 
                     let message = format!("reused expression: {:?}", e.expr);

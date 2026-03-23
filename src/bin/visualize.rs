@@ -16,7 +16,7 @@ fn main() -> anyhow::Result<()> {
 
     let src = fs::read_to_string(&args[1])?;
     let mut ctx = CompileCtx::initial();
-    let fr = ctx.register_dummy_file();
+    let fr = ctx.dummy_file();
     let ast = compile_hir(Map::from([(fr, src.as_str())]), &mut ctx)?;
     let cfg = cfg::construct_cfg(&ctx, &ast);
 

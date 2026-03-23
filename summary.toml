@@ -1,0 +1,29 @@
+name = "sand compiler"
+root = "."
+files = [
+    "README.md",
+    "Cargo.toml",
+    "lsp_wrapper.sh",
+    "rustfmt.toml",
+]
+directories = [
+    "src",
+    "examples",
+    "tests"
+]
+
+extensions = [
+    "rs",
+    "toml",
+    "md",
+    "sh",
+    "pest",
+    "scm",
+]
+
+exclude = [
+    "target/**",
+    "**/*.lock",
+    "temp/**"
+]
+

@@ -11,30 +11,46 @@ use crate::lsp::Backend;
 
 impl Backend<'_> {
     pub async fn register_file(&self, uri: Url, content: String) {
-        self.project_files
+        self.log(
+            tower_lsp::lsp_types::MessageType::LOG,
+            format!("registering file: {}", uri),
+        )
+        .await;
+
+        self.file_contents
             .write()
             .await
-            .insert(uri.clone(), content);
-        let fr = match self.context.write().await.register_file(uri.clone()) {
-            Ok(fr) => fr,
+            .insert(uri.clone(), content.clone());
+
+        match self.context.write().await.register_file(uri.clone()) {
+            Ok(fr) => {
+                self.log(
+                    tower_lsp::lsp_types::MessageType::LOG,
+                    format!("successfully registered file with ref: {:?}", fr),
+                )
+                .await;
+            }
             Err(e) => {
-                self.project_files.write().await.remove(&uri);
+                self.log(
+                    tower_lsp::lsp_types::MessageType::ERROR,
+                    format!("failed to register file in context: {}", e),
+                )
+                .await;
+                self.file_contents.write().await.remove(&uri);
                 self.client
                     .publish_diagnostics(
-                        uri,
+                        uri.clone(),
                         vec![Diagnostic {
                             range: Default::default(),
                             message: e.to_string(),
-                            severity: None,
+                            severity: Some(tower_lsp::lsp_types::DiagnosticSeverity::ERROR),
                             ..Default::default()
                         }],
                         None,
                     )
                     .await;
-                return;
             }
         };
-        self.files.write().await.insert(uri, fr);
     }
 }
 

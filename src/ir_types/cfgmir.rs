@@ -1,9 +1,9 @@
 //! a CFG MIR
 
-use crate::compiler::structure::FnName;
+use crate::compiler::structure::FunRef;
 use crate::compiler::structure::Map;
 use crate::compiler::structure::Range;
-use crate::compiler::structure::VarName;
+use crate::compiler::structure::UniqVar;
 use crate::lang::intrinsics::Intrinsic;
 use crate::lang::ops::*;
 use crate::lang::types::Ty;
@@ -16,12 +16,12 @@ pub struct LocalId(pub usize);
 
 #[derive(Debug, Clone)]
 pub struct MirProgram {
-    pub functions: Map<FnName, MirFunction>,
+    pub functions: Map<FunRef, MirFunction>,
 }
 
 #[derive(Debug, Clone)]
 pub struct MirFunction {
-    pub name: FnName,
+    pub name: FunRef,
     pub range: Range,
     pub params: Vec<MirParam>,
     pub ret_type: Ty,
@@ -34,15 +34,23 @@ pub struct MirFunction {
 #[derive(Debug, Clone)]
 pub struct MirParam {
     pub local: LocalId,
-    pub name: VarName,
+    pub name: UniqVar,
     pub ty: Ty,
     pub range: Range,
 }
 
 #[derive(Debug, Clone)]
+pub enum LocalName {
+    /// traceable back to source via CompileCtx
+    User(UniqVar),
+    /// index for uniqueness, hint for readability
+    Temp(usize, &'static str),
+}
+
+#[derive(Debug, Clone)]
 pub struct LocalDecl {
     pub id: LocalId,
-    pub name: VarName,
+    pub name: LocalName,
     pub ty: Ty,
     pub range: Range,
 }
@@ -119,7 +127,7 @@ pub enum RValue {
     },
 
     Call {
-        fn_name: FnName,
+        fn_name: FunRef,
         args: Vec<Operand>,
     },
 

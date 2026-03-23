@@ -6,9 +6,7 @@ use std::marker::PhantomData;
 
 use pest::iterators::Pair;
 use thiserror::Error;
-use tower_lsp::lsp_types::Url;
 
-use crate::compiler::structure::CodeFile;
 use crate::compiler::structure::CodeModule;
 use crate::compiler::structure::FileRef;
 use crate::compiler::structure::FunRef;
@@ -19,13 +17,10 @@ use crate::compiler::structure::ModuleRef;
 use crate::compiler::structure::OriginalFun;
 use crate::compiler::structure::OriginalVar;
 use crate::compiler::structure::OriginalVarRef;
-use crate::compiler::structure::ProjectConfig;
 use crate::compiler::structure::Range;
 use crate::compiler::structure::Set;
 use crate::compiler::structure::UniqVar;
-use crate::compiler::structure::UriError;
 use crate::compiler::structure::VarName;
-use crate::compiler::structure::uri_name;
 use crate::lang::types::Ty;
 use crate::passes::parse::Rule;
 
@@ -44,16 +39,11 @@ pub struct CompileCtx<'run> {
     function_signatures: Map<FunRef, FunSig>,
     pub entrypoint: Option<FunRef>,
 
-    // project and files
-    #[allow(dead_code)]
-    project_config: ProjectConfig,
-    code_files: Vec<CodeFile>,
-
     // modules
     project_modules: Vec<CodeModule>,
 
     // defaults
-    default_file: Option<FileRef>,
+    file_defaults: Map<FileRef, ModuleRef>,
     default_module: Option<ModuleRef>,
 
     phantom: PhantomData<&'run ()>,
@@ -84,11 +74,12 @@ impl<'run> CompileCtx<'run> {
             global_functions: Default::default(),
             function_signatures: Default::default(),
             entrypoint: None,
-            project_config: Default::default(),
-            code_files: Vec::new(),
+            // project_config: Default::default(),
+            // code_files: Vec::new(),
             project_modules: Default::default(),
             default_module: None,
-            default_file: None,
+            file_defaults: Default::default(),
+            // default_file: None,
             phantom: Default::default(),
         }
     }
@@ -221,6 +212,25 @@ impl<'run> CompileCtx<'run> {
         mr
     }
 
+    pub fn default_module(&mut self, for_file: FileRef) -> ModuleRef {
+        if let Some(dm) = self.file_defaults.get(&for_file) {
+            *dm
+        } else {
+            let name = format!("{DEFAULT_MODULE_NAME}_{}", for_file.0);
+            let mr = self.register_module(&name, for_file);
+            self.file_defaults.insert(for_file, mr);
+            mr
+        }
+    }
+
+    /// return a reference to a dummy file.
+    /// this should ONLY EVER be invoked at the start of a file-less
+    /// compilation.
+    pub fn dummy_file(&self) -> FileRef {
+        assert!(self.project_modules.is_empty());
+        FileRef(69420)
+    }
+
     pub fn get_mod_by_name(&self, name: &str) -> Option<ModuleRef> {
         self.project_modules
             .iter()
@@ -236,62 +246,7 @@ impl<'run> CompileCtx<'run> {
         }
     }
 
-    // ============================ Files ==============================
-    pub fn register_file(&mut self, uri: Url) -> Result<FileRef, UriError> {
-        let idx = self.code_files.len();
-        let fr = FileRef(idx);
-        let name = uri_name(&uri)?;
-        let cf = CodeFile {
-            uri,
-            name,
-            index: fr,
-            default_module: None,
-        };
-        self.code_files.push(cf);
-
-        Ok(fr)
-    }
-
-    pub fn register_dummy_file(&mut self) -> FileRef {
-        let idx = self.code_files.len();
-        let fr = FileRef(idx);
-        let cf = CodeFile {
-            uri: Url::parse("dummy:///tmp/internal/sand_dummy_file.sand").unwrap(),
-            name: "sand_dummy_file".to_string(),
-            index: fr,
-            default_module: None,
-        };
-        self.code_files.push(cf);
-        fr
-    }
-
-    pub fn default_module(&mut self, for_file: FileRef) -> Result<ModuleRef, UriError> {
-        let cf = &self.code_files[for_file.0];
-        if let Some(dm) = cf.default_module {
-            Ok(dm)
-        } else {
-            let name = uri_name(&cf.uri)?;
-            let mr = self.register_module(&name, for_file);
-            self.code_files[for_file.0].default_module = Some(mr);
-            Ok(mr)
-        }
-    }
-
-    pub fn default_file(&mut self, uri: Url) -> Result<FileRef, UriError> {
-        if let Some(fr) = self.default_file {
-            Ok(fr)
-        } else {
-            let fr = self.register_file(uri)?;
-            self.default_file = Some(fr);
-            Ok(fr)
-        }
-    }
-
-    pub fn url_of_file(&self, file: FileRef) -> Url {
-        self.code_files[file.0].uri.clone()
-    }
-
-    pub fn url_of_module(&self, mr: ModuleRef) -> Url {
-        self.url_of_file(self.project_modules[mr.0].from_file)
+    pub fn file_of_module(&self, mr: ModuleRef) -> FileRef {
+        self.project_modules[mr.0].from_file
     }
 }
