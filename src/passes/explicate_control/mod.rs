@@ -1,9 +1,9 @@
-//! explicate control of our functional language to construct the CFG-MIR from
+//! explicate control of our functional language to construct the MIR from
 //! an AST
 
 pub mod context;
 
-use crate::ir_types::cfgmir::*;
+use crate::ir_types::mir::*;
 use crate::ir_types::typed_hir as th;
 use crate::passes::explicate_control::context::FnCx;
 

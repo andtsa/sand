@@ -5,7 +5,7 @@ use sand::compile_hir;
 use sand::compiler::context::CompileCtx;
 use sand::compiler::structure::Map;
 use sand::interpreter::mir::MirValue;
-use sand::ir_types::cfgmir::MirProgram;
+use sand::ir_types::mir::MirProgram;
 use sand::ir_types::typed_hir::Expression;
 
 pub fn open_example_from_file(name: &str) -> String {

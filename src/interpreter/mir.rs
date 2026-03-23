@@ -3,7 +3,7 @@
 use crate::compiler::context::CompileCtx;
 use crate::compiler::structure::FunRef;
 use crate::internal_bug;
-use crate::ir_types::cfgmir::*;
+use crate::ir_types::mir::*;
 use crate::lang::intrinsics::Intrinsic;
 use crate::lang::ops::Bop;
 use crate::lang::ops::CompOp;
@@ -16,25 +16,16 @@ pub enum MirValue {
     Unit,
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum MirInterpError {
+    #[error("no entry point found")]
     NoEntryPoint,
+    #[error("uninitialized local: {0:?}")]
     UninitializedLocal(LocalId),
+    #[error("division by zero")]
     DivisionByZero,
+    #[error("reached unreachable terminator")]
     Unreachable,
-}
-
-impl std::fmt::Display for MirInterpError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            MirInterpError::NoEntryPoint => write!(f, "no entry point found"),
-            MirInterpError::UninitializedLocal(id) => {
-                write!(f, "uninitialized local: {:?}", id)
-            }
-            MirInterpError::DivisionByZero => write!(f, "division by zero"),
-            MirInterpError::Unreachable => write!(f, "reached unreachable terminator"),
-        }
-    }
 }
 
 impl MirProgram {
@@ -98,7 +89,7 @@ impl MirProgram {
 
 fn execute_statement(
     stmt: &Statement,
-    locals: &mut Vec<Option<MirValue>>,
+    locals: &mut [Option<MirValue>],
     prog: &MirProgram,
 ) -> Result<(), MirInterpError> {
     match stmt {

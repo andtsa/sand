@@ -5,7 +5,7 @@ use crate::compiler::structure::Map;
 use crate::compiler::structure::Range;
 use crate::compiler::structure::UniqVar;
 use crate::internal_bug;
-use crate::ir_types::cfgmir::*;
+use crate::ir_types::mir::*;
 use crate::ir_types::typed_hir as th;
 use crate::lang::ops::Bop;
 use crate::lang::ops::Uop;

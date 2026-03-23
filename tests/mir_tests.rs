@@ -1,4 +1,4 @@
-//! Tests for the CFG-MIR:
+//! Tests for the MIR:
 //!   - structural tests on the lowered MIR (block counts, locals, entry point)
 //!   - MIR interpreter correctness
 //!   - cross-checks that the MIR and typed-HIR interpreters agree
@@ -11,8 +11,8 @@ use sand::compiler::context::CompileCtx;
 use sand::compiler::structure::Map;
 use sand::interpreter::mir::MirInterpError;
 use sand::interpreter::mir::MirValue;
-use sand::ir_types::cfgmir::MirProgram;
-use sand::ir_types::cfgmir::Terminator;
+use sand::ir_types::mir::MirProgram;
+use sand::ir_types::mir::Terminator;
 use sand::ir_types::typed_hir::Expression;
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -231,7 +231,7 @@ mod mir_structure_tests {
         let user_locals = func
             .locals
             .iter()
-            .filter(|l| matches!(l.name, sand::ir_types::cfgmir::LocalName::User(_)))
+            .filter(|l| matches!(l.name, sand::ir_types::mir::LocalName::User(_)))
             .count();
         assert!(
             user_locals >= 2,

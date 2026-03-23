@@ -1,9 +1,9 @@
-//! lower a source file to CFG-MIR and print it
+//! lower a source file to MIR and print it
 
 use sand::compile_hir;
 use sand::compiler::context::CompileCtx;
 use sand::compiler::structure::Map;
-use sand::ir_types::cfgmir::MirProgram;
+use sand::ir_types::mir::MirProgram;
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();

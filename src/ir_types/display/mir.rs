@@ -3,7 +3,7 @@
 use std::fmt::Write as _;
 
 use crate::compiler::context::CompileCtx;
-use crate::ir_types::cfgmir::*;
+use crate::ir_types::mir::*;
 
 impl std::fmt::Display for BlockId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
