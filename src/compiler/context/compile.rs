@@ -212,6 +212,12 @@ impl<'run> CompileCtx<'run> {
         mr
     }
 
+    pub fn create_default_module(&mut self, for_file: FileRef, name: &str) -> ModuleRef {
+        let mr = self.register_module(name, for_file);
+        self.file_defaults.insert(for_file, mr);
+        mr
+    }
+
     pub fn default_module(&mut self, for_file: FileRef) -> ModuleRef {
         if let Some(dm) = self.file_defaults.get(&for_file) {
             *dm

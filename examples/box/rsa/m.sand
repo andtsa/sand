@@ -1,0 +1,63 @@
+def mod(a: Int, m: Int): Int :=
+    a - (a / m) * m
+
+def gcd(a: Int, b: Int): Int :=
+{
+    let x: Int = a;
+    let y: Int = b;
+
+    while y != 0 do {
+        let t: Int = y;
+        y = mod(x, y);
+        x = t;
+    };
+
+    x
+}
+
+
+def modinv(a: Int, m: Int): Int :=
+{
+    let t: Int = 0;
+    let newt: Int = 1;
+    let r: Int = m;
+    let newr: Int = a;
+
+    while newr != 0 do {
+        let q: Int = r / newr;
+
+        let tmp_t: Int = t - q * newt;
+        t = newt;
+        newt = tmp_t;
+
+        let tmp_r: Int = r - q * newr;
+        r = newr;
+        newr = tmp_r;
+    };
+
+    if r > 1 then
+        0 // not invertible
+    else {
+        if t < 0 then { t = t + m; };
+        t
+    }
+}
+
+
+def modexp(base: Int, exp: Int, m: Int): Int :=
+{
+    let result: Int = 1;
+    let b: Int = mod(base, m);
+    let e: Int = exp;
+
+    while e > 0 do {
+        if mod(e, 2) == 1 then {
+            result = mod(result * b, m);
+        };
+
+        b = mod(b * b, m);
+        e = e / 2;
+    };
+
+    result
+}

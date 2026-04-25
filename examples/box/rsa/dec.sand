@@ -1,0 +1,13 @@
+def rsa_decrypt(cipher: Int): Int :=
+{
+    let p: Int = 61;
+    let q: Int = 53;
+
+    let n: Int = p * q;
+    let phi: Int = (p - 1) * (q - 1);
+
+    let e: Int = 17;
+    let d: Int = m::modinv(e, phi);
+
+    m::modexp(cipher, d, n)
+}

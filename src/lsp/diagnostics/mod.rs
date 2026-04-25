@@ -1,72 +1,46 @@
 //! generate diagnostics from top-level compiler error `SandError`
 
-pub mod ast;
-pub mod qualify;
-pub mod typecheck;
-pub mod uniquify;
-
 use bimap::BiBTreeMap;
 use tower_lsp::lsp_types::*;
 
-use crate::SandError;
-use crate::SandErrorContext;
-use crate::SandErrorSource;
+use crate::SandLangError;
+use crate::SandLangErrorContext;
 use crate::compiler::context::CompileCtx;
+use crate::compiler::diagnostics::SandDiagnostic;
 use crate::compiler::structure::FileRef;
-use crate::compiler::structure::Map;
 use crate::lsp::Backend;
-use crate::lsp::diagnostics::ast::ast_error_to_diagnostics;
-use crate::lsp::diagnostics::qualify::qualify_error_to_diagnostics;
-use crate::lsp::diagnostics::typecheck::type_error_to_diagnostic;
+use crate::lsp::util::sand_diagnostic_to_lsp;
 use crate::lsp::util::url_of_module_unchecked;
 
-// todo: unimplement clone
-#[derive(Debug, Default, Clone)]
-pub struct Diagnostics {
-    pub map: Map<Url, Vec<Diagnostic>>,
-}
-
-impl Diagnostics {
-    pub fn add(&mut self, uri: Url, mut diagnostics: Vec<Diagnostic>) {
-        self.map
-            .entry(uri.clone())
-            .and_modify(|e| e.append(&mut diagnostics))
-            .or_insert(diagnostics);
-    }
-    pub fn add_one(&mut self, uri: Url, diagnostic: Diagnostic) {
-        self.map
-            .entry(uri)
-            .and_modify(|e| e.push(diagnostic.clone()))
-            .or_insert(vec![diagnostic]);
-    }
-    pub fn single(uri: Url, diagnostic: Diagnostic) -> Self {
-        Self {
-            map: Map::from([(uri, vec![diagnostic])]),
-        }
-    }
-}
+pub(super) type Diagnostics = crate::compiler::diagnostics::Diagnostics<Url, Diagnostic>;
 
 pub fn sand_source_diagnostics(
     ctx: &CompileCtx,
     file_map: &BiBTreeMap<Url, FileRef>,
-    uri: Url,
     text: &str,
-    sand_err: SandErrorSource,
+    sand_err: SandLangError,
 ) -> Diagnostics {
-    match sand_err {
-        SandErrorSource::AstParseError(err) => ast_error_to_diagnostics(ctx, uri, text, err),
-        SandErrorSource::QualifyError(err) => {
-            qualify_error_to_diagnostics(ctx, file_map, uri, text, err)
+    let sand_diagnostics = SandDiagnostic::from_compiler_error(ctx, sand_err);
+    let mut diagnostics = Diagnostics::default();
+    for (file, diag) in sand_diagnostics.map {
+        let url = file_map.get_by_right(&file).cloned();
+        if let Some(u) = url {
+            diagnostics.add(
+                u.clone(),
+                diag.into_iter()
+                    .map(|d| sand_diagnostic_to_lsp(text, d, u.clone()))
+                    .collect(),
+            );
         }
-        SandErrorSource::TypeError(err) => type_error_to_diagnostic(ctx, uri, text, err),
     }
+    diagnostics
 }
 
 impl<'lsp> Backend<'lsp> {
     async fn uri_of_context(
         &self,
         ctx: &CompileCtx<'lsp>,
-        context: &SandErrorContext,
+        context: &SandLangErrorContext,
     ) -> Option<Url> {
         match (context.module, context.file) {
             (Some(mr), _) => {
@@ -129,7 +103,7 @@ impl<'lsp> Backend<'lsp> {
     pub async fn sand_diagnostics(
         &self,
         ctx: &CompileCtx<'lsp>,
-        sand_err: SandError,
+        sand_err: SandLangError,
     ) -> Diagnostics {
         self.log(
             MessageType::LOG,
@@ -137,11 +111,13 @@ impl<'lsp> Backend<'lsp> {
         )
         .await;
 
-        let SandError { source, context } = sand_err;
-        let Some(uri) = self.uri_of_context(ctx, &context).await else {
+        let Some(uri) = self.uri_of_context(ctx, &sand_err.context).await else {
             self.log(
                 MessageType::ERROR,
-                format!("cannot resolve error context for error: {:?}", context),
+                format!(
+                    "cannot resolve error context for error: {:?}",
+                    sand_err.context
+                ),
             )
             .await;
             return Diagnostics::default();
@@ -159,7 +135,7 @@ impl<'lsp> Backend<'lsp> {
                 format!("converting source diagnostics for {}", uri),
             )
             .await;
-            sand_source_diagnostics(ctx, &self.context.read().await.files, uri, text, source)
+            sand_source_diagnostics(ctx, &self.context.read().await.files, text, sand_err)
         } else {
             self.log(
                 MessageType::WARNING,
@@ -173,7 +149,7 @@ impl<'lsp> Backend<'lsp> {
     pub async fn sand_individual_diagnostics(
         &self,
         ctx: &CompileCtx<'lsp>,
-        sand_err: SandError,
+        sand_err: SandLangError,
     ) -> Diagnostics {
         self.log(
             MessageType::LOG,
@@ -181,13 +157,12 @@ impl<'lsp> Backend<'lsp> {
         )
         .await;
 
-        let SandError { source, context } = sand_err;
-        let Some(uri) = self.uri_of_context(ctx, &context).await else {
+        let Some(uri) = self.uri_of_context(ctx, &sand_err.context).await else {
             self.log(
                 MessageType::ERROR,
                 format!(
                     "cannot resolve error context for standalone file error: {:?}",
-                    context
+                    sand_err.context
                 ),
             )
             .await;
@@ -203,9 +178,8 @@ impl<'lsp> Backend<'lsp> {
             sand_source_diagnostics(
                 ctx,
                 &self.context.read().await.files,
-                uri,
                 text.as_str(),
-                source,
+                sand_err,
             )
         } else {
             self.log(

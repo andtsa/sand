@@ -13,6 +13,7 @@ use crate::ir_types::typed_hir;
 use crate::ir_types::typed_hir::TypedProgram;
 
 pub mod analysis;
+pub mod castles;
 pub mod compiler;
 pub mod interpreter;
 pub mod ir_types;
@@ -25,19 +26,19 @@ pub use util::bugs::*;
 
 #[derive(Debug, Error)]
 #[error("compilation error: {source}")]
-pub struct SandError {
-    pub context: SandErrorContext,
-    pub source: SandErrorSource,
+pub struct SandLangError {
+    pub context: SandLangErrorContext,
+    pub source: SandLangErrorSource,
 }
 
 #[derive(Debug, Default)]
-pub struct SandErrorContext {
+pub struct SandLangErrorContext {
     pub module: Option<ModuleRef>,
     pub file: Option<FileRef>,
 }
 
 #[derive(Debug, Error)]
-pub enum SandErrorSource {
+pub enum SandLangErrorSource {
     #[error("parse error: {0}")]
     AstParseError(#[from] passes::build_ast::AstError),
 
@@ -51,10 +52,13 @@ pub enum SandErrorSource {
 pub fn compile_hir<'run, 'proj>(
     code: Map<FileRef, &'_ str>,
     ctx: &'run mut CompileCtx<'proj>,
-) -> Result<TypedProgram, SandError> {
+) -> Result<TypedProgram, SandLangError> {
+    let span = tracing::warn_span!("compile_hir");
+    let _enter = span.enter();
+
     let mut modules = Vec::new();
     for (file, source) in code {
-        let err_ctx = SandErrorContext {
+        let err_ctx = SandLangErrorContext {
             module: None,
             file: Some(file),
         };
@@ -64,16 +68,25 @@ pub fn compile_hir<'run, 'proj>(
         );
     }
 
+    tracing::trace!(
+        "{} modules: {:?}",
+        modules.len(),
+        modules
+            .iter()
+            .map(|m| ctx.module_info(&m.module_name))
+            .collect::<Vec<_>>()
+    );
+
     let program = qhir::Program::combine(ctx, modules)
-        .map_err(|e| SandErrorContext::with_module(e.source_module().index).wrap_err(e))?;
+        .map_err(|e| SandLangErrorContext::with_module(e.source_module().index).wrap_err(e))?;
 
     let typed_program = typed_hir::TypedProgram::from_ast_program(ctx, program)
-        .map_err(|e| SandErrorContext::with_module(e.module).wrap_err(e.error))?;
+        .map_err(|e| SandLangErrorContext::with_module(e.module).wrap_err(e.error))?;
 
     Ok(typed_program)
 }
 
-impl SandErrorContext {
+impl SandLangErrorContext {
     pub fn with_module(module: ModuleRef) -> Self {
         Self {
             module: Some(module),
@@ -81,8 +94,8 @@ impl SandErrorContext {
         }
     }
 
-    pub fn wrap_err<E: Into<SandErrorSource>>(self, err: E) -> SandError {
-        SandError {
+    pub fn wrap_err<E: Into<SandLangErrorSource>>(self, err: E) -> SandLangError {
+        SandLangError {
             context: self,
             source: err.into(),
         }

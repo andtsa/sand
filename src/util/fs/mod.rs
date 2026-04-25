@@ -1,0 +1,57 @@
+//! wrapper for interacting with some file system
+//!
+//! The code in this module is borrowed from [the `gourd` project](https://github.com/ConSol-Lab/gourd),
+//! with this specific code originally authored by Mikołaj Gazeel and Lukáš
+//! Chladek
+
+pub mod error;
+pub mod real_fs;
+
+use std::path::Path;
+use std::path::PathBuf;
+
+use serde::Serialize;
+use serde::de::DeserializeOwned;
+
+use crate::util::fs::error::FsError;
+
+pub trait FileOperations {
+    /// Read a file into raw bytes.
+    fn read_bytes(&self, path: &Path) -> Result<Vec<u8>, FsError>;
+
+    /// Read a file into a utf8 string.
+    fn read_utf8(&self, path: &Path) -> Result<String, FsError>;
+
+    /// Read a file into a utf8 string, return
+    /// (user-friendly file name, file contents)
+    fn read_file(&self, path: &Path) -> Result<(String, String), FsError>;
+
+    /// Try to deserialize a toml file into a struture `T`.
+    fn try_read_toml<T: DeserializeOwned>(&self, path: &Path) -> Result<T, FsError>;
+
+    /// Try to serialize a struct `T` into a toml file.
+    fn try_write_toml<T: Serialize>(&self, path: &Path, data: &T) -> Result<(), FsError>;
+
+    /// Write all bytes to a file.
+    fn write_bytes_truncate(&self, path: &Path, bytes: &[u8]) -> Result<(), FsError>;
+
+    /// Write a [String] to a file.
+    fn write_utf8_truncate(&self, path: &Path, data: &str) -> Result<(), FsError>;
+
+    /// Truncates the file and then runs [FileOperations::canonicalize].
+    fn truncate_and_canonicalize(&self, path: &Path) -> Result<PathBuf, FsError>;
+
+    /// Truncates the folder and then runs [FileOperations::canonicalize].
+    fn truncate_and_canonicalize_folder(&self, path: &Path) -> Result<PathBuf, FsError>;
+
+    /// Make a file possible to execute.
+    fn set_permissions(&self, path: &Path, perms: u32) -> Result<(), FsError>;
+
+    /// Given a path try to canonicalize it.
+    ///
+    /// This will fail for files that do not exist.
+    fn canonicalize(&self, path: &Path) -> Result<PathBuf, FsError>;
+
+    /// Delete a file.
+    fn delete_file(&self, path: &Path) -> Result<(), FsError>;
+}

@@ -45,6 +45,10 @@ impl Range {
         }
     }
 
+    pub fn new_from_pos(start: Pos, end: Pos) -> Self {
+        Self { start, end }
+    }
+
     pub fn destruct(&self) -> ((usize, usize), (usize, usize)) {
         (self.start.line_col(), self.end.line_col())
     }
