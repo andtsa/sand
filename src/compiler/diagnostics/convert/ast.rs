@@ -73,13 +73,15 @@ pub fn ast_error_to_diagnostics(
             );
         }
 
-        AstError::InvalidInteger { got, range } => {
+        AstError::InvalidInteger { got, range, source } => {
             let message = format!("invalid integer literal: {}", got);
 
             let related = SdRelatedInfo {
                 file,
                 range,
-                message: "integer literal must fit in i64 and contain only digits".into(),
+                message: format!(
+                    "integer literal must fit in i64 and contain only digits. parsing raised error: {source}"
+                ),
             };
 
             diagnostics.add_one(

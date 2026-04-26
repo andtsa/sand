@@ -40,7 +40,7 @@ impl MirFunction {
         for local in &self.locals {
             let name = match &local.name {
                 LocalName::User(uv) => {
-                    format!("{} ({})", ctx.uniq_variable_name(*uv), local.range,)
+                    format!("{} ({})", ctx.uniq_variable_name(uv), local.range,)
                 }
                 LocalName::Temp(i, hint) => format!("_tmp{i} [{hint}]"),
             };

@@ -1,0 +1,8 @@
+
+def main(): Int := {
+    let _ : Int = {
+        let inner: Int = 7;
+        inner
+    };
+    inner
+}

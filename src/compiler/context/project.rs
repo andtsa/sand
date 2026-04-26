@@ -19,6 +19,8 @@ pub struct ProjectCtx {
     pub files: BiBTreeMap<Url, FileRef>,
 
     default_file: Option<FileRef>,
+
+    dummy_file: Option<FileRef>,
 }
 
 impl ProjectCtx {
@@ -28,6 +30,7 @@ impl ProjectCtx {
             code_files: vec![],
             files: BiBTreeMap::new(),
             default_file: None,
+            dummy_file: None,
         }
     }
 
@@ -54,26 +57,35 @@ impl ProjectCtx {
     }
 
     pub fn register_dummy_file(&mut self) -> FileRef {
-        let idx = self.code_files.len();
-        let fr = FileRef(idx);
-        let cf = CodeFile {
-            uri: Url::parse("dummy:///tmp/internal/sand_dummy_file.sand").unwrap(),
-            name: "sand_dummy_file".to_string(),
-            index: fr,
-            default_module: None,
-        };
-        self.code_files.push(cf);
-        fr
+        if let Some(fr) = self.dummy_file {
+            fr
+        } else {
+            let idx = self.code_files.len();
+            let fr = FileRef(idx);
+            let cf = CodeFile {
+                uri: Url::parse("dummy:///tmp/internal/sand_dummy_file.sand").unwrap(),
+                name: "sand_dummy_file".to_string(),
+                index: fr,
+                default_module: None,
+            };
+            self.code_files.push(cf);
+            self.dummy_file = Some(fr);
+            fr
+        }
     }
 
-    pub fn default_file(&mut self, uri: Url) -> Result<FileRef, UriError> {
+    pub fn set_default_file(&mut self, uri: Url) -> Result<(FileRef, bool), UriError> {
         if let Some(fr) = self.default_file {
-            Ok(fr)
+            Ok((fr, false))
         } else {
             let fr = self.register_file(uri)?;
             self.default_file = Some(fr);
-            Ok(fr)
+            Ok((fr, true))
         }
+    }
+
+    pub fn get_default_file(&self) -> Option<FileRef> {
+        self.default_file
     }
 
     pub fn url_of_file(&self, file: FileRef) -> Url {

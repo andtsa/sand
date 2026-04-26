@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use anyhow::anyhow;
+use anyhow::bail;
 
 use crate::compiler::context::CompileCtx;
 use crate::compiler::structure::UniqVar;
@@ -125,15 +126,18 @@ impl TypedProgram {
                 let right_val = right.evaluate(self, env)?;
                 match (left_val, right_val, op) {
                     (Expression::Int(l), Expression::Int(r), Bop::Plus) => {
-                        Ok(Expression::Int(l + r))
+                        Ok(Expression::Int(l.overflowing_add(r).0))
                     }
                     (Expression::Int(l), Expression::Int(r), Bop::Minus) => {
-                        Ok(Expression::Int(l - r))
+                        Ok(Expression::Int(l.overflowing_sub(r).0))
                     }
                     (Expression::Int(l), Expression::Int(r), Bop::Mult) => {
-                        Ok(Expression::Int(l * r))
+                        Ok(Expression::Int(l.overflowing_mul(r).0))
                     }
                     (Expression::Int(l), Expression::Int(r), Bop::Div) => {
+                        if r == 0 {
+                            bail!("division by zero: {l}/{r}");
+                        }
                         Ok(Expression::Int(l / r))
                     }
                     (Expression::Int(l), Expression::Int(r), Bop::Pow) => {
@@ -152,6 +156,9 @@ impl TypedProgram {
                     }
                     (Expression::Bool(l), Expression::Bool(r), Bop::Or) => {
                         Ok(Expression::Bool(l || r))
+                    }
+                    (Expression::Bool(l), Expression::Bool(r), Bop::Xor) => {
+                        Ok(Expression::Bool(l ^ r))
                     }
                     (Expression::Bool(l), Expression::Bool(r), Bop::Comp(CompOp::Eq)) => {
                         Ok(Expression::Bool(l == r))

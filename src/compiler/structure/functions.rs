@@ -22,7 +22,7 @@ pub struct OriginalFun {
     pub name: FnName,
     pub declaration: Range,
     pub module: ModuleRef,
-    index: FunRef,
+    pub(in crate::compiler) index: FunRef,
 }
 
 impl OriginalFun {

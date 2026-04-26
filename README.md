@@ -2,7 +2,6 @@
 
 wip
 
-
 ## Layers
 
 ### collect files
@@ -13,9 +12,11 @@ wip
 - fetch libraries
 
 **input:**
+- TBD
 - directory, file, or files.
 
 **output:**
+- TBD
 ```
 Map<FileRef, CodeFile>,
 Config
@@ -61,10 +62,10 @@ Map<FnName, FnSig>
 change every function name and function call to a globally unique one,
 predictably depending on the file name.
 
-possibly: allow specifying module name with a keyword in the file instead
+can specify module name with a keyword in the file instead
 of using file name exclusively.
 
-also: resolve calls to external functions using module names
+also resolves calls to external functions using module names
 
 output:
 ```
@@ -139,14 +140,28 @@ TypeCheckError
 
 status: basic implementation done
 
+todo: type inference
+
 ## todo
 
+### short-term
 - a LOT.
-- fix LSP,
+- fix LSP
 - improve diagnostics
-- MIR lowering (explicate control)
-- SSA MIR
-- ...
-- llvm codegen
 - write more tests
+- reorganise tests
+- make llvm run optimisation passes
+- move file handling infra to once place
 
+### medium-term
+- categorical product and coproduct types (tuples and enums)
+- how are products stored in memory?
+- somehow allow for pointers (or references? or both? haven't decided)
+- type inference (maybe?)
+- borrow checking
+
+### long-term
+- FFIs
+
+## known bugs
+- empty file compiles and fails only at the linking stage

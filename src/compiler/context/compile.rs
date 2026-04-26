@@ -7,6 +7,7 @@ use std::marker::PhantomData;
 use pest::iterators::Pair;
 use thiserror::Error;
 
+use crate::compiler::diagnostics::SandDiagnostic;
 use crate::compiler::structure::CodeModule;
 use crate::compiler::structure::FileRef;
 use crate::compiler::structure::FunRef;
@@ -21,9 +22,11 @@ use crate::compiler::structure::Range;
 use crate::compiler::structure::Set;
 use crate::compiler::structure::UniqVar;
 use crate::compiler::structure::VarName;
+use crate::ir_types::hhir::HirVar;
 use crate::lang::types::Ty;
 use crate::passes::parse::Rule;
 
+/// this should not be used and is on purpose mistyped to be easily detectable.
 const DEFAULT_MODULE_NAME: &str = "mAin";
 
 pub struct CompileCtx<'run> {
@@ -45,6 +48,9 @@ pub struct CompileCtx<'run> {
     // defaults
     file_defaults: Map<FileRef, ModuleRef>,
     default_module: Option<ModuleRef>,
+
+    // diagnostics
+    pub diagnostics: Vec<SandDiagnostic>,
 
     phantom: PhantomData<&'run ()>,
 }
@@ -80,6 +86,7 @@ impl<'run> CompileCtx<'run> {
             default_module: None,
             file_defaults: Default::default(),
             // default_file: None,
+            diagnostics: Vec::new(),
             phantom: Default::default(),
         }
     }
@@ -108,14 +115,24 @@ impl<'run> CompileCtx<'run> {
         uv
     }
 
-    pub fn original_var_name(&self, ovref: OriginalVarRef) -> String {
+    pub fn original_var_name(&self, ovref: &OriginalVarRef) -> String {
         self.original_variables[ovref.0].name.name()
     }
 
-    pub fn uniq_variable_name(&self, uv: UniqVar) -> String {
-        debug_assert!(self.global_variables.contains(&uv));
+    pub fn uniq_variable_name(&self, uv: &UniqVar) -> String {
+        debug_assert!(self.global_variables.contains(uv));
 
         self.original_variables[uv.orig.0].name.name()
+    }
+
+    /// Returns the friendly name of the given HIR variable,
+    /// should not be used for logic, just for display
+    pub fn hir_var_name(&self, hv: &HirVar) -> String {
+        match hv {
+            HirVar::Decl(ovref) => self.original_var_name(ovref),
+            HirVar::Unqualified(name) => name.clone(),
+            HirVar::Uniq(uv) => self.uniq_variable_name(uv),
+        }
     }
 
     /// might be used later
@@ -147,6 +164,14 @@ impl<'run> CompileCtx<'run> {
     }
 
     // ============================= Functions ================================
+
+    pub fn function_count(&self) -> usize {
+        self.global_functions.len()
+    }
+
+    pub fn all_functions(&self) -> impl Iterator<Item = FunRef> + '_ {
+        self.global_functions.iter().map(|f| f.index)
+    }
 
     pub fn register_function(
         &mut self,
@@ -196,7 +221,9 @@ impl<'run> CompileCtx<'run> {
         if self.default_module.is_some() {
             Err(CtxEmptyError {})
         } else {
-            Ok(self.register_module(DEFAULT_MODULE_NAME, for_file))
+            let mr = self.register_module(DEFAULT_MODULE_NAME, for_file);
+            self.default_module = Some(mr);
+            Ok(mr)
         }
     }
 

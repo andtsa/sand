@@ -43,7 +43,7 @@ impl MirProgram {
     fn call_function(&self, fun: FunRef, args: &[MirValue]) -> Result<MirValue, MirInterpError> {
         let func = &self.functions[&fun];
 
-        // initialise locals — all unset to start
+        // initialise locals: all unset to start
         let mut locals: Vec<Option<MirValue>> = vec![None; func.locals.len()];
 
         // bind parameters
@@ -157,9 +157,15 @@ fn eval_operand(op: &Operand, locals: &[Option<MirValue>]) -> Result<MirValue, M
 
 fn eval_binop(op: Bop, l: MirValue, r: MirValue) -> Result<MirValue, MirInterpError> {
     match (op, l, r) {
-        (Bop::Plus, MirValue::Int(a), MirValue::Int(b)) => Ok(MirValue::Int(a + b)),
-        (Bop::Minus, MirValue::Int(a), MirValue::Int(b)) => Ok(MirValue::Int(a - b)),
-        (Bop::Mult, MirValue::Int(a), MirValue::Int(b)) => Ok(MirValue::Int(a * b)),
+        (Bop::Plus, MirValue::Int(a), MirValue::Int(b)) => {
+            Ok(MirValue::Int(a.overflowing_add(b).0))
+        }
+        (Bop::Minus, MirValue::Int(a), MirValue::Int(b)) => {
+            Ok(MirValue::Int(a.overflowing_sub(b).0))
+        }
+        (Bop::Mult, MirValue::Int(a), MirValue::Int(b)) => {
+            Ok(MirValue::Int(a.overflowing_mul(b).0))
+        }
         (Bop::Div, MirValue::Int(a), MirValue::Int(b)) => {
             if b == 0 {
                 Err(MirInterpError::DivisionByZero)

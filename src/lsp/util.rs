@@ -89,7 +89,7 @@ pub(super) fn sand_diagnostic_to_lsp(text: &str, diag: SandDiagnostic, uri: Url)
     }
 }
 
-pub(super) fn url_of_module_unchecked(
+pub fn url_of_module_unchecked(
     module: ModuleRef,
     ctx: &CompileCtx,
     file_map: &BiBTreeMap<Url, FileRef>,

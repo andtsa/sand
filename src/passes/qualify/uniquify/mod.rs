@@ -1,13 +1,13 @@
 //! the uniquify pass of the compiler
 //!
 //! takes a program AST and ensures all variable and function names are unique
-// pub mod reserved;
 
 pub mod error;
 
 use std::collections::BTreeMap;
 
 use crate::compiler::context::CompileCtx;
+use crate::compiler::structure::Map;
 use crate::compiler::structure::UniqVar;
 use crate::internal_bug;
 use crate::ir_types::hhir::*;
@@ -70,7 +70,7 @@ impl<'uniq, 'run> UniqCtx<'uniq, 'run> {
             x => internal_bug!("uniquify binding a non-declaration {x:?}"),
         };
 
-        let seen_as = self.compile_ctx.original_var_name(ovref);
+        let seen_as = self.compile_ctx.original_var_name(&ovref);
         let uniq = self.compile_ctx.uniquify_original_variable(ovref);
 
         self.var_scopes.last_mut().unwrap().insert(seen_as, uniq);
@@ -98,8 +98,8 @@ impl<'uniq, 'run> UniqCtx<'uniq, 'run> {
 
     pub fn display_hir_var(&self, hv: &HirVar) -> String {
         match hv {
-            HirVar::Decl(ovref) => self.compile_ctx.original_var_name(*ovref),
-            HirVar::Uniq(uv) => self.compile_ctx.uniq_variable_name(*uv),
+            HirVar::Decl(ovref) => self.compile_ctx.original_var_name(ovref),
+            HirVar::Uniq(uv) => self.compile_ctx.uniq_variable_name(uv),
             HirVar::Unqualified(s) => s.to_string(),
         }
     }
@@ -164,8 +164,30 @@ impl ProgramModule {
 fn uniquify_function(f: &Function, u: &mut UniqCtx) -> Result<Function, UniquifyError> {
     u.enter_scope();
 
+    let span = tracing::trace_span!(
+        "uniquify_function",
+        name = u.compile_ctx.original_fun_name(f.name)
+    );
+    let _enter = span.enter();
+
+    let mut seen = Map::new();
     let mut parameters: Vec<Parameter> = Vec::new();
     for p in &f.parameters {
+        tracing::trace!("parameter {p:?}");
+        if let HirVar::Decl(x) = &p.name {
+            let name = u.compile_ctx.original_var_name(x);
+            if name != "_"
+                && let Some(seen_at) = seen.insert(name.clone(), p.range)
+            {
+                return Err(UniquifyError::DuplicateParameterName {
+                    name,
+                    first_instance: seen_at,
+                    second_instance: p.range,
+                });
+            }
+        } else {
+            internal_bug!("non decl parameter variable");
+        }
         let new_name = u.bind_var(&p.name);
         parameters.push(Parameter {
             name: HirVar::Uniq(new_name),
@@ -176,6 +198,7 @@ fn uniquify_function(f: &Function, u: &mut UniqCtx) -> Result<Function, Uniquify
     let body = uniquify_expr(&f.body, u)?; // Enter a new context and recursively uniquify its expressions
 
     u.exit_scope();
+    drop(_enter);
 
     Ok(Function {
         name: f.name,

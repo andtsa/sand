@@ -77,11 +77,15 @@ pub fn compile_hir<'run, 'proj>(
             .collect::<Vec<_>>()
     );
 
-    let program = qhir::Program::combine(ctx, modules)
-        .map_err(|e| SandLangErrorContext::with_module(e.source_module().index).wrap_err(e))?;
+    let program = qhir::Program::combine(ctx, modules).map_err(|e| {
+        ctx.entrypoint = None;
+        SandLangErrorContext::with_module(e.source_module().index).wrap_err(e)
+    })?;
 
-    let typed_program = typed_hir::TypedProgram::from_ast_program(ctx, program)
-        .map_err(|e| SandLangErrorContext::with_module(e.module).wrap_err(e.error))?;
+    let typed_program = typed_hir::TypedProgram::from_ast_program(ctx, program).map_err(|e| {
+        ctx.entrypoint = None;
+        SandLangErrorContext::with_module(e.module).wrap_err(e.error)
+    })?;
 
     Ok(typed_program)
 }

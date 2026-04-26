@@ -1,6 +1,8 @@
 //! build an AST from the Pair tree
 #![allow(clippy::result_large_err)]
 
+use std::num::ParseIntError;
+
 use pest::Parser;
 use pest::error::Error;
 use pest::iterators::Pair;
@@ -40,8 +42,12 @@ pub enum AstError {
         range: Range,
     },
 
-    #[error("invalid integer literal: {got} at {range}")]
-    InvalidInteger { got: String, range: Range },
+    #[error("invalid integer literal: {got} at {range} ({source})")]
+    InvalidInteger {
+        got: String,
+        range: Range,
+        source: ParseIntError,
+    },
 
     #[error("invalid name: {got} at {range}")]
     InvalidName { got: String, range: Range },
@@ -292,6 +298,7 @@ fn build_parameter<'run>(
     let mut inner = pair.into_inner();
     let name = inner.next().missing("parameter name", range)?; // identifier
     let ty_pair = inner.next().missing("parameter type", range)?;
+    tracing::trace!("parameter : {} : {}", name.as_str(), ty_pair.as_str());
     let ty = build_type(ctx, ty_pair)?;
     let var = HirVar::Decl(ctx.new_original_variable(&name, rule)?);
     Ok(Parameter {
@@ -302,7 +309,14 @@ fn build_parameter<'run>(
 }
 
 fn build_type<'run>(_ctx: &mut CompileCtx<'run>, pair: Pair<Rule>) -> Result<Ty, AstError> {
-    assert_eq!(pair.as_rule(), Rule::type_);
+    tracing::trace!("build_type called with {:?}", pair.as_str());
+    assert_eq!(
+        pair.as_rule(),
+        Rule::type_,
+        "expected type literal, got {:?}: {}",
+        pair.as_rule(),
+        pair.as_str()
+    );
     match pair.as_str() {
         "Int" => Ok(Ty::Int),
         "Bool" => Ok(Ty::Bool),
@@ -336,6 +350,7 @@ fn build_statement<'run>(
             let mut decl_inner = first.into_inner();
             let name_pair = decl_inner.next().missing("declaration name", inner_range)?;
             let var = HirVar::Decl(ctx.new_original_variable(&name_pair, d)?); // identifier
+            tracing::trace!("declaration name: {}", name_pair.as_str());
             let ty = build_type(
                 ctx,
                 decl_inner.next().missing("declaration type", inner_range)?,
@@ -764,9 +779,10 @@ fn build_primary<'run>(
         Rule::function_call | Rule::external_function_call => build_call(ctx, inner, src),
         Rule::number => {
             let s = inner.as_str().to_string();
-            let v = s.parse::<i64>().map_err(|_| AstError::InvalidInteger {
+            let v = s.parse::<i64>().map_err(|e| AstError::InvalidInteger {
                 got: s.clone(),
                 range: Range::from(&inner),
+                source: e,
             })?;
 
             Ok(Expr {

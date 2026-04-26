@@ -31,9 +31,18 @@ pub struct CodeFile {
 }
 
 /// a reference to a specific code file.
-/// implemented as an index into the context.code_files
+/// implemented as an index into the `context.code_files`
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct FileRef(pub(in crate::compiler) usize);
+
+impl FileRef {
+    pub fn test_new(_idx: usize) -> Self {
+        #[cfg(not(feature = "testing"))]
+        unreachable!("unsafe reference initialisation outside tests");
+        #[cfg(feature = "testing")]
+        Self(_idx)
+    }
+}
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash, serde::Deserialize)]
 pub struct ProjectConfig {
@@ -60,10 +69,17 @@ pub fn uri_name(uri: &tower_lsp::lsp_types::Url) -> Result<String, UriError> {
             format!("provided uri {uri} cannot be turned into segments"),
         )
     })?;
-    let _extension = path_iter.next_back();
     let name = path_iter
         .next_back()
         .ok_or_else(|| UriError::new(uri.clone(), format!("provided uri {uri} seems empty")))?
+        .split(".")
+        .next()
+        .ok_or_else(|| {
+            UriError::new(
+                uri.clone(),
+                format!("provided uri {uri} doesn't end with a file"),
+            )
+        })?
         .to_string();
     Ok(name)
 }

@@ -63,7 +63,7 @@ pub(super) fn collect_variable_names_in_expr<'col, 'run>(
                             collect_variable_names_in_expr(ctx, val)?;
                         } else {
                             return Err(AstTypeError::UnboundVariable {
-                                name: ctx.uniq_variable_name(*name),
+                                name: ctx.uniq_variable_name(name),
                                 range: *range,
                             });
                         }

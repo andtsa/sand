@@ -1,0 +1,7 @@
+def f(x: Int, x: Int): Int := {
+    x
+}
+
+def main(): Int := {
+    f(0, 1)
+}

@@ -233,7 +233,7 @@ pub(super) fn check_expr(ctx: &CompileCtx, expr: &Expr) -> Result<Ty, AstTypeErr
                             return Err(AstTypeError::TypeError {
                                 message: format!(
                                     "Declared variable '{}' has type {:?} but initializer has type {:?}",
-                                    ctx.uniq_variable_name(*name),
+                                    ctx.uniq_variable_name(name),
                                     ty,
                                     val_ty
                                 ),
@@ -246,7 +246,7 @@ pub(super) fn check_expr(ctx: &CompileCtx, expr: &Expr) -> Result<Ty, AstTypeErr
                     Statement::Assignment { name, val, range } => {
                         let var_ty = ctx.get_var_type(name).ok_or_else(|| {
                             AstTypeError::UnboundVariable {
-                                name: ctx.uniq_variable_name(*name),
+                                name: ctx.uniq_variable_name(name),
                                 range: *range,
                             }
                         })?;
@@ -255,7 +255,7 @@ pub(super) fn check_expr(ctx: &CompileCtx, expr: &Expr) -> Result<Ty, AstTypeErr
                             return Err(AstTypeError::TypeError {
                                 message: format!(
                                     "Variable '{}' has type {:?} but assigned value has type {:?}",
-                                    ctx.uniq_variable_name(*name),
+                                    ctx.uniq_variable_name(name),
                                     var_ty,
                                     val_ty
                                 ),

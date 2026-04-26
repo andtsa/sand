@@ -10,9 +10,10 @@ type_ = {
 }
 
 // keywords (prevent them from being identifiers)
-KEYWORD = { "if" | "then" | "else" | "let" | "def" | "true" | "false" | "Unit" | "Int" | "Bool" }
+KEYWORD = { "if" | "then" | "else" | "let" | "def" | "true" | "false" | "Unit" | "Int" | "Bool" | "while" | "do" }
 
-identifier = @{ !KEYWORD ~ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
+identifier = @{ !(KEYWORD ~ !(ASCII_ALPHANUMERIC | "_")) ~ "_"* ~ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
+empty_identifier = @{ "_" }
 
 number = @{ ASCII_DIGIT+ }
 
@@ -75,7 +76,7 @@ logic_or   = { logic_xor ~ (or ~ logic_xor)* }
 expression = { logic_or }
 
 // variables
-declaration = { "let" ~ identifier ~ ":" ~ type_ ~ "=" ~ expression }
+declaration = { "let" ~ (identifier | empty_identifier) ~ ":" ~ type_ ~ "=" ~ expression }
 
 // left here for later:
 // constant = { "const" ~ declaration }
@@ -89,7 +90,7 @@ statement = {
 }
 
 // functions are highest-order tokens
-parameter  = { identifier ~ ":" ~ type_ }
+parameter  = { (identifier | empty_identifier) ~ ":" ~ type_ }
 parameters = { parameter ~ ("," ~ parameter)* ~ ","? }
 
 function = { "def" ~ identifier ~ "(" ~ parameters? ~ ")" ~ ":" ~ type_ ~ ":=" ~ expression }

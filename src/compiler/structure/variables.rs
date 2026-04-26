@@ -21,6 +21,15 @@ pub struct UniqVar {
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct OriginalVarRef(pub(in crate::compiler) usize);
 
+impl OriginalVarRef {
+    pub fn test_new(_idx: usize) -> Self {
+        #[cfg(not(feature = "testing"))]
+        unreachable!("unsafe reference initialisation outside tests");
+        #[cfg(feature = "testing")]
+        Self(_idx)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct VarName(pub(in crate::compiler) String);
 
