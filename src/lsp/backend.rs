@@ -1,167 +1,89 @@
 //! LSP backend document checking functionality.
 
-use std::collections::BTreeMap;
-use std::fmt::Display;
-
-use tokio::sync::RwLock;
-use tower_lsp::Client;
 use tower_lsp::lsp_types::MessageType;
 use tower_lsp::lsp_types::Url;
 
-use crate::compile_hir;
-use crate::compiler::context::CompileCtx;
-use crate::compiler::context::ProjectCtx;
+use crate::castles::project::CheckResult;
 use crate::lsp::Backend;
-use crate::lsp::LastCompilation;
+use crate::lsp::diagnostics::lsp_diagnostics_from_result;
 
-impl<'lsp> Backend<'lsp> {
-    pub fn with_client(client: Client) -> Self {
-        Self {
-            client,
-            project_root: RwLock::new(None),
-            file_contents: RwLock::new(BTreeMap::new()),
-            last_compilation: RwLock::new(None),
-
-            standalone_files: RwLock::new(BTreeMap::new()),
-
-            context: RwLock::new(ProjectCtx::initial()),
-        }
-    }
-
-    pub async fn log(&self, ty: MessageType, msg: impl Display) {
-        eprintln!("{ty:?}:{msg}");
-        self.client.log_message(ty, format!("{msg}\n")).await
-    }
-
-    pub async fn check_project<'run>(&'run self)
-    where
-        'lsp: 'run,
-    {
-        self.log(MessageType::LOG, "starting project check...")
+impl Backend {
+    pub async fn check_project(&self) {
+        let project_guard = self.project.read().await;
+        let Some(project) = project_guard.as_ref() else {
+            self.log(
+                MessageType::WARNING,
+                "check_project called before project was initialized",
+            )
             .await;
-        let mut modules = BTreeMap::new();
-        let project_files = self.file_contents.read().await;
-        self.log(
-            MessageType::LOG,
-            format!(
-                "found {} project files: {project_files:?}",
-                project_files.len()
-            ),
-        )
-        .await;
-        for (m, s) in project_files.iter() {
-            if let Some(fr) = self.context.read().await.files.get_by_left(m) {
-                modules.insert(*fr, s.as_str());
-            }
-        }
-
-        self.log(
-            MessageType::LOG,
-            format!("compiling {} modules", modules.len()),
-        )
-        .await;
-
-        let mut ctx = CompileCtx::initial();
-        let last_compilation = match compile_hir(modules, &mut ctx) {
-            Ok(ast) => {
-                self.log(
-                    MessageType::LOG,
-                    "compilation successful, analyzing expressions".to_string(),
-                )
-                .await;
-                let diagnostics = self.annotate_reused_expressions(&ctx, &ast).await;
-                LastCompilation::Success {
-                    context: Box::new(ctx),
-                    diagnostics,
-                    ast,
-                }
-            }
-            Err(err) => {
-                self.log(
-                    MessageType::WARNING,
-                    "compilation failed, generating diagnostics".to_string(),
-                )
-                .await;
-                LastCompilation::Failure {
-                    diagnostics: self.sand_diagnostics(&ctx, err).await,
-                }
-            }
+            return;
         };
 
-        let diagnostic_count = last_compilation
-            .diagnostics()
-            .map
-            .values()
-            .map(|v| v.len())
-            .sum::<usize>();
         self.log(
             MessageType::LOG,
-            format!("publishing {} diagnostics", diagnostic_count),
+            format!("checking {} files", project.file_count()),
         )
         .await;
-        self.publish_diagnostics(last_compilation.diagnostics().clone())
-            .await;
-        self.last_compilation
-            .write()
-            .await
-            .replace(last_compilation);
-        self.log(MessageType::LOG, "project check complete".to_string())
-            .await;
+
+        let result = project.check();
+
+        // Build the new diagnostics map from this result
+        let mut new_diags = lsp_diagnostics_from_result(&result, project);
+
+        if let CheckResult::Success { ctx, ast } = &result {
+            let hints = self.annotate_reused_expressions(ctx, ast).await;
+            for (uri, diags) in hints.map {
+                new_diags.map.entry(uri).or_default().extend(diags);
+            }
+        }
+
+        // Clear stale diagnostics: any URI that had diagnostics last time
+        // but isn't in the new map needs an explicit empty publish
+        let stale_uris: Vec<Url> = self.last_published_uris.read().await.clone();
+        for uri in &stale_uris {
+            if !new_diags.map.contains_key(uri) {
+                self.client
+                    .publish_diagnostics(uri.clone(), vec![], None)
+                    .await;
+            }
+        }
+
+        // Publish new diagnostics
+        for (uri, diags) in &new_diags.map {
+            self.client
+                .publish_diagnostics(uri.clone(), diags.clone(), None)
+                .await;
+        }
+
+        *self.last_result.write().await = Some(result);
+        *self.last_published_uris.write().await = new_diags.map.keys().cloned().collect();
     }
 
-    pub async fn check_file(&self, uri: Url) {
-        self.log(
-            MessageType::LOG,
-            format!("starting standalone file check: {}", uri),
-        )
-        .await;
-
-        // if let Some((text, ctx)) =
-        // self.standalone_files.write().await.get_mut(&uri) {
-        //     let file_ref = match ctx.default_file(uri.clone()) {
-        //         Ok(file_ref) => {
-        //             self.log(
-        //                 MessageType::LOG,
-        //                 format!("registered file with ref: {:?}", file_ref),
-        //             )
-        //             .await;
-        //             file_ref
-        //         }
-        //         Err(err) => {
-        //             self.log(
-        //                 MessageType::ERROR,
-        //                 format!("failed to register file: {}", err.message),
-        //             )
-        //             .await;
-        //             return;
-        //         }
-        //     };
-        //     let _module = Map::from([(file_ref, text.as_str())]);
-
-        //     self.log(
-        //         MessageType::LOG,
-        //         "standalone file check incomplete (todo)".to_string(),
-        //     )
-        //     .await;
-        // todo!()
-        // let diagnostics = match compile_hir(module) {
-        //     Ok((_, ctx)) => {
-        //         todo!()
-        //     }
-        //     Err(err) => {
-        //         self.sand_individual_diagnostics(err).await
-        //     }
-        // };
-
-        // self
-        //     .publish_diagnostics(diagnostics, )
-        //     .await;
-        // } else {
-        //     self.log(
-        //         MessageType::WARNING,
-        //         format!("file not found in standalone files: {}", uri),
-        //     )
-        //     .await;
-        // }
+    pub async fn update_file(&self, uri: Url, text: String) {
+        let mut project_guard = self.project.write().await;
+        let Some(project) = project_guard.as_mut() else {
+            self.log(
+                MessageType::WARNING,
+                format!("update_file called before init: {uri}"),
+            )
+            .await;
+            return;
+        };
+        if let Err(e) = project.insert_file(uri.clone(), text) {
+            self.log(MessageType::ERROR, format!("failed to register {uri}: {e}"))
+                .await;
+            self.client
+                .publish_diagnostics(
+                    uri,
+                    vec![tower_lsp::lsp_types::Diagnostic {
+                        range: Default::default(),
+                        severity: Some(tower_lsp::lsp_types::DiagnosticSeverity::ERROR),
+                        message: e.to_string(),
+                        ..Default::default()
+                    }],
+                    None,
+                )
+                .await;
+        }
     }
 }

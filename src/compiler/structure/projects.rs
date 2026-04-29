@@ -1,9 +1,10 @@
 //! types relating to projects and their structure
 
 use std::fmt::Display;
+use std::path::{Path, PathBuf};
 
 use thiserror::Error;
-use tower_lsp::lsp_types::Url;
+use url::Url;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ModuleRef(pub(in crate::compiler) usize);
@@ -25,9 +26,64 @@ pub struct ModuleInfo {
 pub struct CodeFile {
     /// file can be file:///path/to/file or http://remote/file or ssh://remote/file
     pub(in crate::compiler) uri: tower_lsp::lsp_types::Url,
-    pub(in crate::compiler) name: String,
+    pub(in crate::compiler) name: FileName,
     pub(in crate::compiler) index: FileRef,
     pub(in crate::compiler) default_module: Option<ModuleRef>,
+}
+
+impl CodeFile {
+    pub fn local_path(&self) -> Option<PathBuf> {
+        if self.uri.scheme() == "file" {
+            self.uri.to_file_path().ok()
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, thiserror::Error)]
+pub enum FileName {
+    #[error("{0}")]
+    Simple(String),
+    #[error("<dummy_file>")]
+    Dummy,
+    #[error("<unknown>")]
+    Unknown,
+}
+
+impl From<Option<String>> for FileName {
+    fn from(value: Option<String>) -> Self {
+        value.map(FileName::Simple).unwrap_or(FileName::Unknown)
+    }
+}
+
+impl FileName {
+    pub fn try_from_uri(uri: &Url) -> Result<Self, UriError> {
+        Self::extract(uri)
+            .map(FileName::Simple)
+            .ok_or_else(|| UriError::name_fail(uri))
+    }
+
+    pub fn dummy() -> Self {
+        FileName::Dummy
+    }
+
+    /// not sure if there's a point to this since file name is needed for module
+    /// references
+    #[allow(dead_code)]
+    fn from_uri(uri: &Url) -> Self {
+        Self::extract(uri).into()
+    }
+
+    fn extract(uri: &Url) -> Option<String> {
+        let name = uri
+            .path_segments()?
+            .next_back()?
+            .split('.')
+            .next()?
+            .to_string();
+        Some(name)
+    }
 }
 
 /// a reference to a specific code file.
@@ -53,35 +109,37 @@ pub struct ProjectConfig {
 #[derive(Debug, Error)]
 #[error("there was an error with the uri {uri}: {message}")]
 pub struct UriError {
-    pub uri: tower_lsp::lsp_types::Url,
-    pub message: String,
+    uri: String,
+    message: String,
 }
 impl UriError {
     pub fn new(uri: Url, message: String) -> Self {
-        Self { uri, message }
+        Self {
+            uri: uri.to_string(),
+            message,
+        }
     }
-}
 
-pub fn uri_name(uri: &tower_lsp::lsp_types::Url) -> Result<String, UriError> {
-    let mut path_iter = uri.path_segments().ok_or_else(|| {
-        UriError::new(
-            uri.clone(),
-            format!("provided uri {uri} cannot be turned into segments"),
-        )
-    })?;
-    let name = path_iter
-        .next_back()
-        .ok_or_else(|| UriError::new(uri.clone(), format!("provided uri {uri} seems empty")))?
-        .split(".")
-        .next()
-        .ok_or_else(|| {
-            UriError::new(
-                uri.clone(),
-                format!("provided uri {uri} doesn't end with a file"),
-            )
-        })?
-        .to_string();
-    Ok(name)
+    pub fn name_fail(uri: &Url) -> Self {
+        Self {
+            uri: uri.to_string(),
+            message: "Cannot extract file name from URI".into(),
+        }
+    }
+
+    pub fn to_path(uri: &Url) -> Self {
+        Self {
+            uri: uri.to_string(),
+            message: "Cannot convert URI to file path".into(),
+        }
+    }
+
+    pub fn from_path(path: &Path) -> Self {
+        Self {
+            uri: path.to_string_lossy().to_string(),
+            message: "Cannot convert file path to URI".into(),
+        }
+    }
 }
 
 impl Display for ModuleInfo {

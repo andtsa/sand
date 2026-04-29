@@ -47,7 +47,7 @@ where
     }
 }
 
-pub(super) type SandDiagnostics = Diagnostics<FileRef, SandDiagnostic>;
+pub type SandDiagnostics = Diagnostics<FileRef, SandDiagnostic>;
 
 #[derive(Debug, Copy, Clone)]
 pub enum DiagnosticSeverity {

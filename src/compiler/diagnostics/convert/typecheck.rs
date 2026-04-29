@@ -11,7 +11,7 @@ use crate::passes::type_ast::AstTypeError;
 pub fn type_error_to_diagnostic(
     _ctx: &CompileCtx,
     file: FileRef,
-    err: AstTypeError,
+    err: &AstTypeError,
 ) -> SandDiagnostics {
     use crate::passes::type_ast::AstTypeError::*;
     let mut diagnostics = SandDiagnostics::default();
@@ -21,7 +21,7 @@ pub fn type_error_to_diagnostic(
 
             let related = SdRelatedInfo {
                 file,
-                range,
+                range: *range,
                 message: "no binding found for this variable".into(),
             };
 
@@ -30,7 +30,7 @@ pub fn type_error_to_diagnostic(
                 SandDiagnostic {
                     severity: DiagnosticSeverity::Error,
                     message,
-                    range,
+                    range: *range,
                     file,
                     related: vec![related],
                     module: None,
@@ -42,7 +42,7 @@ pub fn type_error_to_diagnostic(
 
             let related = SdRelatedInfo {
                 file,
-                range,
+                range: *range,
                 message: "no function with this name was found".into(),
             };
 
@@ -51,7 +51,7 @@ pub fn type_error_to_diagnostic(
                 SandDiagnostic {
                     severity: DiagnosticSeverity::Error,
                     message,
-                    range,
+                    range: *range,
                     file,
                     related: vec![related],
                     module: None,
@@ -69,7 +69,7 @@ pub fn type_error_to_diagnostic(
 
             let related = SdRelatedInfo {
                 file,
-                range,
+                range: *range,
                 message: format!("expected type: {:?}, found type: {:?}", expected, found),
             };
 
@@ -78,7 +78,7 @@ pub fn type_error_to_diagnostic(
                 SandDiagnostic {
                     severity: DiagnosticSeverity::Error,
                     message: diagnostic_message,
-                    range,
+                    range: *range,
                     file,
                     related: vec![related],
                     module: None,
@@ -96,7 +96,7 @@ pub fn type_error_to_diagnostic(
 
             let related = SdRelatedInfo {
                 file,
-                range,
+                range: *range,
                 message: format!(
                     "expected argument types: {:?}, found argument types: {:?}",
                     expected, found
@@ -108,7 +108,7 @@ pub fn type_error_to_diagnostic(
                 SandDiagnostic {
                     severity: DiagnosticSeverity::Error,
                     message: diagnostic_message,
-                    range,
+                    range: *range,
                     file,
                     related: vec![related],
                     module: None,

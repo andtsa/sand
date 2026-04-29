@@ -1,17 +1,14 @@
 //! helper methods
 
-use bimap::BiBTreeMap;
 use tower_lsp::lsp_types::*;
 
+use crate::castles::project::Project;
 use crate::compiler::context::CompileCtx;
 use crate::compiler::diagnostics::DiagnosticSeverity as SandDiagnosticSeverity;
 use crate::compiler::diagnostics::SandDiagnostic;
-use crate::compiler::structure::FileRef;
 use crate::compiler::structure::ModuleRef;
 use crate::compiler::structure::Pos;
 use crate::compiler::structure::Range as LangRange;
-use crate::lsp::LastCompilation;
-use crate::lsp::diagnostics::Diagnostics;
 
 pub(super) fn lsp_position_from_pest(text: &str, pos: Pos) -> Position {
     // pest reports 1-based line/col; convert to 0-based
@@ -37,15 +34,6 @@ pub(super) fn lsp_positions_from_range(text: &str, range: LangRange) -> (Positio
 pub(super) fn lsp_range_from_pest(text: &str, range: LangRange) -> Range {
     let (start, end) = lsp_positions_from_range(text, range);
     Range::new(start, end)
-}
-
-impl<'run> LastCompilation<'run> {
-    pub fn diagnostics(&self) -> &Diagnostics {
-        match self {
-            LastCompilation::Success { diagnostics, .. } => diagnostics,
-            LastCompilation::Failure { diagnostics } => diagnostics,
-        }
-    }
 }
 
 pub(super) fn sand_diagnostic_severity_to_lsp(
@@ -89,11 +77,10 @@ pub(super) fn sand_diagnostic_to_lsp(text: &str, diag: SandDiagnostic, uri: Url)
     }
 }
 
-pub fn url_of_module_unchecked(
-    module: ModuleRef,
-    ctx: &CompileCtx,
-    file_map: &BiBTreeMap<Url, FileRef>,
-) -> Url {
-    let file = ctx.file_of_module(module);
-    file_map.get_by_right(&file).cloned().unwrap()
+pub fn url_of_module(module: ModuleRef, ctx: &CompileCtx, project: &Project) -> Option<Url> {
+    let file_ref = ctx.file_of_module(module);
+    project
+        .file_contents
+        .contains_key(&file_ref)
+        .then(|| project.uri_of_file(file_ref))
 }

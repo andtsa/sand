@@ -50,10 +50,7 @@ pub enum CompileCliError {
     Llvm(#[from] CodegenError),
 }
 
-pub fn compile<FS: FileOperations>(
-    ctx: &mut CliCtx<FS>,
-    args: CompileArgs,
-) -> Result<(), CompileCliError> {
+pub fn compile(ctx: &mut CliCtx, args: CompileArgs) -> Result<(), CompileCliError> {
     let span = tracing::info_span!("compile subcommand");
     let _g = span.enter();
     let outfile_name = if args.input.len() == 1 {

@@ -18,25 +18,25 @@ pub struct FileSystem {
 }
 
 impl FileOperations for FileSystem {
-    fn read_bytes(&self, path: &Path) -> Result<Vec<u8>, FsError> {
-        fs::read(path).with_context(ctx!(
-            "Could not read the file {path:?}", ;
+    fn read_bytes<P: AsRef<Path>>(&self, path: P) -> Result<Vec<u8>, FsError> {
+        fs::read(&path).with_context(ctx!(
+            "Could not read the file {:?}", path.as_ref();
             "Ensure that the file exists and you have permissions to access it",
         ))
     }
 
-    fn read_utf8(&self, path: &Path) -> Result<String, FsError> {
-        String::from_utf8(self.read_bytes(path)?).with_context(ctx!(
-            "{path:?} is not valid UTF-8", ;
+    fn read_utf8<P: AsRef<Path>>(&self, path: P) -> Result<String, FsError> {
+        String::from_utf8(self.read_bytes(&path)?).with_context(ctx!(
+            "{:?} is not valid UTF-8", path.as_ref();
             "The file doesn't seem to be human readable?",
         ))
     }
 
-    fn read_file(&self, path: &Path) -> Result<(String, String), FsError> {
-        let pb = self.canonicalize(path)?;
+    fn read_file<P: AsRef<Path>>(&self, path: P) -> Result<(String, String), FsError> {
+        let pb = self.canonicalize(&path)?;
         if !pb.is_file() {
             return Err(FsError::new("File not found")).with_context(ctx!(
-                "Path {} does not point to a file", path.display();
+                "Path {} does not point to a file", path.as_ref().display();
                 "Ensure that the file exists and you have permissions to access it",
             ));
         }
@@ -49,52 +49,56 @@ impl FileOperations for FileSystem {
         Ok((name, contents))
     }
 
-    fn try_read_toml<T: DeserializeOwned>(&self, path: &Path) -> Result<T, FsError> {
-        toml::from_str::<T>(&self.read_utf8(path)?).with_context(ctx!(
-            "Could not deserialize toml file {path:?}", ;
+    fn try_read_toml<T: DeserializeOwned, P: AsRef<Path>>(&self, path: P) -> Result<T, FsError> {
+        toml::from_str::<T>(&self.read_utf8(&path)?).with_context(ctx!(
+            "Could not deserialize toml file {:?}", path.as_ref();
             "Ensure that the file is valid toml",
         ))
     }
 
-    fn try_write_toml<T: Serialize>(&self, path: &Path, data: &T) -> Result<(), FsError> {
+    fn try_write_toml<T: Serialize, P: AsRef<Path>>(
+        &self,
+        path: P,
+        data: &T,
+    ) -> Result<(), FsError> {
         self.write_utf8_truncate(
-            path,
+            &path,
             &toml::to_string::<T>(data).with_context(ctx!(
-                "Could not serialize toml file {path:?}", ;
+                "Could not serialize toml file {:?}", path.as_ref();
                 "Ensure that the struct is valid toml",
             ))?,
         )
     }
 
-    fn write_bytes_truncate(&self, path: &Path, bytes: &[u8]) -> Result<(), FsError> {
+    fn write_bytes_truncate<P: AsRef<Path>>(&self, path: P, bytes: &[u8]) -> Result<(), FsError> {
         if self.dry_run {
-            debug!("Would have written to {path:?} (dry)");
+            debug!("Would have written to {:?} (dry)", path.as_ref());
             return Ok(());
         }
 
-        fs::write(self.truncate_and_canonicalize(path)?, bytes).with_context(ctx!(
-          "Could not write to the file {path:?}", ;
+        fs::write(self.truncate_and_canonicalize(&path)?, bytes).with_context(ctx!(
+          "Could not write to the file {:?}", path.as_ref();
           "Ensure that you have permissions to write it",
         ))?;
 
         Ok(())
     }
 
-    fn write_utf8_truncate(&self, path: &Path, data: &str) -> Result<(), FsError> {
+    fn write_utf8_truncate<P: AsRef<Path>>(&self, path: P, data: &str) -> Result<(), FsError> {
         self.write_bytes_truncate(path, data.as_bytes())
     }
 
-    fn truncate_and_canonicalize(&self, path: &Path) -> Result<PathBuf, FsError> {
+    fn truncate_and_canonicalize<P: AsRef<Path>>(&self, path: P) -> Result<PathBuf, FsError> {
         if self.dry_run {
-            if let Some(parent) = path.parent() {
+            if let Some(parent) = path.as_ref().parent() {
                 trace!("Would have created {parent:?} (dry)");
             }
 
-            trace!("Would have created {path:?} (dry)");
-            return Ok(path.to_path_buf());
+            trace!("Would have created {:?} (dry)", path.as_ref());
+            return Ok(path.as_ref().to_path_buf());
         }
 
-        if let Some(parent) = path.parent() {
+        if let Some(parent) = path.as_ref().parent() {
             if !parent.exists() {
                 debug!("Creating directories for {parent:?}");
             }
@@ -105,33 +109,36 @@ impl FileOperations for FileSystem {
             ))?;
         }
 
-        debug!("Creating a file at {path:?}");
-        fs::File::create(path).with_context(ctx!(
-           "Could not create {path:?}", ;
+        debug!("Creating a file at {:?}", path.as_ref());
+        fs::File::create(&path).with_context(ctx!(
+           "Could not create {:?}", path.as_ref();
            "Ensure that you have sufficient permissions",
         ))?;
 
         self.canonicalize(path)
     }
 
-    fn truncate_and_canonicalize_folder(&self, path: &Path) -> Result<PathBuf, FsError> {
+    fn truncate_and_canonicalize_folder<P: AsRef<Path>>(
+        &self,
+        path: P,
+    ) -> Result<PathBuf, FsError> {
         if self.dry_run {
-            debug!("Would have created {path:?} (dry)");
-            return Ok(path.to_path_buf());
+            debug!("Would have created {:?} (dry)", path.as_ref());
+            return Ok(path.as_ref().to_path_buf());
         }
 
-        debug!("Creating directories for {path:?}");
-        fs::create_dir_all(path).with_context(ctx!(
-           "Could not create {path:?}", ;
+        debug!("Creating directories for {:?}", path.as_ref());
+        fs::create_dir_all(&path).with_context(ctx!(
+           "Could not create {:?}", path.as_ref();
            "Ensure that you have sufficient permissions",
         ))?;
 
         self.canonicalize(path)
     }
 
-    fn set_permissions(&self, path: &Path, perms: u32) -> Result<(), FsError> {
+    fn set_permissions<P: AsRef<Path>>(&self, path: P, perms: u32) -> Result<(), FsError> {
         if self.dry_run {
-            debug!("Would have made {path:?} executable (dry)");
+            debug!("Would have made {:?} executable (dry)", path.as_ref());
             return Ok(());
         }
 
@@ -139,40 +146,43 @@ impl FileOperations for FileSystem {
         {
             use std::fs::Permissions;
             use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(path, Permissions::from_mode(perms)).with_context(ctx!(
-                "Could not make {path:?} executable", ;
+            fs::set_permissions(&path, Permissions::from_mode(perms)).with_context(ctx!(
+                "Could not make {:?} executable", path.as_ref();
                 "Ensure that you have sufficient permissions",
             ))
         }
         #[cfg(not(unix))]
         {
+            warn!(
+                "file permissions cannot be set in non-unix environments. this call to set_permissions has no effect."
+            );
             Ok(())
         }
     }
 
-    fn canonicalize(&self, path: &Path) -> Result<PathBuf, FsError> {
+    fn canonicalize<P: AsRef<Path>>(&self, path: P) -> Result<PathBuf, FsError> {
         PathBuf::from(
-            shellexpand::tilde(
-                path.to_str()
-                    .ok_or(FsError::new(&format!("{path:?} is not valid utf8")))?,
-            )
+            shellexpand::tilde(path.as_ref().to_str().ok_or(FsError::new(&format!(
+                "{:?} is not valid utf8",
+                path.as_ref()
+            )))?)
             .to_string(),
         )
         .canonicalize()
         .with_context(ctx!(
-            "Could not canonicalize {path:?}", ;
+            "Could not canonicalize {:?}", path.as_ref();
             "Ensure that you provided a valid path",
         ))
     }
 
-    fn delete_file(&self, path: &Path) -> Result<(), FsError> {
+    fn delete_file<P: AsRef<Path>>(&self, path: P) -> Result<(), FsError> {
         if self.dry_run {
-            debug!("Would have deleted {path:?} (dry)");
+            debug!("Would have deleted {:?} (dry)", path.as_ref());
             return Ok(());
         }
 
-        fs::remove_file(path).with_context(ctx!(
-            "Could not delete {path:?}", ;
+        fs::remove_file(&path).with_context(ctx!(
+            "Could not delete {:?}", path.as_ref();
             "Ensure that you have sufficient permissions",
         ))
     }

@@ -1,5 +1,6 @@
 //! File system error
 
+use crate::compiler::structure::UriError;
 use crate::util::error_ctx::Ctx;
 
 pub type FsCtx = Ctx<String, String>;
@@ -23,6 +24,8 @@ pub enum FsErrorSource {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Utf8(#[from] std::string::FromUtf8Error),
+    #[error(transparent)]
+    Uri(#[from] UriError),
     #[error(transparent)]
     TomlDe(#[from] toml::de::Error),
     #[error(transparent)]

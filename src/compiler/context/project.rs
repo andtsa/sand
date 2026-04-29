@@ -3,13 +3,13 @@
 //! data that persists across compilation runs
 
 use bimap::BiBTreeMap;
-use tower_lsp::lsp_types::Url;
+use url::Url;
 
 use crate::compiler::structure::CodeFile;
+use crate::compiler::structure::FileName;
 use crate::compiler::structure::FileRef;
 use crate::compiler::structure::ProjectConfig;
 use crate::compiler::structure::UriError;
-use crate::compiler::structure::uri_name;
 
 /// the project context
 pub struct ProjectCtx {
@@ -42,10 +42,9 @@ impl ProjectCtx {
         } else {
             let idx = self.code_files.len();
             let fr = FileRef(idx);
-            let name = uri_name(&uri)?;
             let cf = CodeFile {
                 uri: uri.clone(),
-                name,
+                name: FileName::try_from_uri(&uri)?,
                 index: fr,
                 default_module: None,
             };
@@ -64,7 +63,7 @@ impl ProjectCtx {
             let fr = FileRef(idx);
             let cf = CodeFile {
                 uri: Url::parse("dummy:///tmp/internal/sand_dummy_file.sand").unwrap(),
-                name: "sand_dummy_file".to_string(),
+                name: FileName::dummy(),
                 index: fr,
                 default_module: None,
             };

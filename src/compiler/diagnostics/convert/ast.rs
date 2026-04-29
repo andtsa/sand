@@ -17,12 +17,12 @@ use crate::passes::parse::Rule;
 pub fn ast_error_to_diagnostics(
     _ctx: &CompileCtx,
     file: FileRef,
-    err: AstError,
+    err: &AstError,
 ) -> SandDiagnostics {
     let mut diagnostics = SandDiagnostics::default();
     match err {
         AstError::Pest(parse_err) => {
-            diagnostics.add_one(file, parse_error_to_diagnostic(file, *parse_err))
+            diagnostics.add_one(file, parse_error_to_diagnostic(file, parse_err))
         }
 
         AstError::UnexpectedRule {
@@ -34,7 +34,7 @@ pub fn ast_error_to_diagnostics(
 
             let related = SdRelatedInfo {
                 file,
-                range,
+                range: *range,
                 message: format!("expected: {:?}, got: {:?}", expected, got),
             };
 
@@ -43,7 +43,7 @@ pub fn ast_error_to_diagnostics(
                 SandDiagnostic {
                     severity: DiagnosticSeverity::Error,
                     message,
-                    range,
+                    range: *range,
                     file,
                     related: vec![related],
                     module: None,
@@ -56,7 +56,7 @@ pub fn ast_error_to_diagnostics(
 
             let related = SdRelatedInfo {
                 file,
-                range,
+                range: *range,
                 message: "syntax may be incomplete here".into(),
             };
 
@@ -64,7 +64,7 @@ pub fn ast_error_to_diagnostics(
                 file,
                 SandDiagnostic {
                     file,
-                    range,
+                    range: *range,
                     severity: DiagnosticSeverity::Error,
                     message,
                     related: vec![related],
@@ -78,7 +78,7 @@ pub fn ast_error_to_diagnostics(
 
             let related = SdRelatedInfo {
                 file,
-                range,
+                range: *range,
                 message: format!(
                     "integer literal must fit in i64 and contain only digits. parsing raised error: {source}"
                 ),
@@ -88,7 +88,7 @@ pub fn ast_error_to_diagnostics(
                 file,
                 SandDiagnostic {
                     file,
-                    range,
+                    range: *range,
                     severity: DiagnosticSeverity::Error,
                     message,
                     related: vec![related],
@@ -102,7 +102,7 @@ pub fn ast_error_to_diagnostics(
 
             let related = SdRelatedInfo {
                 file,
-                range,
+                range: *range,
                 message: "name is reserved or otherwise invalid".into(),
             };
 
@@ -110,7 +110,7 @@ pub fn ast_error_to_diagnostics(
                 file,
                 SandDiagnostic {
                     file,
-                    range,
+                    range: *range,
                     severity: DiagnosticSeverity::Error,
                     message,
                     related: vec![related],
@@ -121,7 +121,6 @@ pub fn ast_error_to_diagnostics(
 
         AstError::ContextError(ce) => {
             let range = crate::compiler::structure::Range::default();
-            let message = format!("internal compiler error: {:?}", ce);
 
             diagnostics.add_one(
                 file,
@@ -129,7 +128,7 @@ pub fn ast_error_to_diagnostics(
                     file,
                     range,
                     severity: DiagnosticSeverity::Error,
-                    message,
+                    message: ce.to_string(),
                     related: vec![],
                     module: None,
                 },
@@ -138,7 +137,6 @@ pub fn ast_error_to_diagnostics(
 
         AstError::UriError(err) => {
             let range = crate::compiler::structure::Range::default();
-            let message = format!("uri error: {}", err.message);
 
             diagnostics.add_one(
                 file,
@@ -146,7 +144,7 @@ pub fn ast_error_to_diagnostics(
                     file,
                     range,
                     severity: DiagnosticSeverity::Error,
-                    message,
+                    message: err.to_string(),
                     related: vec![],
                     module: None,
                 },
@@ -156,7 +154,7 @@ pub fn ast_error_to_diagnostics(
     diagnostics
 }
 
-fn parse_error_to_diagnostic(file: FileRef, err: pest::error::Error<Rule>) -> SandDiagnostic {
+fn parse_error_to_diagnostic(file: FileRef, err: &pest::error::Error<Rule>) -> SandDiagnostic {
     let (start, end) = match err.line_col {
         LineColLocation::Pos((l, c)) => {
             let p = Pos::new(l, c);

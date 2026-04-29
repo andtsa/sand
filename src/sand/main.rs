@@ -22,7 +22,6 @@ use clap::Parser;
 use clap::Subcommand;
 use sand::compiler::structure::FileRef;
 use sand::compiler::structure::Map;
-use sand::util::fs::FileOperations;
 use sand::util::fs::real_fs::FileSystem;
 use tracing::debug;
 use tracing::trace;
@@ -52,8 +51,8 @@ pub enum SandCommand {
     Compile(CompileArgs),
 }
 
-pub struct CliCtx<FS: FileOperations> {
-    pub fs: FS,
+pub struct CliCtx {
+    pub fs: FileSystem,
     pub dry: bool,
     /// keep file contents in just one place in memory
     pub opened_files: Map<FileRef, String>,

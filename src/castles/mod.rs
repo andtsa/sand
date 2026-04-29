@@ -6,4 +6,7 @@
 //! configuration files, external dependencies, file IO, and other
 //! non-language-specific tasks.
 
+pub mod config;
+pub mod discovery;
 pub mod fileutils;
+pub mod project;

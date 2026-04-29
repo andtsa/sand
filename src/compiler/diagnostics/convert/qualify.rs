@@ -12,7 +12,7 @@ use crate::passes::qualify::error::QualifyError;
 pub fn qualify_error_to_diagnostics(
     ctx: &CompileCtx,
     file: FileRef,
-    err: QualifyError,
+    err: &QualifyError,
 ) -> SandDiagnostics {
     let mut diagnostics = SandDiagnostics::default();
     match err {
@@ -25,20 +25,27 @@ pub fn qualify_error_to_diagnostics(
             let file = ctx.file_of_module(module.index);
             let message = format!("function '{}' is already defined in this module", name);
 
-            let related = SdRelatedInfo {
-                file,
-                range: first_instance,
-                message: "first definition is here".into(),
-            };
+            let related = vec![
+                SdRelatedInfo {
+                    file,
+                    range: *first_instance,
+                    message: "first definition is here".into(),
+                },
+                SdRelatedInfo {
+                    file,
+                    range: *second_instance,
+                    message: "second definition is here".into(),
+                },
+            ];
 
             diagnostics.add_one(
                 file,
                 SandDiagnostic {
                     severity: DiagnosticSeverity::Error,
                     message: message.clone(),
-                    range: first_instance,
+                    range: *first_instance,
                     file,
-                    related: vec![],
+                    related,
                     module: None,
                 },
             );
@@ -48,9 +55,9 @@ pub fn qualify_error_to_diagnostics(
                 SandDiagnostic {
                     severity: DiagnosticSeverity::Error,
                     message,
-                    range: second_instance,
+                    range: *second_instance,
                     file,
-                    related: vec![related],
+                    related: vec![],
                     module: None,
                 },
             );
@@ -71,7 +78,7 @@ pub fn qualify_error_to_diagnostics(
                 SandDiagnostic {
                     severity: DiagnosticSeverity::Error,
                     message: message.clone(),
-                    range: first,
+                    range: *first,
                     file,
                     related: vec![],
                     module: None,
@@ -83,7 +90,7 @@ pub fn qualify_error_to_diagnostics(
                 SandDiagnostic {
                     severity: DiagnosticSeverity::Error,
                     message,
-                    range: second,
+                    range: *second,
                     file,
                     related: vec![],
                     module: None,
@@ -123,7 +130,7 @@ pub fn qualify_error_to_diagnostics(
                 SandDiagnostic {
                     severity: DiagnosticSeverity::Error,
                     message,
-                    range,
+                    range: *range,
                     file,
                     related: vec![],
                     module: None,
@@ -145,7 +152,7 @@ pub fn qualify_error_to_diagnostics(
                 SandDiagnostic {
                     severity: DiagnosticSeverity::Error,
                     message,
-                    range,
+                    range: *range,
                     file,
                     related: vec![],
                     module: None,
@@ -163,7 +170,7 @@ pub fn qualify_error_to_diagnostics(
             source_module,
         } => {
             let file = ctx.file_of_module(source_module.index);
-            let message = format!("module '{}' is not found", module);
+            let message = format!("module '{}' was not found", module);
 
             diagnostics.add_one(
                 file,

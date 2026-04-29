@@ -11,7 +11,7 @@ use crate::passes::qualify::uniquify::error::UniquifyError;
 pub fn uniquify_error_to_diagnostics(
     _ctx: &CompileCtx,
     file: FileRef,
-    err: UniquifyError,
+    err: &UniquifyError,
 ) -> SandDiagnostics {
     use UniquifyError::*;
     let mut diagnostics = SandDiagnostics::default();
@@ -21,7 +21,7 @@ pub fn uniquify_error_to_diagnostics(
 
             let related = SdRelatedInfo {
                 file,
-                range: at,
+                range: *at,
                 message: "no binding found for this variable".into(),
             };
 
@@ -30,7 +30,7 @@ pub fn uniquify_error_to_diagnostics(
                 SandDiagnostic {
                     severity: DiagnosticSeverity::Error,
                     message,
-                    range: at,
+                    range: *at,
                     file,
                     related: vec![related],
                     module: None,
@@ -43,7 +43,7 @@ pub fn uniquify_error_to_diagnostics(
 
             let related = SdRelatedInfo {
                 file,
-                range: at,
+                range: *at,
                 message: "no function with this name was found".into(),
             };
 
@@ -52,7 +52,7 @@ pub fn uniquify_error_to_diagnostics(
                 SandDiagnostic {
                     severity: DiagnosticSeverity::Error,
                     message,
-                    range: at,
+                    range: *at,
                     file,
                     related: vec![related],
                     module: None,
@@ -69,7 +69,7 @@ pub fn uniquify_error_to_diagnostics(
 
             let related = SdRelatedInfo {
                 file,
-                range: first_instance,
+                range: *first_instance,
                 message: "first declaration is here".into(),
             };
 
@@ -78,7 +78,7 @@ pub fn uniquify_error_to_diagnostics(
                 SandDiagnostic {
                     severity: DiagnosticSeverity::Error,
                     message,
-                    range: second_instance,
+                    range: *second_instance,
                     file,
                     related: vec![related],
                     module: None,
@@ -91,7 +91,7 @@ pub fn uniquify_error_to_diagnostics(
 
             let related = SdRelatedInfo {
                 file,
-                range: at,
+                range: *at,
                 message: "function name is reserved".into(),
             };
 
@@ -100,7 +100,7 @@ pub fn uniquify_error_to_diagnostics(
                 SandDiagnostic {
                     severity: DiagnosticSeverity::Error,
                     message,
-                    range: at,
+                    range: *at,
                     file,
                     related: vec![related],
                     module: None,
@@ -117,7 +117,7 @@ pub fn uniquify_error_to_diagnostics(
 
             let related = SdRelatedInfo {
                 file,
-                range: first_instance,
+                range: *first_instance,
                 message: "first parameter with this name is here".into(),
             };
 
@@ -126,7 +126,7 @@ pub fn uniquify_error_to_diagnostics(
                 SandDiagnostic {
                     severity: DiagnosticSeverity::Error,
                     message,
-                    range: second_instance,
+                    range: *second_instance,
                     file,
                     related: vec![related],
                     module: None,
@@ -143,7 +143,7 @@ pub fn uniquify_error_to_diagnostics(
 
             let related = SdRelatedInfo {
                 file,
-                range: first_instance,
+                range: *first_instance,
                 message: "first declaration is here".into(),
             };
 
@@ -152,7 +152,7 @@ pub fn uniquify_error_to_diagnostics(
                 SandDiagnostic {
                     severity: DiagnosticSeverity::Error,
                     message,
-                    range: second_instance,
+                    range: *second_instance,
                     file,
                     related: vec![related],
                     module: None,
