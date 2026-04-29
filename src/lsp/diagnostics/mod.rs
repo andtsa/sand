@@ -17,7 +17,8 @@ pub type LspDiagnostics = Diagnostics<Url, Diagnostic>;
 pub fn lsp_diagnostics_from_result(result: &CheckResult, project: &Project) -> LspDiagnostics {
     let (_ctx, sand_diags) = match result {
         CheckResult::Success { ctx, ast: _ } => {
-            // todo: we could have some "success" diagnostics here, e.g. warnings about unused items
+            // todo: we could have some "success" diagnostics here, e.g. warnings about
+            // unused items
             (ctx, SandDiagnostics::default())
         }
         CheckResult::Failure { ctx, error } => {

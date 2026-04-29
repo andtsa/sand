@@ -55,6 +55,10 @@ impl ProjectCtx {
         }
     }
 
+    pub fn code_file(&self, fr: FileRef) -> &CodeFile {
+        &self.code_files[fr.0]
+    }
+
     pub fn register_dummy_file(&mut self) -> FileRef {
         if let Some(fr) = self.dummy_file {
             fr

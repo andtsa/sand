@@ -1,7 +1,8 @@
 //! types relating to projects and their structure
 
 use std::fmt::Display;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 
 use thiserror::Error;
 use url::Url;
@@ -37,6 +38,14 @@ impl CodeFile {
             self.uri.to_file_path().ok()
         } else {
             None
+        }
+    }
+
+    pub fn module_name(&self) -> &str {
+        match &self.name {
+            FileName::Simple(name) => name.as_str(),
+            FileName::Dummy => "<dummy_file>",
+            FileName::Unknown => "<unknown>",
         }
     }
 }

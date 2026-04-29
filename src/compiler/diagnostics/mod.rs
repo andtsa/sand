@@ -1,6 +1,7 @@
 //! User-facing diagnostics
 
 pub mod convert;
+pub mod render;
 
 use crate::compiler::structure::FileRef;
 use crate::compiler::structure::Map;

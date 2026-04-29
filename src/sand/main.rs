@@ -15,14 +15,11 @@
 // this module does not contain any compiler logic,
 // it just strings together the appropriate compiler passes.
 pub mod compile;
-// pub mod error;
+pub mod error;
 
 use clap::ArgAction;
 use clap::Parser;
 use clap::Subcommand;
-use sand::compiler::structure::FileRef;
-use sand::compiler::structure::Map;
-use sand::util::fs::real_fs::FileSystem;
 use tracing::debug;
 use tracing::trace;
 
@@ -51,13 +48,6 @@ pub enum SandCommand {
     Compile(CompileArgs),
 }
 
-pub struct CliCtx {
-    pub fs: FileSystem,
-    pub dry: bool,
-    /// keep file contents in just one place in memory
-    pub opened_files: Map<FileRef, String>,
-}
-
 fn main() -> Result<(), anyhow::Error> {
     let args = SandCLI::parse();
 
@@ -84,15 +74,9 @@ fn main() -> Result<(), anyhow::Error> {
     debug!(log_level = ?log_level);
     trace!("args: {args:?}");
 
-    let mut ctx = CliCtx {
-        fs: FileSystem { dry_run: args.dry },
-        dry: args.dry,
-        opened_files: Map::new(),
-    };
-
     #[allow(clippy::single_match)]
     match args.command {
-        SandCommand::Compile(args) => compile(&mut ctx, args)?,
+        SandCommand::Compile(compile_args) => compile(compile_args, args.dry)?,
     }
 
     Ok(())

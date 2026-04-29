@@ -22,10 +22,6 @@ pub trait FileOperations {
     /// Read a file into a utf8 string.
     fn read_utf8<P: AsRef<Path>>(&self, path: P) -> Result<String, FsError>;
 
-    /// Read a file into a utf8 string, return
-    /// (user-friendly file name, file contents)
-    fn read_file<P: AsRef<Path>>(&self, path: P) -> Result<(String, String), FsError>;
-
     /// Try to deserialize a toml file into a struture `T`.
     fn try_read_toml<T: DeserializeOwned, P: AsRef<Path>>(&self, path: P) -> Result<T, FsError>;
 

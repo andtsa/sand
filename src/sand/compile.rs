@@ -8,20 +8,16 @@
 use std::path::PathBuf;
 
 use clap::Args;
-use sand::SandLangError;
-use sand::compile_hir;
-use sand::compiler::context::CompileCtx;
-use sand::compiler::context::ProjectCtx;
-use sand::compiler::structure::Map;
-use sand::compiler::structure::UriError;
+use sand::castles::project::CheckResult;
+use sand::castles::project::Project;
+use sand::castles::project::init::FatalProjectCreationError;
+use sand::compiler::diagnostics::SandDiagnostic;
 use sand::ir_types::mir::MirProgram;
 use sand::passes::llvm_codegen::CodegenError;
 use sand::passes::llvm_codegen::LlvmCodegen;
 use sand::util::fs::FileOperations;
 use sand::util::fs::error::FsError;
-use tower_lsp::lsp_types::Url;
-
-use crate::CliCtx;
+use sand::util::fs::real_fs::FileSystem;
 
 #[derive(Debug, Args)]
 pub struct CompileArgs {
@@ -39,20 +35,19 @@ pub struct CompileArgs {
 #[derive(Debug, thiserror::Error)]
 pub enum CompileCliError {
     #[error("fs error: {0}")]
-    Fs(#[from] Box<FsError>),
-    #[error("url error: {0}")]
-    Url(String),
-    #[error(transparent)]
-    Uri(#[from] UriError),
-    #[error(transparent)]
-    Lang(#[from] Box<SandLangError>),
+    Fs(Box<FsError>),
+    #[error("project initialization error: {0}")]
+    ProjectInit(Box<FatalProjectCreationError>),
+    #[error("compiler error")]
+    CompilerError { diagnostic: String },
     #[error("llvm error: {0}")]
     Llvm(#[from] CodegenError),
 }
 
-pub fn compile(ctx: &mut CliCtx, args: CompileArgs) -> Result<(), CompileCliError> {
+pub fn compile(args: CompileArgs, dry_run: bool) -> Result<(), CompileCliError> {
     let span = tracing::info_span!("compile subcommand");
     let _g = span.enter();
+
     let outfile_name = if args.input.len() == 1 {
         args.input[0]
             .file_stem()
@@ -61,6 +56,7 @@ pub fn compile(ctx: &mut CliCtx, args: CompileArgs) -> Result<(), CompileCliErro
     } else {
         "a"
     };
+
     let output_file = args.output.unwrap_or_else(|| {
         if args.emit_llvm {
             PathBuf::from(format!("{}.ll", outfile_name))
@@ -74,80 +70,83 @@ pub fn compile(ctx: &mut CliCtx, args: CompileArgs) -> Result<(), CompileCliErro
         output_file.display()
     );
 
-    let mut project_ctx = ProjectCtx::initial();
-    let mut compile_ctx = CompileCtx::initial();
-    let mut modules = Map::new();
-
-    let span = tracing::debug_span!("collecting modules from files");
+    // Load input files using Project::from_paths
+    let span = tracing::debug_span!("loading project from paths");
     let _g1 = span.enter();
 
-    args.input
-        .iter()
-        .map(|file| {
-            let pb = ctx.fs.canonicalize(file)?;
-            tracing::trace!("canonicalized path: {}", pb.display());
-            let uri = Url::from_file_path(&pb).map_err(|_| {
-                CompileCliError::Url(format!("could not convert {} to a valid URL", pb.display()))
-            })?;
-            let fr = project_ctx.register_file(uri)?;
-            tracing::trace!("file registered as {fr:?}");
-            let (name, content) = ctx.fs.read_file(file)?;
-            ctx.opened_files.insert(fr, content);
-            tracing::debug!("loaded file {name} from {} as {fr:?}", pb.display());
-            Ok((fr, name))
-        })
-        .collect::<Result<Vec<_>, CompileCliError>>()?
-        .into_iter()
-        .for_each(|(fr, name)| {
-            modules.insert(fr, ctx.opened_files[&fr].as_str());
-            let _ = compile_ctx.create_default_module(fr, &name);
-        });
+    let project_result = Project::from_paths(&args.input)?;
+    let project = project_result.project;
+
+    for warning in project_result.warnings {
+        tracing::warn!("project setup warning: {}", warning.message);
+    }
+
+    tracing::debug!("loaded {} files", project.file_count());
     drop(_g1);
 
+    // Perform compilation check using the Project abstraction
     let span = tracing::debug_span!("compiling modules");
     let _g2 = span.enter();
 
-    let ast = compile_hir(modules, &mut compile_ctx)?;
-    tracing::debug!("compiled hir with {} functions", ast.functions.len());
-    ast.functions
-        .values()
-        .for_each(|f| tracing::trace!(name = compile_ctx.original_fun_name(f.name)));
+    let result = project.check();
+    let (ctx, ast) = match result {
+        CheckResult::Success { ctx, ast } => {
+            tracing::debug!(
+                "compilation successful with {} functions",
+                ast.functions.len()
+            );
+            ast.functions
+                .values()
+                .for_each(|f| tracing::trace!(name = ctx.original_fun_name(f.name)));
+            (ctx, ast)
+        }
+        CheckResult::Failure { ctx, error } => {
+            // Convert compiler errors to diagnostics and print them
+            let diags = SandDiagnostic::from_compiler_error(&ctx, &error);
+            for (file_ref, file_diags) in diags.map {
+                let uri = project.uri_of_file(file_ref);
+                for diag in file_diags {
+                    let severity_str = match diag.severity {
+                        sand::compiler::diagnostics::DiagnosticSeverity::Error => "error",
+                        sand::compiler::diagnostics::DiagnosticSeverity::Warning => "warning",
+                        sand::compiler::diagnostics::DiagnosticSeverity::Info => "info",
+                        sand::compiler::diagnostics::DiagnosticSeverity::CompilerDebug => "debug",
+                    };
+                    eprintln!("{}: {}: {}", uri, severity_str, diag.message);
+                }
+            }
+            return Err(CompileCliError::CompilerError {
+                diagnostic: error.to_string(),
+            });
+        }
+    };
+    drop(_g2);
 
+    // Emit code
     let mir = MirProgram::from_typed_program(&ast);
     let llvm_ctx = inkwell::context::Context::create();
     let codegen = LlvmCodegen::new(&llvm_ctx, "sand_module");
-    codegen.emit_program(&mir, &compile_ctx)?;
-    drop(_g2);
+    codegen.emit_program(&mir, &ctx)?;
 
     if args.emit_llvm {
-        tracing::debug!("emmiting llvm ir directly");
-        codegen.write_ir(output_file, ctx.dry)?;
+        tracing::debug!("emitting llvm ir directly");
+        codegen.write_ir(&output_file, dry_run)?;
         return Ok(());
     }
 
     let object_file = output_file.with_extension("o");
     tracing::debug!("writing object file {}", object_file.display());
-    codegen.write_object(&object_file, ctx.dry)?;
-    if !ctx.dry {
+    codegen.write_object(&object_file, dry_run)?;
+
+    if !dry_run {
         LlvmCodegen::link(
             &object_file.display().to_string(),
             &output_file.display().to_string(),
         )?;
 
-        ctx.fs.delete_file(&object_file)?;
+        let fs = FileSystem { dry_run };
+        fs.delete_file(&object_file)?;
     }
 
     Ok(())
-}
-
-impl From<FsError> for CompileCliError {
-    fn from(value: FsError) -> Self {
-        CompileCliError::Fs(Box::new(value))
-    }
-}
-
-impl From<SandLangError> for CompileCliError {
-    fn from(value: SandLangError) -> Self {
-        CompileCliError::Lang(Box::new(value))
-    }
 }

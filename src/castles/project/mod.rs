@@ -51,6 +51,15 @@ impl Project {
         self.file_contents.get(&fr).map(String::as_str)
     }
 
+    /// we need a name for this module to use for function qualifying. we will
+    /// use the filename (without extension) as the module name, but this is not
+    /// guaranteed to be unique. we will check for duplicates and warn about
+    /// them, but we will still allow them for now.
+    pub fn default_modname_for_file(&self, fr: FileRef) -> String {
+        let cf = self.ctx.code_file(fr);
+        cf.module_name().to_string()
+    }
+
     pub fn file_count(&self) -> usize {
         self.file_contents.len()
     }
@@ -79,12 +88,25 @@ impl Project {
     ///
     /// this call is stateless, and may be called repeatedly.
     pub fn check(&self) -> CheckResult {
+        let mut ctx = CompileCtx::initial();
+        // map each file to its &content
         let modules: Map<FileRef, &str> = self
             .file_contents
             .iter()
-            .map(|(&fr, s)| (fr, s.as_str()))
+            .map(|(&fr, s)| {
+                ctx.create_default_module(fr, &self.default_modname_for_file(fr));
+                (fr, s.as_str())
+            })
             .collect();
-        let mut ctx = CompileCtx::initial();
+
+        tracing::debug!(
+            "project contains modules: {:?}",
+            modules
+                .keys()
+                .map(|fr| self.ctx.code_file(*fr).module_name())
+                .collect::<Vec<_>>()
+        );
+
         match compile_hir(modules, &mut ctx) {
             Ok(ast) => CheckResult::Success { ctx, ast },
             Err(error) => CheckResult::Failure { ctx, error },

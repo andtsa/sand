@@ -8,7 +8,6 @@ use tracing::debug;
 use tracing::trace;
 
 use crate::ctx;
-use crate::internal_bug;
 use crate::util::fs::FileOperations;
 use crate::util::fs::error::Context;
 use crate::util::fs::error::FsError;
@@ -30,23 +29,6 @@ impl FileOperations for FileSystem {
             "{:?} is not valid UTF-8", path.as_ref();
             "The file doesn't seem to be human readable?",
         ))
-    }
-
-    fn read_file<P: AsRef<Path>>(&self, path: P) -> Result<(String, String), FsError> {
-        let pb = self.canonicalize(&path)?;
-        if !pb.is_file() {
-            return Err(FsError::new("File not found")).with_context(ctx!(
-                "Path {} does not point to a file", path.as_ref().display();
-                "Ensure that the file exists and you have permissions to access it",
-            ));
-        }
-        let name = pb
-            .file_stem()
-            .unwrap_or_else(|| internal_bug!("file name not found after checking .is_file"))
-            .to_string_lossy()
-            .to_string();
-        let contents = self.read_utf8(path)?;
-        Ok((name, contents))
     }
 
     fn try_read_toml<T: DeserializeOwned, P: AsRef<Path>>(&self, path: P) -> Result<T, FsError> {

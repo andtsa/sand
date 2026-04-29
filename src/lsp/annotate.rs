@@ -56,7 +56,7 @@ impl Backend {
 
         // produce diagnostics for keys with more than one occurrence
         let mut diagnostics: LspDiagnostics = LspDiagnostics::default();
-        
+
         // acquire lock
         let project_guard = self.project.read().await;
         let Some(project) = project_guard.as_ref() else {
@@ -67,7 +67,7 @@ impl Backend {
             .await;
             return diagnostics;
         };
-        
+
         for (e, occs) in annotations.expr_occurrences.into_iter() {
             // // NOTE: whether we include this check or not
             // // depends on how the annotations are made
@@ -80,9 +80,7 @@ impl Backend {
 
             for (module, range) in occs {
                 let fr = ctx.file_of_module(module);
-                let uri = project
-                    .uri_of_file(fr)
-                    .clone();
+                let uri = project.uri_of_file(fr).clone();
                 if let Some(text) = project.text_for_file(fr) {
                     let range = lsp_range_from_pest(text, range);
 
