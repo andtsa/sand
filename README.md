@@ -147,11 +147,28 @@ todo: type inference
 ### short-term
 - a LOT.
 - fix LSP
+  - [X] existing bugs
+  - [ ] write tests for LSP
+  - [ ] better debuggability for the LSP itself
+  - [ ] implement hover actions to retrieve all possible info from compilation context
+  - [ ] after HIR pretty printing is implemented, add formatting support
 - improve diagnostics
-- write more tests
+  - [ ] pretty printing
+  - [ ] conversion from remaining error types (?)
 - reorganise tests
-- make llvm run optimisation passes
-- move file handling infra to once place
+  - [ ] think of better testing architecture
+- write more tests
+- [ ] make llvm run optimisation passes
+- [X] move file handling infra to once place
+- [ ] pretty printing for 
+  - [ ] HHIR, 
+  - [ ] QHIR, 
+  - [ ] TypedHIR, 
+  - [ ] MIR, and 
+  - [X] LLVM IR
+  - [ ] better integration into compiler CLI, 
+  - [ ] maybe even allow showing it from the LSP?
+  - [ ] pretty printing assembly?
 
 ### medium-term
 - categorical product and coproduct types (tuples and enums)

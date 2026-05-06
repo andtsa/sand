@@ -70,7 +70,7 @@ pub fn compile(args: CompileArgs, dry_run: bool) -> Result<(), CompileCliError> 
         output_file.display()
     );
 
-    // Load input files using Project::from_paths
+    // Load input files using [`Project::from_paths`]
     let span = tracing::debug_span!("loading project from paths");
     let _g1 = span.enter();
 

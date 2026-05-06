@@ -23,7 +23,6 @@ use crate::lang::types::*;
 use crate::passes::parse::LangParser;
 use crate::passes::parse::Rule;
 
-#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Error)]
 pub enum AstError {
     #[error("parse error: {0}")]

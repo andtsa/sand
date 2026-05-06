@@ -15,6 +15,7 @@ def gcd(a: Int, b: Int): Int :=
     x
 }
 
+module cycg;
 
 def modinv(a: Int, m: Int): Int :=
 {
@@ -47,17 +48,21 @@ def modinv(a: Int, m: Int): Int :=
 def modexp(base: Int, exp: Int, m: Int): Int :=
 {
     let result: Int = 1;
-    let b: Int = mod(base, m);
+    let b: Int = m::mod(base, m);
     let e: Int = exp;
 
     while e > 0 do {
-        if mod(e, 2) == 1 then {
-            result = mod(result * b, m);
+        if m::mod(e, 2) == 1 then {
+            result = m::mod(result * b, m);
         };
 
-        b = mod(b * b, m);
+        b = m::mod(b * b, m);
         e = e / 2;
     };
 
     result
 }
+
+module m;
+
+def test(x: Int): Int := x + 1

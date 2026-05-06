@@ -1,3 +1,5 @@
+module decryption;
+
 def rsa_decrypt(cipher: Int): Int :=
 {
     let p: Int = 61;
@@ -7,7 +9,7 @@ def rsa_decrypt(cipher: Int): Int :=
     let phi: Int = (p - 1) * (q - 1);
 
     let e: Int = 17;
-    let d: Int = m::modinv(e, phi);
+    let d: Int = cycg::modinv(e, phi);
 
-    m::modexp(cipher, d, n)
+    cycg::modexp(cipher, d, n)
 }

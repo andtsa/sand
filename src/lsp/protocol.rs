@@ -8,8 +8,8 @@ use tower_lsp::lsp_types::*;
 use crate::castles::discovery::discover_files;
 use crate::castles::project::Project;
 use crate::castles::project::init::ProjectCreationResult;
-use crate::castles::project::init::SetupWarning;
 use crate::lsp::Backend;
+use crate::lsp::diagnostics::setup_warning_to_lsp;
 
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
@@ -23,7 +23,7 @@ impl LanguageServer for Backend {
 
         *self.root.write().await = Some(root_path.clone());
 
-        let (project, warnings) = match Project::from_config(&root_path) {
+        let (project, warnings) = match Project::from_rootdir(&root_path) {
             Ok(result) => (result.project, result.warnings),
             Err(e) => {
                 self.log(MessageType::WARNING, format!("config error: {e}"))
@@ -58,7 +58,7 @@ impl LanguageServer for Backend {
             self.client
                 .publish_diagnostics(
                     cfg_path,
-                    warnings.iter().map(SetupWarning::to_diagnostic).collect(),
+                    warnings.iter().map(setup_warning_to_lsp).collect(),
                     None,
                 )
                 .await;

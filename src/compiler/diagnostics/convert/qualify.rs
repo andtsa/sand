@@ -44,9 +44,9 @@ pub fn qualify_error_to_diagnostics(
                     severity: DiagnosticSeverity::Error,
                     message: message.clone(),
                     range: *first_instance,
-                    file,
+                    file: Some(file),
                     related,
-                    module: None,
+                    ..Default::default()
                 },
             );
 
@@ -56,9 +56,8 @@ pub fn qualify_error_to_diagnostics(
                     severity: DiagnosticSeverity::Error,
                     message,
                     range: *second_instance,
-                    file,
-                    related: vec![],
-                    module: None,
+                    file: Some(file),
+                    ..Default::default()
                 },
             );
         }
@@ -79,9 +78,8 @@ pub fn qualify_error_to_diagnostics(
                     severity: DiagnosticSeverity::Error,
                     message: message.clone(),
                     range: *first,
-                    file,
-                    related: vec![],
-                    module: None,
+                    file: Some(file),
+                    ..Default::default()
                 },
             );
 
@@ -91,9 +89,8 @@ pub fn qualify_error_to_diagnostics(
                     severity: DiagnosticSeverity::Error,
                     message,
                     range: *second,
-                    file,
-                    related: vec![],
-                    module: None,
+                    file: Some(file),
+                    ..Default::default()
                 },
             );
         }
@@ -107,9 +104,8 @@ pub fn qualify_error_to_diagnostics(
                     severity: DiagnosticSeverity::Error,
                     message,
                     range: crate::compiler::structure::Range::default(),
-                    file,
-                    related: vec![],
-                    module: None,
+                    file: Some(file),
+                    ..Default::default()
                 },
             );
         }
@@ -117,13 +113,20 @@ pub fn qualify_error_to_diagnostics(
         QualifyError::FunctionQualFailedFunctionNotFound {
             func,
             module,
+            source_module,
             range,
         } => {
-            let file = ctx.file_of_module(module.index);
+            let file = ctx.file_of_module(source_module.index);
             let message = format!(
                 "function '{}' is not defined in module '{}'",
                 func, module.name
             );
+
+            let related = vec![SdRelatedInfo {
+                file,
+                range: *range,
+                message: "offending function call is here".into(),
+            }];
 
             diagnostics.add_one(
                 file,
@@ -131,9 +134,9 @@ pub fn qualify_error_to_diagnostics(
                     severity: DiagnosticSeverity::Error,
                     message,
                     range: *range,
-                    file,
-                    related: vec![],
-                    module: None,
+                    file: Some(file),
+                    related,
+                    ..Default::default()
                 },
             );
         }
@@ -153,9 +156,8 @@ pub fn qualify_error_to_diagnostics(
                     severity: DiagnosticSeverity::Error,
                     message,
                     range: *range,
-                    file,
-                    related: vec![],
-                    module: None,
+                    file: Some(file),
+                    ..Default::default()
                 },
             );
         }
@@ -168,6 +170,7 @@ pub fn qualify_error_to_diagnostics(
         QualifyError::ModuleNotFound {
             module,
             source_module,
+            range,
         } => {
             let file = ctx.file_of_module(source_module.index);
             let message = format!("module '{}' was not found", module);
@@ -177,10 +180,9 @@ pub fn qualify_error_to_diagnostics(
                 SandDiagnostic {
                     severity: DiagnosticSeverity::Error,
                     message,
-                    range: crate::compiler::structure::Range::default(),
-                    file,
-                    related: vec![],
-                    module: None,
+                    range: *range,
+                    file: Some(file),
+                    ..Default::default()
                 },
             );
         }

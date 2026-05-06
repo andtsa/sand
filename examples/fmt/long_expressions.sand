@@ -1,0 +1,53 @@
+// long_expressions.sand
+// tests long chains of operators, nested calls, and complex arithmetic
+
+def square(x: Int): Int := x * x
+
+def cube(x: Int): Int := x * x * x
+
+// very long arithmetic expression on one line
+def long_arithmetic(a: Int, b: Int, c: Int, d: Int): Int :=
+    a * a + b * b + c * c + d * d + a * b + a * c + a * d + b * c + b * d + c * d
+
+// deeply chained function calls
+def chained_calls(n: Int): Int :=
+    square(square(square(n + 1) - square(n - 1)) + square(n) - cube(n - 1))
+
+// long boolean expression
+def complex_predicate(a: Int, b: Int, c: Int, d: Int, e: Int): Bool :=
+    a > 0 & b > 0 & c > 0 & d > 0 & e > 0 & a + b > c & b + c > d & c + d > e
+
+// long expression split across many let bindings
+def step_by_step(x: Int): Int := {
+    let step1: Int = x * x;
+    let step2: Int = step1 + x;
+    let step3: Int = step2 * step2;
+    let step4: Int = step3 - step1;
+    let step5: Int = step4 + step3 + step2 + step1 + x;
+    let step6: Int = step5 * step5 - step4 * step4;
+    let step7: Int = step6 + step5 - step4 + step3 - step2 + step1;
+    let step8: Int = step7 * step7;
+    step8 - step7 + step6 - step5 + step4 - step3 + step2 - step1
+}
+
+// nested call arguments with expressions
+def call_with_exprs(n: Int): Int :=
+    long_arithmetic(
+        square(n + 1),
+        cube(n - 1),
+        square(n) + n,
+        cube(n + 1) - cube(n - 1)
+    )
+
+// mixed operators precedence stress test
+def precedence_stress(a: Int, b: Int, c: Int): Int :=
+    a + b * c - a * b + b * c - c + a * a * b - b * b * c + c * c * a
+
+def main(): Int := {
+    let r1: Int = long_arithmetic(1, 2, 3, 4);
+    let r2: Int = chained_calls(2);
+    let r3: Int = step_by_step(3);
+    let r4: Int = call_with_exprs(2);
+    let r5: Int = precedence_stress(3, 5, 7);
+    r1 + r2 + r3 + r4 + r5
+}

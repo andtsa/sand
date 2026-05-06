@@ -1,0 +1,102 @@
+// stress.sand
+// kitchen-sink file, combines all challenging patterns together
+
+def mod(a: Int, m: Int): Int := a - (a / m) * m
+
+def is_prime(n: Int): Bool := {
+    let ok: Bool = true;
+    if n <= 1 then false else {
+        let i: Int = 2;
+        while i * i <= n do {
+            if mod(n, i) == 0 then {
+                ok = false;
+                i = n;
+            } else {
+                i = i + 1;
+            };
+        };
+        ok
+    }
+}
+
+// long name + many params + deep nesting
+def compute_weighted_polynomial_with_clamped_coefficients(
+    base_value: Int,
+    coefficient_a: Int,
+    coefficient_b: Int,
+    coefficient_c: Int,
+    lower_clamp_bound: Int,
+    upper_clamp_bound: Int
+): Int := {
+    let clamped_a: Int = if coefficient_a < lower_clamp_bound then lower_clamp_bound else if coefficient_a > upper_clamp_bound then upper_clamp_bound else coefficient_a;
+    let clamped_b: Int = if coefficient_b < lower_clamp_bound then lower_clamp_bound else if coefficient_b > upper_clamp_bound then upper_clamp_bound else coefficient_b;
+    let clamped_c: Int = if coefficient_c < lower_clamp_bound then lower_clamp_bound else if coefficient_c > upper_clamp_bound then upper_clamp_bound else coefficient_c;
+
+    let term_a: Int = clamped_a * base_value * base_value;
+    let term_b: Int = clamped_b * base_value;
+    let term_c: Int = clamped_c;
+
+    term_a + term_b + term_c
+}
+
+// many short functions referencing each other
+def f1(x: Int): Int := x + 1
+def f2(x: Int): Int := f1(f1(x))
+def f3(x: Int): Int := f2(f2(x)) + f1(x)
+def f4(x: Int): Int := f3(f2(x)) - f2(f1(x))
+def f5(x: Int): Int := f4(f3(x)) * f3(f2(x)) - f2(f1(x)) + f1(x)
+
+// assignments + while + if interleaved
+def collatz(n: Int): Int := {
+    let steps: Int = 0;
+    let x: Int = n;
+    while x != 1 do {
+        if mod(x, 2) == 0 then {
+            x = x / 2;
+        } else {
+            x = x * 3 + 1;
+        };
+        steps = steps + 1;
+    };
+    steps
+}
+
+// lots of lets in a row
+def many_lets(n: Int): Int := {
+    let a: Int = n + 1;
+    let b: Int = a + 1;
+    let c: Int = b + 1;
+    let d: Int = c + 1;
+    let e: Int = d + 1;
+    let f: Int = e + 1;
+    let g: Int = f + 1;
+    let h: Int = g + 1;
+    let i: Int = h + 1;
+    let j: Int = i + 1;
+    let k: Int = j + 1;
+    let l: Int = k + 1;
+    a + b + c + d + e + f + g + h + i + j + k + l
+}
+
+// block returning block returning block
+def triple_block(x: Int): Int := {
+    {
+        {
+            x * x + x + 1
+        }
+    }
+}
+
+def main(): Int := {
+    let p: Bool = is_prime(97);
+    let poly: Int = compute_weighted_polynomial_with_clamped_coefficients(5, 3, 7, 2, 0, 10);
+    let chain: Int = f5(2);
+    let ctz: Int = collatz(27);
+    let ml: Int = many_lets(0);
+    let tb: Int = triple_block(6);
+
+    println(ctz);
+    println(ml);
+
+    poly + chain + ctz + ml + tb
+}

@@ -1,15 +1,13 @@
-use tower_lsp::lsp_types;
-
 use crate::castles::project::init::SetupWarning;
+use crate::compiler::diagnostics::DiagnosticSeverity;
+use crate::compiler::diagnostics::SandDiagnostic;
 
 impl SetupWarning {
-    pub fn to_diagnostic(&self) -> lsp_types::Diagnostic {
-        use lsp_types::Diagnostic;
-        use lsp_types::DiagnosticSeverity;
-        Diagnostic {
-            range: Default::default(),
-            severity: Some(DiagnosticSeverity::WARNING),
+    pub fn to_diagnostic(&self) -> SandDiagnostic {
+        SandDiagnostic {
+            severity: DiagnosticSeverity::Warning,
             message: self.message.clone(),
+            url: Some(self.url.clone()),
             ..Default::default()
         }
     }

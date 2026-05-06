@@ -15,8 +15,10 @@ use crate::util::fs::error::FsError;
 pub struct SetupWarning {
     pub kind: SetupWarningKind,
     pub message: String,
+    pub url: Url,
 }
 
+#[derive(Debug, Clone)]
 pub enum SetupWarningKind {
     MissingTrackedFile { uri: Url },
     UnreadableFile { uri: Url, reason: String },
@@ -36,13 +38,19 @@ pub enum FatalProjectCreationError {
 }
 
 impl Project {
+    pub fn from_rootdir<P: AsRef<Path>>(
+        config: P,
+    ) -> Result<ProjectCreationResult, FatalProjectCreationError> {
+        let config_path = config.as_ref().join("sand.toml");
+        Self::from_config(config_path)
+    }
+
     pub fn from_config<P: AsRef<Path>>(
-        root: P,
+        config: P,
     ) -> Result<ProjectCreationResult, FatalProjectCreationError> {
         let mut project = Project::empty();
         let mut warnings = Vec::new();
-        // look for `sand.toml` in the root directory,
-        let config_path = root.as_ref().join("sand.toml");
+        let config_path = config.as_ref().to_path_buf();
 
         let config = ProjectConfig::load(&project.fs, &config_path)?.ok_or_else(|| {
             FatalProjectCreationError::MissingConfig {
@@ -51,33 +59,35 @@ impl Project {
         })?;
         project.config_src = Some(config_path);
 
-        for uri in &config.tracked_files {
-            match uri
+        for url in &config.tracked_files {
+            match url
                 .to_file_path()
-                .map_err(|_| UriError::to_path(uri))
+                .map_err(|_| UriError::to_path(url))
                 .map(|p| {
                     project
                         .fs
                         .read_utf8(p)
-                        .map(|content| project.insert_file(uri.clone(), content))
+                        .map(|content| project.insert_file(url.clone(), content))
                 }) /* UriToPath(ParseUtf8(UriToName(Fr))) */ {
 
                 Ok(Ok(Ok(fr))) => {
-                    tracing::debug!("loaded file {uri} as {fr:?}");
+                    tracing::debug!("loaded file {url} as {fr:?}");
                 }
                 Ok(Ok(Err(e))) | Err(e) => {
                     warnings.push(SetupWarning {
                         kind: SetupWarningKind::UnreadableFile {
-                            uri: uri.clone(),
+                            uri: url.clone(),
                             reason: e.to_string(),
                         },
-                        message: format!("Invalid file url `{}`: {}", uri, e),
+                        message: format!("Invalid file url `{}`: {}", url, e),
+                        url: url.clone(),
                     });
                 }
                 Ok(Err(e)) => {
                     warnings.push(SetupWarning {
-                        kind: SetupWarningKind::UnreadableFile { uri: uri.clone(), reason: e.to_string() },
-                        message: format!("Failed to read tracked file {}: {}", uri, e),
+                        kind: SetupWarningKind::UnreadableFile { uri: url.clone(), reason: e.to_string() },
+                        message: format!("Failed to read tracked file {}: {}", url, e),
+                        url: url.clone(),
                     });
                 }
             }
@@ -100,10 +110,11 @@ impl Project {
             if let Err(e) = project.insert_file(uri.clone(), content) {
                 warnings.push(SetupWarning {
                     kind: SetupWarningKind::UnreadableFile {
-                        uri,
+                        uri: uri.clone(),
                         reason: e.to_string(),
                     },
                     message: format!("Failed to read file {}: {}", path.display(), e),
+                    url: uri,
                 });
             }
         }

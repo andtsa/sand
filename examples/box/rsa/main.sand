@@ -2,9 +2,9 @@
 
 def test(message: Int): Unit := {
     println(message);
-    let cipher: Int = enc::rsa_encrypt(message);
+    let cipher: Int = encryption::rsa_encrypt(message);
     println(cipher);
-    let plain: Int = dec::rsa_decrypt(cipher);
+    let plain: Int = decryption::rsa_decrypt(cipher);
     println(plain);
 }
 
@@ -15,6 +15,6 @@ def main(): Int := {
     let msg: Int = 12345 + 1345765 + 343543;
     test(12345 + 1345765 + 343543);
 
-    0
+    m::test()
 }
 

@@ -31,9 +31,9 @@ pub fn type_error_to_diagnostic(
                     severity: DiagnosticSeverity::Error,
                     message,
                     range: *range,
-                    file,
                     related: vec![related],
-                    module: None,
+                    file: Some(file),
+                    ..Default::default()
                 },
             );
         }
@@ -52,9 +52,9 @@ pub fn type_error_to_diagnostic(
                     severity: DiagnosticSeverity::Error,
                     message,
                     range: *range,
-                    file,
                     related: vec![related],
-                    module: None,
+                    file: Some(file),
+                    ..Default::default()
                 },
             );
         }
@@ -79,9 +79,9 @@ pub fn type_error_to_diagnostic(
                     severity: DiagnosticSeverity::Error,
                     message: diagnostic_message,
                     range: *range,
-                    file,
                     related: vec![related],
-                    module: None,
+                    file: Some(file),
+                    ..Default::default()
                 },
             );
         }
@@ -109,9 +109,9 @@ pub fn type_error_to_diagnostic(
                     severity: DiagnosticSeverity::Error,
                     message: diagnostic_message,
                     range: *range,
-                    file,
                     related: vec![related],
-                    module: None,
+                    file: Some(file),
+                    ..Default::default()
                 },
             );
         }

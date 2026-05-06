@@ -195,6 +195,10 @@ impl<'run> CompileCtx<'run> {
         self.global_functions[fun.0].name.name()
     }
 
+    pub fn original_fun(&self, fun: &FunRef) -> &OriginalFun {
+        &self.global_functions[fun.0]
+    }
+
     pub fn get_fun_sig(&self, fun: &FunRef) -> Option<FunSig> {
         debug_assert!(self.global_functions.len() >= fun.0);
         self.function_signatures.get(fun).cloned()

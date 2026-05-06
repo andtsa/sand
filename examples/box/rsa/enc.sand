@@ -1,3 +1,5 @@
+module encryption;
+
 def rsa_encrypt(msg: Int): Int :=
 {
     // primes
@@ -8,7 +10,7 @@ def rsa_encrypt(msg: Int): Int :=
     let phi: Int = (p - 1) * (q - 1);
 
     let e: Int = 17; // gcd(17, phi) == 1
-    let d: Int = m::modinv(e, phi);
+    let d: Int = cycg::modinv(e, phi);
 
-    m::modexp(msg, e, n)
+    cycg::modexp(msg, e, n)
 }

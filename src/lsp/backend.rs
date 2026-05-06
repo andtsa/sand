@@ -1,5 +1,6 @@
 //! LSP backend document checking functionality.
 
+use tokio::task::block_in_place;
 use tower_lsp::lsp_types::MessageType;
 use tower_lsp::lsp_types::Url;
 
@@ -8,15 +9,22 @@ use crate::lsp::Backend;
 use crate::lsp::diagnostics::lsp_diagnostics_from_result;
 
 impl Backend {
-    pub async fn check_project(&self) {
+    pub async fn uninit_err(&self) {
+        self.log(
+            MessageType::ERROR,
+            format!(
+                "operation at {:?} called before project was initialized",
+                std::panic::Location::caller()
+            ),
+        )
+        .await;
+    }
+
+    async fn run_project_checks(&self) -> Option<CheckResult> {
         let project_guard = self.project.read().await;
         let Some(project) = project_guard.as_ref() else {
-            self.log(
-                MessageType::WARNING,
-                "check_project called before project was initialized",
-            )
-            .await;
-            return;
+            self.uninit_err().await;
+            return None;
         };
 
         self.log(
@@ -25,10 +33,31 @@ impl Backend {
         )
         .await;
 
-        let result = project.check();
+        Some(block_in_place(|| project.check()))
+    }
+
+    pub async fn check_project(&self) {
+        let result = match self.run_project_checks().await {
+            Some(res) => res,
+            None => {
+                self.log(
+                    MessageType::ERROR,
+                    "failed to run project checks".to_string(),
+                )
+                .await;
+                return;
+            }
+        };
 
         // Build the new diagnostics map from this result
-        let mut new_diags = lsp_diagnostics_from_result(&result, project);
+        let mut new_diags = {
+            let project_guard = self.project.read().await;
+            let Some(project) = project_guard.as_ref() else {
+                self.uninit_err().await;
+                return;
+            };
+            lsp_diagnostics_from_result(&result, project)
+        }; // drop project lock again
 
         if let CheckResult::Success { ctx, ast } = &result {
             let hints = self.annotate_reused_expressions(ctx, ast).await;

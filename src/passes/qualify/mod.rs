@@ -43,6 +43,7 @@ impl<'qual, 'run> QualfiyCtx<'qual, 'run> {
         name: &str,
         in_mod: &ModuleRef,
         caller: Range,
+        caller_module: &ModuleRef,
     ) -> Result<FunRef, QualifyError> {
         if let Some(fn_ref_set) = self.available_functions.get(in_mod) {
             for fr in fn_ref_set {
@@ -54,12 +55,15 @@ impl<'qual, 'run> QualfiyCtx<'qual, 'run> {
                 func: name.to_string(),
                 range: caller,
                 module: self.compile_ctx.module_info(in_mod),
+                source_module: self.compile_ctx.module_info(caller_module),
             })
         } else {
-            internal_bug!(
-                "internal function call from non existing module: {name} {}",
-                self.compile_ctx.module_info(in_mod)
-            )
+            Err(QualifyError::FunctionQualFailedModuleNotFound {
+                func: name.to_string(),
+                module: self.compile_ctx.module_info(in_mod).name,
+                source_module: self.compile_ctx.module_info(caller_module),
+                range: caller,
+            })
         }
     }
 
@@ -67,12 +71,14 @@ impl<'qual, 'run> QualfiyCtx<'qual, 'run> {
         &self,
         name: &str,
         from_module: ModuleRef,
+        range: Range,
     ) -> Result<ModuleRef, QualifyError> {
         self.compile_ctx
             .get_mod_by_name(name)
             .ok_or_else(|| QualifyError::ModuleNotFound {
                 module: name.to_string(),
                 source_module: self.compile_ctx.module_info(&from_module),
+                range,
             })
     }
 }
@@ -245,7 +251,8 @@ fn qualify_expr(
                         }
                     } else {
                         // need to find the function we're calling
-                        let fn_ref = q.get_function_by_name(&name, module_name, expr.range)?;
+                        let fn_ref =
+                            q.get_function_by_name(&name, module_name, expr.range, module_name)?;
                         qhir::Expression::Call {
                             fn_name: fn_ref,
                             args: qargs,
@@ -253,8 +260,9 @@ fn qualify_expr(
                     }
                 }
                 HirFnCall::External { module, name } => {
-                    let mod_ref = q.get_module_by_name(&module, *module_name)?;
-                    let fn_ref = q.get_function_by_name(&name, &mod_ref, expr.range)?;
+                    let mod_ref = q.get_module_by_name(&module, *module_name, expr.range)?;
+                    let fn_ref =
+                        q.get_function_by_name(&name, &mod_ref, expr.range, module_name)?;
                     qhir::Expression::Call {
                         fn_name: fn_ref,
                         args: qargs,

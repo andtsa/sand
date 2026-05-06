@@ -12,7 +12,7 @@ use crate::compiler::structure::Map;
 use crate::compiler::structure::ModuleRef;
 use crate::compiler::structure::Range;
 use crate::compiler::structure::UniqVar;
-use crate::ir_types::qhir::Parameter;
+pub use crate::ir_types::qhir::Parameter;
 use crate::lang::intrinsics::Intrinsic;
 use crate::lang::ops::*;
 use crate::lang::types::*;
@@ -50,7 +50,9 @@ pub enum Statement {
     Expr(Expr),
 }
 
-/// `Expr` wraps an `Expression` and carries start/end positions (line,col)
+/// `Expr` wraps an `Expression` and
+/// carries its expected type &
+/// start/end positions (line,col)
 #[derive(Debug, Clone)]
 pub struct Expr {
     pub expr: Expression,

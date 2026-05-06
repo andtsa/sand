@@ -1,0 +1,3 @@
+module m;
+
+def test(): Int := 1

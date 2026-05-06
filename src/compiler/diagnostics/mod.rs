@@ -3,6 +3,8 @@
 pub mod convert;
 pub mod render;
 
+use url::Url;
+
 use crate::compiler::structure::FileRef;
 use crate::compiler::structure::Map;
 use crate::compiler::structure::ModuleInfo;
@@ -50,8 +52,9 @@ where
 
 pub type SandDiagnostics = Diagnostics<FileRef, SandDiagnostic>;
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Default)]
 pub enum DiagnosticSeverity {
+    #[default]
     Error,
     Warning,
     Info,
@@ -64,13 +67,14 @@ pub enum DiagnosticSeverity {
 ///
 /// - this can only be converted to an LSP diagnostic if there's access to the
 ///   full text, since [`crate::lsp::util::lsp_range_from_pest`] needs it
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SandDiagnostic {
     pub severity: DiagnosticSeverity,
     pub message: String,
 
     pub range: Range,
-    pub file: FileRef,
+    pub file: Option<FileRef>,
+    pub url: Option<Url>,
     pub module: Option<ModuleInfo>,
 
     pub related: Vec<SdRelatedInfo>,

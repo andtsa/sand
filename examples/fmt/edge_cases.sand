@@ -1,0 +1,72 @@
+// edge_cases.sand
+// tricky formatting: inconsistent spacing, odd indentation, semicolons, empty blocks
+
+def   no_space_params(x:Int,y:Int,z:Int):Int:=x+y+z
+
+def all_on_one_line(a: Int, b: Int): Int := { let x: Int = a + b; let y: Int = x * x; y }
+
+def trailing_semis(n: Int): Int := {
+    let a: Int = n + 1;
+    let b: Int = a * 2;
+    b;
+    b + 1;
+    b
+}
+
+def empty_then_branch(flag: Bool, x: Int): Int :=
+    if flag then { x } else { 0 }
+
+def unit_block(): Unit := {
+    0;
+    1;
+    0
+}
+
+// operators with no spaces
+def cramped(a:Int,b:Int,c:Int):Int:=a*a+b*b-c*c+a*b-b*c+a*c
+
+// overly-spaced version of the same
+def  spacious  ( a : Int ,  b : Int ,  c : Int ) : Int  :=
+    a  *  a  +  b  *  b  -  c  *  c  +  a  *  b  -  b  *  c  +  a  *  c
+
+// semicolons in weird places
+def weird_semis(n: Int): Int := {
+    n + 1;
+    n + 2;
+    n + 3;
+    n + 4;
+    n
+}
+
+// single-expression functions that could be blocks or not
+def trivial_block(x: Int): Int := { x }
+def trivial_no_block(x: Int): Int := x
+def trivial_arith(x: Int): Int := x + 1
+def trivial_nested(x: Int): Int := { { { x } } }
+
+// let with block RHS
+def let_block_rhs(a: Int, b: Int): Int := {
+    let x: Int = {
+        let inner: Int = a * b;
+        inner + 1
+    };
+    let y: Int = {
+        a + b
+    };
+    x + y
+}
+
+// deeply nested single-line ifs
+def one_liner_ifs(a: Int, b: Int, c: Int): Int := if a > b then if b > c then c else b else a
+
+def main(): Int := {
+    let r1: Int = no_space_params(1, 2, 3);
+    let r2: Int = all_on_one_line(4, 5);
+    let r3: Int = trailing_semis(3);
+    let r4: Int = cramped(2, 3, 4);
+    let r5: Int = weird_semis(10);
+    let r6: Int = trivial_nested(7);
+    let r7: Int = let_block_rhs(3, 4);
+    let r8: Int = one_liner_ifs(5, 3, 1);
+    r1 + r2 + r3 + r4 + r5 + r6 + r7 + r8
+}

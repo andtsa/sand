@@ -31,6 +31,7 @@ pub enum QualifyError {
     ModuleNotFound {
         module: String,
         source_module: ModuleInfo,
+        range: Range,
     },
 
     #[error("tried to call function {func} from module {module} that doesn't exist")]
@@ -46,6 +47,7 @@ pub enum QualifyError {
     FunctionQualFailedFunctionNotFound {
         func: String,
         module: ModuleInfo,
+        source_module: ModuleInfo,
         range: Range,
     },
 

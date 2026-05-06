@@ -44,7 +44,8 @@ pub fn ast_error_to_diagnostics(
                     severity: DiagnosticSeverity::Error,
                     message,
                     range: *range,
-                    file,
+                    file: Some(file),
+                    url: None,
                     related: vec![related],
                     module: None,
                 },
@@ -63,7 +64,8 @@ pub fn ast_error_to_diagnostics(
             diagnostics.add_one(
                 file,
                 SandDiagnostic {
-                    file,
+                    file: Some(file),
+                    url: None,
                     range: *range,
                     severity: DiagnosticSeverity::Error,
                     message,
@@ -87,7 +89,8 @@ pub fn ast_error_to_diagnostics(
             diagnostics.add_one(
                 file,
                 SandDiagnostic {
-                    file,
+                    file: Some(file),
+                    url: None,
                     range: *range,
                     severity: DiagnosticSeverity::Error,
                     message,
@@ -109,44 +112,36 @@ pub fn ast_error_to_diagnostics(
             diagnostics.add_one(
                 file,
                 SandDiagnostic {
-                    file,
+                    file: Some(file),
                     range: *range,
                     severity: DiagnosticSeverity::Error,
                     message,
                     related: vec![related],
-                    module: None,
+                    ..Default::default()
                 },
             );
         }
 
         AstError::ContextError(ce) => {
-            let range = crate::compiler::structure::Range::default();
-
             diagnostics.add_one(
                 file,
                 SandDiagnostic {
-                    file,
-                    range,
+                    file: Some(file),
                     severity: DiagnosticSeverity::Error,
                     message: ce.to_string(),
-                    related: vec![],
-                    module: None,
+                    ..Default::default()
                 },
             );
         }
 
         AstError::UriError(err) => {
-            let range = crate::compiler::structure::Range::default();
-
             diagnostics.add_one(
                 file,
                 SandDiagnostic {
-                    file,
-                    range,
+                    file: Some(file),
                     severity: DiagnosticSeverity::Error,
                     message: err.to_string(),
-                    related: vec![],
-                    module: None,
+                    ..Default::default()
                 },
             );
         }
@@ -171,8 +166,7 @@ fn parse_error_to_diagnostic(file: FileRef, err: &pest::error::Error<Rule>) -> S
         range: Range::new_from_pos(start, end),
         severity: DiagnosticSeverity::Error,
         message: err.variant.message().into(),
-        file,
-        related: vec![],
-        module: None,
+        file: Some(file),
+        ..Default::default()
     }
 }

@@ -71,9 +71,9 @@ impl Backend {
         for (e, occs) in annotations.expr_occurrences.into_iter() {
             // // NOTE: whether we include this check or not
             // // depends on how the annotations are made
-            // if occs.len() <= 1 {
-            //     continue;
-            // }
+            if occs.len() <= 1 {
+                continue;
+            }
             if has_other_side_effects(&e) {
                 continue;
             }

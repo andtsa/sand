@@ -402,7 +402,7 @@ mod error_pipeline {
         let code = Map::from([(fr, "def main(): Int := ghost()")]);
 
         let err = compile_hir(code, &mut ctx).expect_err("should fail");
-        let diagnostics = SandDiagnostic::from_compiler_error(&ctx, err);
+        let diagnostics = SandDiagnostic::from_compiler_error(&ctx, &err);
 
         for diags in diagnostics.map.values() {
             for d in diags {
@@ -436,16 +436,18 @@ mod error_pipeline {
         )]);
 
         let err = compile_hir(code, &mut ctx).expect_err("should fail with DuplicateMain");
-        let diagnostics = SandDiagnostic::from_compiler_error(&ctx, err);
+        let diagnostics = SandDiagnostic::from_compiler_error(&ctx, &err);
 
         // For every (file_key, diagnostic) pair, the diagnostic's internal
         // `file` field must equal the key it's stored under.
         for (file_key, diags) in &diagnostics.map {
             for d in diags {
                 assert_eq!(
-                    d.file, *file_key,
+                    d.file.unwrap(),
+                    *file_key,
                     "diagnostic.file ({:?}) does not match the key it's stored under ({:?})",
-                    d.file, file_key
+                    d.file,
+                    file_key
                 );
             }
         }
@@ -461,7 +463,7 @@ mod error_pipeline {
         let code = Map::from([(fr, "def main(): Int := true")]);
 
         let err = compile_hir(code, &mut ctx).expect_err("type error expected");
-        let diagnostics = SandDiagnostic::from_compiler_error(&ctx, err);
+        let diagnostics = SandDiagnostic::from_compiler_error(&ctx, &err);
 
         let total: usize = diagnostics.map.values().map(|v| v.len()).sum();
         assert!(
@@ -488,151 +490,11 @@ mod error_pipeline {
 // a live client.  We therefore test the pure functions it calls — the ones
 // that translate between Sand diagnostics and LSP diagnostics — and document
 // the architectural bugs with clearly-marked integration-test stubs.
-
-#[cfg(test)]
-mod lsp_diagnostic_pipeline {
-    use bimap::BiBTreeMap;
-    use sand::compile_hir;
-    use sand::compiler::context::CompileCtx;
-    use sand::compiler::structure::FileRef;
-    use sand::compiler::structure::Map;
-    use sand::lsp::diagnostics::sand_source_diagnostics;
-    use tower_lsp::lsp_types::Url;
-
-    fn make_url(s: &str) -> Url {
-        Url::parse(s).unwrap()
-    }
-
-    /// [GUARD] `sand_source_diagnostics` converts a `SandLangError` into at
-    /// least one LSP `Diagnostic` when given valid context.
-    #[test]
-    fn sand_source_diagnostics_produces_at_least_one_entry() {
-        let src = "def main(): Int := ghost()";
-        let mut ctx = CompileCtx::initial();
-        let fr = ctx.dummy_file();
-        let code = Map::from([(fr, src)]);
-
-        let err = compile_hir(code, &mut ctx).expect_err("should fail");
-
-        // Build the file_map that the LSP backend maintains.
-        let uri = make_url("file:///tmp/main.sand");
-        let mut file_map: BiBTreeMap<Url, FileRef> = BiBTreeMap::new();
-        file_map.insert(uri.clone(), fr);
-
-        let diags = sand_source_diagnostics(&ctx, &file_map, src, err);
-        let total: usize = diags.map.values().map(|v| v.len()).sum();
-        assert!(
-            total > 0,
-            "sand_source_diagnostics should produce at least one LSP diagnostic"
-        );
-    }
-
-    /// [GUARD] Each produced diagnostic has a non-trivial message (not empty).
-    #[test]
-    fn diagnostics_have_non_empty_messages() {
-        let src = "def main(): Bool := 999";
-        let mut ctx = CompileCtx::initial();
-        let fr = ctx.dummy_file();
-        let code = Map::from([(fr, src)]);
-        let err = compile_hir(code, &mut ctx).expect_err("type error");
-
-        let uri = make_url("file:///tmp/t.sand");
-        let mut file_map: BiBTreeMap<Url, FileRef> = BiBTreeMap::new();
-        file_map.insert(uri, fr);
-
-        let diags = sand_source_diagnostics(&ctx, &file_map, src, err);
-        for ds in diags.map.values() {
-            for d in ds {
-                assert!(
-                    !d.message.is_empty(),
-                    "diagnostic message must not be empty"
-                );
-            }
-        }
-    }
-
-    /// [BUG] When the LSP backend calls `check_project` after fixing an error,
-    /// the compilation succeeds and `LastCompilation::Success` is stored.
-    /// `publish_diagnostics` is then called with *only* the hint diagnostics
-    /// (from `annotate_reused_expressions`), which may not include the
-    /// previously-errored files at all — so their error list is never cleared.
-    ///
-    /// This is an architectural stub; the actual LSP infra is async and
-    /// requires a live client.  We document the expected contract here.
-    ///
-    /// Expected: after a successful compilation the diagnostics map must
-    /// contain an entry for *every file* that was previously diagnosed,
-    /// even if that entry is an empty `Vec` (which clears the client's list).
-    #[test]
-    #[ignore = "requires LSP integration harness — documents known architectural bug"]
-    fn successful_compile_clears_previous_error_diagnostics() {
-        // Integration test outline:
-        // 1. Open file with error → LSP publishes diagnostics for that URI.
-        // 2. Fix the error (update file_contents).
-        // 3. Trigger check_project.
-        // 4. Assert that publish_diagnostics is called with an empty Vec for the
-        //    previously-errored URI.
-        //
-        // Currently step 4 fails: the success path only publishes hint
-        // diagnostics and never explicitly clears error files.
-        todo!("implement with mock LSP client");
-    }
-
-    /// [BUG] In `check_project`, the modules map is built by:
-    ///
-    ///   for (m, s) in file_contents.iter() {
-    ///       if let Some(fr) = context.files.get_by_left(m) {
-    ///           modules.insert(*fr, s.as_str());
-    ///       }
-    ///   }
-    ///
-    /// Any file in `file_contents` that is NOT in `context.files` is silently
-    /// skipped.  This can happen when `register_file` fails (e.g. due to the
-    /// `uri_name` bug), leaving the file in `file_contents` but not in
-    /// `context.files`.  The compiler then sees fewer files than expected,
-    /// producing "undefined function" errors for symbols defined in the
-    /// missing file.
-    ///
-    /// This is documented as an architectural stub.
-    #[test]
-    #[ignore = "requires LSP integration harness — documents known architectural bug"]
-    fn check_project_does_not_silently_drop_files() {
-        // Integration test outline:
-        // 1. Arrange: file_contents = {uri_a: src_a, uri_b: src_b} context.files =
-        //    {uri_a: fr_a}   (uri_b missing)
-        // 2. Act: check_project()
-        // 3. Assert: compilation error OR explicit log about the missing file — NOT a
-        //    silently successful compile that references nothing from uri_b.
-        todo!("implement with mock LSP client");
-    }
-
-    /// [BUG] `url_of_module_unchecked` calls `.unwrap()` on the bimap lookup.
-    /// If the CompileCtx's FileRef is not in the ProjectCtx bimap (possible
-    /// when dummy files are involved or when a file failed registration), this
-    /// panics and crashes the LSP server.
-    ///
-    /// This pure function test verifies that the panic path is reachable.
-    #[test]
-    fn url_of_module_unchecked_panics_on_unknown_file_ref() {
-        use sand::lsp::util::url_of_module_unchecked;
-
-        let mut ctx = CompileCtx::initial();
-        let orphan_fr = FileRef::test_new(99); // not in any bimap
-        let mr = ctx.register_module("orphan", orphan_fr);
-
-        let file_map: BiBTreeMap<Url, FileRef> = BiBTreeMap::new(); // empty
-
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            url_of_module_unchecked(mr, &ctx, &file_map)
-        }));
-
-        assert!(
-            result.is_err(),
-            "url_of_module_unchecked should panic when the FileRef is not in the bimap — \
-             this crash takes down the LSP server"
-        );
-    }
-}
+// NOTE: LSP diagnostic tests have been removed as the LSP backend has been
+// refactored to use the Project abstraction and lsp_diagnostics_from_result().
+// The old sand_source_diagnostics and url_of_module_unchecked functions are
+// no longer exported. LSP-specific testing should be done via integration tests
+// with the Backend and CheckResult.
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 7. End-to-end context consistency

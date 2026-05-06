@@ -1,0 +1,98 @@
+// nesting.sand
+// tests deeply nested blocks, ifs, and whiles
+
+def deeply_nested_blocks(n: Int): Int := {
+    let a: Int = {
+        let b: Int = {
+            let c: Int = {
+                let d: Int = {
+                    let e: Int = {
+                        n * 2
+                    };
+                    e + 1
+                };
+                d + 1
+            };
+            c + 1
+        };
+        b + 1
+    };
+    a
+}
+
+def deeply_nested_ifs(a: Int, b: Int, c: Int, d: Int): Int :=
+    if a > 0 then
+        if b > 0 then
+            if c > 0 then
+                if d > 0 then
+                    a + b + c + d
+                else
+                    a + b + c
+            else
+                if d > 0 then
+                    a + b + d
+                else
+                    a + b
+        else
+            if c > 0 then
+                a + c
+            else
+                a
+    else
+        0
+
+def deeply_nested_while(n: Int): Int := {
+    let i: Int = 0;
+    let j: Int = 0;
+    let result: Int = 0;
+
+    while i < n do {
+        while j < n do {
+            while result < n * n do {
+                if result > n then {
+                    if i == j then {
+                        result = result + i * j;
+                    } else {
+                        result = result + 1;
+                    };
+                } else {
+                    result = result + 2;
+                };
+                result = result + 1;
+            };
+            j = j + 1;
+        };
+        i = i + 1;
+    };
+
+    result
+}
+
+def mixed_deep(x: Int, flag: Bool): Int := {
+    let a: Int = {
+        if flag then {
+            let b: Int = {
+                while x > 0 do {
+                    if x > 10 then {
+                        x = x - 3;
+                    } else {
+                        x = x - 1;
+                    };
+                };
+                x
+            };
+            b * 2
+        } else {
+            x + 1
+        }
+    };
+    a
+}
+
+def main(): Int := {
+    let r1: Int = deeply_nested_blocks(5);
+    let r2: Int = deeply_nested_ifs(1, 2, 3, 4);
+    let r3: Int = deeply_nested_while(10);
+    let r4: Int = mixed_deep(20, true);
+    r1 + r2 + r3 + r4
+}

@@ -31,9 +31,9 @@ pub fn uniquify_error_to_diagnostics(
                     severity: DiagnosticSeverity::Error,
                     message,
                     range: *at,
-                    file,
                     related: vec![related],
-                    module: None,
+                    file: Some(file),
+                    ..Default::default()
                 },
             );
         }
@@ -53,9 +53,9 @@ pub fn uniquify_error_to_diagnostics(
                     severity: DiagnosticSeverity::Error,
                     message,
                     range: *at,
-                    file,
                     related: vec![related],
-                    module: None,
+                    file: Some(file),
+                    ..Default::default()
                 },
             );
         }
@@ -79,9 +79,9 @@ pub fn uniquify_error_to_diagnostics(
                     severity: DiagnosticSeverity::Error,
                     message,
                     range: *second_instance,
-                    file,
                     related: vec![related],
-                    module: None,
+                    file: Some(file),
+                    ..Default::default()
                 },
             );
         }
@@ -101,9 +101,9 @@ pub fn uniquify_error_to_diagnostics(
                     severity: DiagnosticSeverity::Error,
                     message,
                     range: *at,
-                    file,
                     related: vec![related],
-                    module: None,
+                    file: Some(file),
+                    ..Default::default()
                 },
             );
         }
@@ -127,9 +127,9 @@ pub fn uniquify_error_to_diagnostics(
                     severity: DiagnosticSeverity::Error,
                     message,
                     range: *second_instance,
-                    file,
                     related: vec![related],
-                    module: None,
+                    file: Some(file),
+                    ..Default::default()
                 },
             );
         }
@@ -153,9 +153,9 @@ pub fn uniquify_error_to_diagnostics(
                     severity: DiagnosticSeverity::Error,
                     message,
                     range: *second_instance,
-                    file,
                     related: vec![related],
-                    module: None,
+                    file: Some(file),
+                    ..Default::default()
                 },
             );
         }

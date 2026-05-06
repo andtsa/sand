@@ -1,0 +1,56 @@
+// many_params.sand
+// tests functions with many parameters
+
+def add2(a: Int, b: Int): Int := a + b
+
+def add3(a: Int, b: Int, c: Int): Int := a + b + c
+
+def add4(a: Int, b: Int, c: Int, d: Int): Int := a + b + c + d
+
+def add5(a: Int, b: Int, c: Int, d: Int, e: Int): Int := a + b + c + d + e
+
+def add6(a: Int, b: Int, c: Int, d: Int, e: Int, f: Int): Int := a + b + c + d + e + f
+
+def add7(a: Int, b: Int, c: Int, d: Int, e: Int, f: Int, g: Int): Int := a + b + c + d + e + f + g
+
+def add8(a: Int, b: Int, c: Int, d: Int, e: Int, f: Int, g: Int, h: Int): Int :=
+    a + b + c + d + e + f + g + h
+
+def mixed_types_five(x: Int, y: Int, z: Int, flag_a: Bool, flag_b: Bool): Int :=
+    if flag_a & flag_b then x + y + z else x - y + z
+
+def mixed_types_seven(alpha: Int, beta: Int, gamma: Int, delta: Int, flag_one: Bool, flag_two: Bool, flag_three: Bool): Int := {
+    let base: Int = alpha + beta + gamma + delta;
+    if flag_one then {
+        if flag_two then {
+            if flag_three then base * 3 else base * 2
+        } else {
+            base
+        }
+    } else {
+        0
+    }
+}
+
+def weighted_sum(v1: Int, w1: Int, v2: Int, w2: Int, v3: Int, w3: Int, v4: Int, w4: Int): Int :=
+    v1 * w1 + v2 * w2 + v3 * w3 + v4 * w4
+
+def clamp_and_combine(value: Int, lo: Int, hi: Int, scale: Int, offset: Int): Int := {
+    let clamped: Int = if value < lo then lo else if value > hi then hi else value;
+    clamped * scale + offset
+}
+
+def main(): Int := {
+    let s2: Int = add2(1, 2);
+    let s3: Int = add3(1, 2, 3);
+    let s4: Int = add4(1, 2, 3, 4);
+    let s5: Int = add5(1, 2, 3, 4, 5);
+    let s6: Int = add6(1, 2, 3, 4, 5, 6);
+    let s7: Int = add7(1, 2, 3, 4, 5, 6, 7);
+    let s8: Int = add8(1, 2, 3, 4, 5, 6, 7, 8);
+    let mx: Int = mixed_types_five(10, 20, 30, true, false);
+    let my: Int = mixed_types_seven(1, 2, 3, 4, true, true, false);
+    let ws: Int = weighted_sum(1, 10, 2, 20, 3, 30, 4, 40);
+    let cc: Int = clamp_and_combine(150, 0, 100, 2, 5);
+    s2 + s3 + s4 + s5 + s6 + s7 + s8 + mx + my + ws + cc
+}

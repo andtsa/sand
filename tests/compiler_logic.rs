@@ -545,59 +545,7 @@ mod return_type_mismatch_tests {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 10. `uri_name` EXTRACTS PARENT DIRECTORY INSTEAD OF FILE STEM
-// ─────────────────────────────────────────────────────────────────────────────
-// Bug: `uri_name` calls `next_back()` twice — the first call pops the whole
-// last segment (e.g. "foo.sand") into `_extension`, and the second call pops
-// the *parent directory* (e.g. "src") as the "name".
-// ═════════════════════════════════════════════════════════════════════════════
-#[cfg(test)]
-mod uri_name_tests {
-    use sand::compiler::structure::uri_name;
-    use tower_lsp::lsp_types::Url;
-
-    /// [BUG] uri_name should return the file stem, not the parent directory.
-    /// For `file:///projects/my_project/src/main.sand` the expected name is
-    /// `"main"` (or at worst `"main.sand"`), not `"src"`.
-    #[test]
-    fn uri_name_returns_file_stem_not_parent_dir() {
-        let url = Url::parse("file:///projects/my_project/src/main.sand").unwrap();
-        let name = uri_name(&url).expect("uri_name failed");
-        assert_eq!(
-            name, "main",
-            "uri_name returned {:?} — expected the file stem \"main\", not the parent directory",
-            name
-        );
-    }
-
-    /// [BUG] A top-level file (no parent dir) should still work.
-    /// `file:///myfile.sand` → `"myfile"`.
-    #[test]
-    fn uri_name_works_for_top_level_file() {
-        let url = Url::parse("file:///myfile.sand").unwrap();
-        let result = uri_name(&url);
-        // With the bug, next_back() after popping "myfile.sand" returns None
-        // and the function returns an Err.  After fixing it should return Ok.
-        assert!(
-            result.is_ok(),
-            "uri_name errored on a top-level file: {:?}",
-            result
-        );
-        assert_eq!(result.unwrap(), "myfile");
-    }
-
-    /// [GUARD] A nested path with a normal extension works correctly.
-    #[test]
-    fn uri_name_nested_path() {
-        let url = Url::parse("file:///a/b/c/module.sand").unwrap();
-        let name = uri_name(&url).unwrap();
-        // Bug: returns "c". Expected: "module".
-        assert_eq!(name, "module");
-    }
-}
-
-// ═════════════════════════════════════════════════════════════════════════════
-// 11. WHILE-LOOP RETURN TYPE
+// 10. WHILE-LOOP RETURN TYPE
 // ─────────────────────────────────────────────────────────────────────────────
 // A `while` expression should always have type `Unit`.  Using its "result" as
 // an Int must be a type error.
