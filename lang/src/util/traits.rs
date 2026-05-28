@@ -35,13 +35,10 @@ impl fmt::Display for Expression {
                 cond,
                 t,
                 f: else_branch,
-            } => {
-                write!(
-                    f,
-                    "(if {} then {} else {})",
-                    cond.expr, t.expr, else_branch.expr
-                )
-            }
+            } => match else_branch {
+                Some(e) => write!(f, "(if {} then {} else {})", cond.expr, t.expr, e.expr),
+                None => write!(f, "(if {} then {})", cond.expr, t.expr),
+            },
             Expression::While { cond, body } => {
                 write!(f, "(while {} do {})", cond.expr, body.expr)
             }
@@ -72,9 +69,10 @@ impl fmt::Display for Expression {
 impl fmt::Display for Statement {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Statement::Declaration { name, ty, val, .. } => {
-                write!(f, "let {:?}: {} = {}", name, ty, val.expr)
-            }
+            Statement::Declaration { name, ty, val, .. } => match ty {
+                Some(ty) => write!(f, "let {:?}: {} = {}", name, ty, val.expr),
+                None => write!(f, "let {:?} = {}", name, val.expr),
+            },
             Statement::Assignment { name, val, .. } => {
                 write!(f, "{:?} = {}", name, val.expr)
             }

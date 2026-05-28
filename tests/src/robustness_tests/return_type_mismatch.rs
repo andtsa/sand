@@ -24,7 +24,7 @@ fn empty_block_in_int_function_is_type_error() {
 }
 
 /// A block whose only content is statements (no trailing expr)
-/// returns Unit — that must fail for a non-Unit return type.
+/// returns Unit; that must fail for a non-Unit return type.
 #[test]
 fn statement_only_block_in_int_function_is_type_error() {
     typecheck_fails(

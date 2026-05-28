@@ -7,10 +7,10 @@ pub mod hover;
 pub mod lsp;
 pub mod protocol;
 pub mod util;
-use tracing::info;
-use tracing::debug;
 use tower_lsp::LspService;
 use tower_lsp::Server;
+use tracing::debug;
+use tracing::info;
 
 use crate::lsp::Backend;
 
@@ -20,7 +20,7 @@ async fn main() {
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .init();
-    
+
     info!("starting sand lsp");
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();

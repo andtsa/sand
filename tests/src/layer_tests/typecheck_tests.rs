@@ -73,7 +73,7 @@ fn typecheck_if_branches_same_type() {
 fn typecheck_while_loop() {
     typecheck(
         "def main(): Unit := {
-            let i: Int = 0;
+            let mut i: Int = 0;
             while i < 3 do {
                 i = i + 1;
             };
@@ -112,7 +112,7 @@ fn typecheck_recursive_function() {
 fn typecheck_block_with_assignment() {
     typecheck(
         "def main(): Int := {
-            let x: Int = 5;
+            let mut x: Int = 5;
             x = x + 1;
             x
         }",

@@ -56,7 +56,7 @@ fn all_blocks_have_a_terminator() {
         "def main(): Int := 1 + 2",
         "def main(): Bool := if true then false else true",
         "def main(): Int := {
-            let i: Int = 0;
+            let mut i: Int = 0;
             while i < 5 do { i = i + 1; };
             i
         }",
@@ -118,7 +118,7 @@ fn if_expression_produces_branch_terminator() {
 #[test]
 fn while_loop_produces_branch_and_goto() {
     let src = "def main(): Int := {
-        let i: Int = 0;
+        let mut i: Int = 0;
         while i < 3 do { i = i + 1; };
         i
     }";

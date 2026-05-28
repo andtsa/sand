@@ -44,7 +44,8 @@ pub enum Statement {
     Declaration {
         name: UniqVar,
         range: Range,
-        ty: Ty,
+        ty: Option<Ty>,
+        is_mutable: bool,
         val: Expr,
     },
 
@@ -69,7 +70,7 @@ pub enum Expression {
     If {
         cond: Box<Expr>,
         t: Box<Expr>,
-        f: Box<Expr>,
+        f: Option<Box<Expr>>,
     },
     While {
         cond: Box<Expr>,

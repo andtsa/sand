@@ -123,12 +123,10 @@ impl Program {
                 fn_names.insert(name, f.range);
                 fns.insert(f.name);
             }
-            if q.available_functions.contains_key(module_name) {
-                return Err(QualifyError::DuplicateModule(
-                    q.compile_ctx.module_info(module_name),
-                ));
-            }
-            q.available_functions.insert(*module_name, fns);
+            q.available_functions
+                .entry(*module_name)
+                .or_default()
+                .extend(fns);
         }
 
         q.compile_ctx.entrypoint = main.map(|(name, _, _)| name);
@@ -208,7 +206,9 @@ fn qualify_expr(
         hhir::Expression::If { cond, t, f } => qhir::Expression::If {
             cond: Box::new(qualify_expr(q, module_name, *cond)?),
             t: Box::new(qualify_expr(q, module_name, *t)?),
-            f: Box::new(qualify_expr(q, module_name, *f)?),
+            f: f.map(|e| qualify_expr(q, module_name, *e))
+                .transpose()?
+                .map(Box::new),
         },
         hhir::Expression::Block { statements, expr } => qhir::Expression::Block {
             statements: statements
@@ -298,6 +298,7 @@ fn qualify_statement(
             name,
             range,
             ty,
+            is_mutable,
             val,
         } => {
             let HirVar::Uniq(uv) = name else {
@@ -306,6 +307,7 @@ fn qualify_statement(
             Ok(qhir::Statement::Declaration {
                 name: uv,
                 ty,
+                is_mutable,
                 range,
                 val: qualify_expr(q, module_name, val)?,
             })

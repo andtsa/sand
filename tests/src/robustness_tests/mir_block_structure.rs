@@ -37,9 +37,9 @@ fn nested_if_else_executes_correct_branch() {
 fn while_inside_if_executes_correctly() {
     let src = "
         def f(flag: Bool): Int := {
-            let result: Int = 0;
+            let mut result: Int = 0;
             if flag then {
-                let i: Int = 0;
+                let mut i: Int = 0;
                 while i < 4 do {
                     result = result + i;
                     i = i + 1;

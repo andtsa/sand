@@ -238,7 +238,7 @@ fn interpret_nested_if() {
 #[test]
 fn interpret_while_not_entered_when_false() {
     let src = "def main(): Int := {
-        let x: Int = 0;
+        let mut x: Int = 0;
         while false do { x = x + 1; };
         x
     }";
@@ -248,7 +248,7 @@ fn interpret_while_not_entered_when_false() {
 #[test]
 fn interpret_while_runs_correct_iterations() {
     let src = "def main(): Int := {
-        let x: Int = 0;
+        let mut x: Int = 0;
         while x < 5 do { x = x + 1; };
         x
     }";
@@ -259,8 +259,8 @@ fn interpret_while_runs_correct_iterations() {
 fn interpret_while_accumulator() {
     // Sum 1..=10 = 55
     let src = "def main(): Int := {
-        let i: Int = 1;
-        let s: Int = 0;
+        let mut i: Int = 1;
+        let mut s: Int = 0;
         while i <= 10 do {
             s = s + i;
             i = i + 1;
@@ -300,7 +300,7 @@ fn interpret_nested_block_shadowing() {
 #[test]
 fn interpret_assignment_updates_value() {
     let src = "def main(): Int := {
-        let x: Int = 1;
+        let mut x: Int = 1;
         x = 42;
         x
     }";

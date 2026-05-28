@@ -10,7 +10,7 @@ type_ = {
 }
 
 // keywords (prevent them from being identifiers)
-KEYWORD = { "if" | "then" | "else" | "let" | "def" | "true" | "false" | "Unit" | "Int" | "Bool" | "while" | "do" | "module" }
+KEYWORD = { "if" | "then" | "else" | "let" | "def" | "true" | "false" | "Unit" | "Int" | "Bool" | "while" | "do" | "module" | "mut" }
 
 identifier       = @{ !(KEYWORD ~ !(ASCII_ALPHANUMERIC | "_")) ~ "_"* ~ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
 empty_identifier = @{ "_" }
@@ -75,8 +75,10 @@ logic_xor  = { logic_and ~ (xor ~ logic_and)* }
 logic_or   = { logic_xor ~ (or ~ logic_xor)* }
 expression = { logic_or }
 
+mut_kw = { "mut" }
+
 // variables
-declaration = { "let" ~ (identifier | empty_identifier) ~ ":" ~ type_ ~ "=" ~ expression }
+declaration = { "let" ~ mut_kw? ~ (identifier | empty_identifier) ~ (":" ~ type_)? ~ "=" ~ expression }
 
 // left here for later:
 // constant = { "const" ~ declaration }

@@ -58,7 +58,7 @@ fn range_contains(range: LangRange, pos: Pos) -> bool {
     p >= (range.start.line, range.start.col) && p <= (range.end.line, range.end.col)
 }
 
-fn find_in_expr<'a>(expr: &'a Expr, pos: Pos) -> Option<&'a Expr> {
+fn find_in_expr(expr: &Expr, pos: Pos) -> Option<&Expr> {
     if !range_contains(expr.range, pos) {
         return None;
     }
@@ -85,7 +85,7 @@ fn find_in_expr<'a>(expr: &'a Expr, pos: Pos) -> Option<&'a Expr> {
     child.or(Some(expr))
 }
 
-fn find_in_stmt<'a>(stmt: &'a Statement, pos: Pos) -> Option<&'a Expr> {
+fn find_in_stmt(stmt: &Statement, pos: Pos) -> Option<&Expr> {
     match stmt {
         Statement::Declaration { range, val, .. } => {
             if range_contains(*range, pos) {

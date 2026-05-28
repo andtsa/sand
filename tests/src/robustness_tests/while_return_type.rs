@@ -13,7 +13,7 @@ fn while_loop_in_unit_function_is_ok() {
     assert_eq!(
         run_mir(
             "def main(): Unit := {
-                let i: Int = 0;
+                let mut i: Int = 0;
                 while i < 3 do { i = i + 1; };
             }"
         ),

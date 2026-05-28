@@ -220,7 +220,10 @@ fn uniquify_expr(e: &Expr, u: &mut UniqCtx) -> Result<Expr, UniquifyError> {
         Expression::If { cond, t, f } => Expression::If {
             cond: Box::new(uniquify_expr(cond, u)?),
             t: Box::new(uniquify_expr(t, u)?),
-            f: Box::new(uniquify_expr(f, u)?),
+            f: f.as_deref()
+                .map(|e| uniquify_expr(e, u))
+                .transpose()?
+                .map(Box::new),
         },
 
         Expression::While { cond, body } => Expression::While {
@@ -304,6 +307,7 @@ fn uniquify_stmt(stmt: &Statement, u: &mut UniqCtx) -> Result<Statement, Uniquif
             name,
             range,
             ty,
+            is_mutable,
             val,
         } => {
             let val = uniquify_expr(val, u)?;
@@ -312,6 +316,7 @@ fn uniquify_stmt(stmt: &Statement, u: &mut UniqCtx) -> Result<Statement, Uniquif
                 name: HirVar::Uniq(new_name),
                 range: *range,
                 ty: *ty,
+                is_mutable: *is_mutable,
                 val,
             })
         }

@@ -1,7 +1,7 @@
 def gcd(a: Int, b: Int): Int :=
 {
-    let x: Int = a;
-    let y: Int = b;
+    let mut x: Int = a;
+    let mut y: Int = b;
 
     while (y != 0) do {
         let t: Int = y;

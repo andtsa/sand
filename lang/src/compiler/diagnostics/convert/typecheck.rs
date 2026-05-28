@@ -37,6 +37,27 @@ pub fn type_error_to_diagnostic(
                 },
             );
         }
+        ImmutableAssignment { name, range } => {
+            let message = format!("cannot assign to immutable variable '{}'", name);
+
+            let related = SdRelatedInfo {
+                file,
+                range: *range,
+                message: "variable is not declared with 'mut'".into(),
+            };
+
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    message,
+                    range: *range,
+                    related: vec![related],
+                    file: Some(file),
+                    ..Default::default()
+                },
+            );
+        }
         UndefinedFunction { name, range } => {
             let message = format!("undefined function '{}'", name);
 

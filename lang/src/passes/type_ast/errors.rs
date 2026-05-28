@@ -16,6 +16,8 @@ pub struct TypeError {
 pub enum AstTypeError {
     #[error("unbound variable '{name}' at {range}")]
     UnboundVariable { name: String, range: Range },
+    #[error("cannot assign to immutable variable '{name}' at {range}")]
+    ImmutableAssignment { name: String, range: Range },
     #[error("undefined function '{name}' at {range}")]
     UndefinedFunction { name: String, range: Range },
     #[error("type error at {range}: {message} (expected {expected:?}, found {found:?})")]

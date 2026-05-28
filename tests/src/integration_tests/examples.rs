@@ -58,7 +58,7 @@ fn test_layers(file: &str) {
 
     let p = ProgramModule::parse_stub(&mut ctx, &code).unwrap();
     let q = qhir::Program::combine(&mut ctx, vec![p]).unwrap();
-    let t = TypedProgram::from_ast_program(&mut ctx, q).unwrap();
+    let t = TypedProgram::from_ast_program(&ctx, q).unwrap();
 
     // Just verify it doesn't panic, the value itself doesn't matter for this test
     black_box(t);

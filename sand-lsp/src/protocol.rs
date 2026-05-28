@@ -7,14 +7,14 @@ use tokio::task::spawn_blocking;
 use tower_lsp::LanguageServer;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
+use tracing::debug;
+use tracing::error;
+use tracing::info;
+use tracing::warn;
 
 use crate::diagnostics::setup_warning_to_lsp;
 use crate::hover;
 use crate::lsp::Backend;
-use tracing::debug;
-use tracing::info;
-use tracing::warn;
-use tracing::error;
 
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {

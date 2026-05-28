@@ -10,7 +10,7 @@ use crate::common::*;
 fn if_without_else_as_statement_is_ok() {
     let _ = run_mir(
         "def main(): Unit := {
-            let x: Int = 0;
+            let mut x: Int = 0;
             if x == 0 then { x = 1; };
         }",
     );

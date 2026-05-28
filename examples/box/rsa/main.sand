@@ -9,12 +9,12 @@ def test(message: Int): Unit := {
 }
 
 def main(): Int := {
-    let message: Int = 42;
+    let message = 42;
     test(message);
 
     let msg: Int = 12345 + 1345765 + 343543;
     test(12345 + 1345765 + 343543);
 
-    m::test()
+    m::test(1)
 }
 

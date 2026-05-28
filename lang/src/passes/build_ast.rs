@@ -138,7 +138,7 @@ pub fn build_program<'run>(
     assert_eq!(pair.as_rule(), Rule::program);
 
     // todo: discard unused modules from the ctx
-    let mut mods = Map::new();
+    let mut mods: Map<ModuleRef, Vec<Function>> = Map::new();
     let mut funcs = Vec::new();
     let mut current_module = default_module;
     for child in pair.into_inner() {
@@ -158,12 +158,15 @@ pub fn build_program<'run>(
                         range: Range::from(&modname_pair),
                     });
                 }
-                // if we have an existing module, save it before starting the new one
+                // flush accumulated functions into the current module slot
                 if !funcs.is_empty() {
-                    mods.insert(current_module, funcs);
-                    funcs = Vec::new();
+                    mods.entry(current_module).or_default().append(&mut funcs);
                 }
-                current_module = ctx.register_module(mod_span.as_str(), file);
+                // reuse any existing module with this name so that `module m;` in
+                // multiple files all contribute to the same module
+                current_module = ctx
+                    .get_mod_by_name(mod_span.as_str())
+                    .unwrap_or_else(|| ctx.register_module(mod_span.as_str(), file));
             }
             Rule::function => {
                 funcs.push(build_function(ctx, child, src, &current_module)?);
@@ -184,7 +187,7 @@ pub fn build_program<'run>(
     }
 
     if !funcs.is_empty() {
-        mods.insert(current_module, funcs);
+        mods.entry(current_module).or_default().append(&mut funcs);
     }
 
     Ok(mods)
@@ -347,24 +350,33 @@ fn build_statement<'run>(
     match first.as_rule() {
         d @ Rule::declaration => {
             let mut decl_inner = first.into_inner();
-            let name_pair = decl_inner.next().missing("declaration name", inner_range)?;
-            let var = HirVar::Decl(ctx.new_original_variable(&name_pair, d)?); // identifier
+            let first_child = decl_inner.next().missing("declaration body", inner_range)?;
+            let (is_mutable, name_pair) = if first_child.as_rule() == Rule::mut_kw {
+                (
+                    true,
+                    decl_inner.next().missing("declaration name", inner_range)?,
+                )
+            } else {
+                (false, first_child)
+            };
+            let var = HirVar::Decl(ctx.new_original_variable(&name_pair, d)?);
             tracing::trace!("declaration name: {}", name_pair.as_str());
-            let ty = build_type(
-                ctx,
-                decl_inner.next().missing("declaration type", inner_range)?,
-            )?;
-            let expr = build_expr(
-                ctx,
-                decl_inner
+            let next = decl_inner.next().missing("declaration body", inner_range)?;
+            let (ty, expr_pair) = if next.as_rule() == Rule::type_ {
+                let ty = build_type(ctx, next)?;
+                let expr_pair = decl_inner
                     .next()
-                    .missing("declaration expression", inner_range)?,
-                src,
-            )?;
+                    .missing("declaration expression", inner_range)?;
+                (Some(ty), expr_pair)
+            } else {
+                (None, next)
+            };
+            let expr = build_expr(ctx, expr_pair, src)?;
             Ok(Statement::Declaration {
                 name: var,
                 range: inner_range,
                 ty,
+                is_mutable,
                 val: expr,
             })
         }
@@ -829,18 +841,15 @@ fn build_if<'run>(
     let cond = build_expr(ctx, cond_pair, src)?;
     let then_e = build_expr(ctx, then_pair, src)?;
     let else_e = match else_pair {
-        Some(p) => build_expr(ctx, p, src)?,
-        None => Expr {
-            expr: Expression::Unit,
-            range,
-        },
+        Some(p) => Some(Box::new(build_expr(ctx, p, src)?)),
+        None => None,
     };
 
     Ok(Expr {
         expr: Expression::If {
             cond: Box::new(cond),
             t: Box::new(then_e),
-            f: Box::new(else_e),
+            f: else_e,
         },
         range,
     })

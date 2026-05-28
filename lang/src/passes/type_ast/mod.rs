@@ -4,12 +4,11 @@
 //! and output a TypedProgram AST
 
 mod errors;
-mod type_check;
-mod var_types;
 
 use crate::compiler::context::CompileCtx;
 use crate::compiler::structure::FunRef;
 use crate::compiler::structure::Map;
+use crate::compiler::structure::UniqVar;
 use crate::ir_types::qhir;
 use crate::ir_types::typed_hir;
 use crate::ir_types::typed_hir::TypedFunction;
@@ -18,40 +17,53 @@ use crate::lang::types::Ty;
 pub use crate::passes::type_ast::errors::AstTypeError;
 use crate::passes::type_ast::errors::TypeError;
 
+type TypeEnv = Map<UniqVar, (Ty, bool)>; // (type, is_mutable)
+
 impl typed_hir::TypedProgram {
-    pub fn from_ast_program<'tyc, 'run>(
-        ctx: &'tyc mut CompileCtx<'run>,
-        ast: qhir::Program,
-    ) -> Result<Self, TypeError> {
+    pub fn from_ast_program(ctx: &CompileCtx, ast: qhir::Program) -> Result<Self, TypeError> {
         let fn_list = ast
             .functions
             .values()
-            .map(|f| annotate_function(ctx, f))
+            .map(|f| infer_function(ctx, f))
             .collect::<Result<Vec<(FunRef, TypedFunction)>, _>>()?;
 
         let functions = fn_list.into_iter().collect::<Map<_, _>>();
 
-        let prog = typed_hir::TypedProgram { functions };
-
-        type_check::check_program(ctx, &prog)?;
-
-        Ok(prog)
+        Ok(typed_hir::TypedProgram { functions })
     }
 }
 
-pub fn annotate_function<'tyc, 'run>(
-    ctx: &'tyc mut CompileCtx<'run>,
+fn infer_function(
+    ctx: &CompileCtx,
     func: &qhir::Function,
 ) -> Result<(FunRef, TypedFunction), TypeError> {
-    var_types::collect_variables(ctx, func).map_err(|e| TypeError {
+    let env: TypeEnv = func
+        .parameters
+        .iter()
+        .map(|p| (p.name, (p.ty, false)))
+        .collect();
+
+    let body = infer(ctx, &env, &func.body).map_err(|e| TypeError {
         error: e,
         module: func.src_module,
     })?;
 
-    let body = annotate_expression(ctx, &func.body).map_err(|e| TypeError {
-        error: e,
-        module: func.src_module,
-    })?;
+    if body.ty != func.ret_type {
+        return Err(TypeError {
+            error: AstTypeError::TypeError {
+                message: format!(
+                    "function '{}' has return type {:?} but body has type {:?}",
+                    ctx.original_fun_name(func.name),
+                    func.ret_type,
+                    body.ty
+                ),
+                expected: func.ret_type,
+                found: body.ty,
+                range: func.range,
+            },
+            module: func.src_module,
+        });
+    }
 
     Ok((
         func.name,
@@ -66,8 +78,9 @@ pub fn annotate_function<'tyc, 'run>(
     ))
 }
 
-fn annotate_expression<'tyc, 'run>(
-    ctx: &'tyc mut CompileCtx<'run>,
+fn infer(
+    ctx: &CompileCtx,
+    env: &TypeEnv,
     expr: &qhir::Expr,
 ) -> Result<typed_hir::Expr, AstTypeError> {
     match &expr.expr {
@@ -86,26 +99,35 @@ fn annotate_expression<'tyc, 'run>(
             range: expr.range,
             ty: Ty::Unit,
         }),
-        qhir::Expression::Var(x) => Ok(typed_hir::Expr {
-            expr: typed_hir::Expression::Var(*x),
-            range: expr.range,
-            ty: ctx.get_var_type(x).expect("untyped variable"),
-        }),
+        qhir::Expression::Var(x) => {
+            let (ty, _) = env
+                .get(x)
+                .copied()
+                .ok_or_else(|| AstTypeError::UnboundVariable {
+                    name: ctx.uniq_variable_name(x),
+                    range: expr.range,
+                })?;
+            Ok(typed_hir::Expr {
+                expr: typed_hir::Expression::Var(*x),
+                range: expr.range,
+                ty,
+            })
+        }
         qhir::Expression::BinOp { left, op, right } => {
-            let left_expr = annotate_expression(ctx, left)?;
-            let right_expr = annotate_expression(ctx, right)?;
+            let left_expr = infer(ctx, env, left)?;
+            let right_expr = infer(ctx, env, right)?;
 
-            let expected_ty =
-                op.accepts_types(left_expr.ty, right_expr.ty)
-                    .map_err(|expected_ty| AstTypeError::TypeError {
-                        message: format!(
-                            "Operator '{:?}' does not accept types {:?} and {:?}",
-                            op, left_expr.ty, right_expr.ty
-                        ),
-                        expected: expected_ty,
-                        found: left_expr.ty,
-                        range: expr.range,
-                    })?;
+            let ty = op
+                .accepts_types(left_expr.ty, right_expr.ty)
+                .map_err(|expected_ty| AstTypeError::TypeError {
+                    message: format!(
+                        "operator '{:?}' does not accept types {:?} and {:?}",
+                        op, left_expr.ty, right_expr.ty
+                    ),
+                    expected: expected_ty,
+                    found: left_expr.ty,
+                    range: expr.range,
+                })?;
 
             Ok(typed_hir::Expr {
                 expr: typed_hir::Expression::BinOp {
@@ -114,17 +136,17 @@ fn annotate_expression<'tyc, 'run>(
                     right: Box::new(right_expr),
                 },
                 range: expr.range,
-                ty: expected_ty,
+                ty,
             })
         }
         qhir::Expression::UnOp { op, right } => {
-            let right_expr = annotate_expression(ctx, right)?;
+            let right_expr = infer(ctx, env, right)?;
 
-            let expected_ty =
+            let ty =
                 op.accepts_type(right_expr.ty)
                     .map_err(|expected_ty| AstTypeError::TypeError {
                         message: format!(
-                            "Operator '{:?}' does not accept type {:?}",
+                            "operator '{:?}' does not accept type {:?}",
                             op, right_expr.ty
                         ),
                         expected: expected_ty,
@@ -138,26 +160,58 @@ fn annotate_expression<'tyc, 'run>(
                     right: Box::new(right_expr),
                 },
                 range: expr.range,
-                ty: expected_ty,
+                ty,
             })
         }
         qhir::Expression::If { cond, t, f } => {
-            let cond_expr = annotate_expression(ctx, cond)?;
-            let t_expr = annotate_expression(ctx, t)?;
-            let f_expr = annotate_expression(ctx, f)?;
-
-            let expected_ty = if t_expr.ty != f_expr.ty {
+            let cond_expr = infer(ctx, env, cond)?;
+            if cond_expr.ty != Ty::Bool {
                 return Err(AstTypeError::TypeError {
-                    message: format!(
-                        "Branches of 'if' expression must have the same type, found {:?} and {:?}",
-                        t_expr.ty, f_expr.ty
-                    ),
-                    expected: t_expr.ty,
-                    found: f_expr.ty,
-                    range: expr.range,
+                    message: format!("condition of 'if' must be Bool, found {:?}", cond_expr.ty),
+                    expected: Ty::Bool,
+                    found: cond_expr.ty,
+                    range: cond.range,
                 });
-            } else {
-                t_expr.ty
+            }
+
+            let t_expr = infer(ctx, env, t)?;
+
+            let (f_expr, ty) = match f {
+                Some(f) => {
+                    let f_expr = infer(ctx, env, f)?;
+                    if t_expr.ty != f_expr.ty {
+                        return Err(AstTypeError::TypeError {
+                            message: format!(
+                                "branches of 'if' expression must have the same type, found {:?} and {:?}",
+                                t_expr.ty, f_expr.ty
+                            ),
+                            expected: t_expr.ty,
+                            found: f_expr.ty,
+                            range: expr.range,
+                        });
+                    }
+                    let ty = t_expr.ty;
+                    (f_expr, ty)
+                }
+                None => {
+                    if t_expr.ty != Ty::Unit {
+                        return Err(AstTypeError::TypeError {
+                            message: format!(
+                                "'if' without 'else' must have type Unit, but then-branch has type {:?}",
+                                t_expr.ty
+                            ),
+                            expected: Ty::Unit,
+                            found: t_expr.ty,
+                            range: t.range,
+                        });
+                    }
+                    let f_expr = typed_hir::Expr {
+                        expr: typed_hir::Expression::Unit,
+                        range: expr.range,
+                        ty: Ty::Unit,
+                    };
+                    (f_expr, Ty::Unit)
+                }
             };
 
             Ok(typed_hir::Expr {
@@ -167,13 +221,24 @@ fn annotate_expression<'tyc, 'run>(
                     f: Box::new(f_expr),
                 },
                 range: expr.range,
-                ty: expected_ty,
+                ty,
             })
         }
         qhir::Expression::While { cond, body } => {
-            let cond_expr = annotate_expression(ctx, cond)?;
-            let body_expr = annotate_expression(ctx, body)?;
-            let ret_ty = body_expr.ty;
+            let cond_expr = infer(ctx, env, cond)?;
+            if cond_expr.ty != Ty::Bool {
+                return Err(AstTypeError::TypeError {
+                    message: format!(
+                        "condition of 'while' must be Bool, found {:?}",
+                        cond_expr.ty
+                    ),
+                    expected: Ty::Bool,
+                    found: cond_expr.ty,
+                    range: cond.range,
+                });
+            }
+
+            let body_expr = infer(ctx, env, body)?;
 
             Ok(typed_hir::Expr {
                 expr: typed_hir::Expression::While {
@@ -181,50 +246,132 @@ fn annotate_expression<'tyc, 'run>(
                     body: Box::new(body_expr),
                 },
                 range: expr.range,
-                ty: ret_ty,
+                ty: Ty::Unit,
             })
         }
         qhir::Expression::Call { fn_name, args } => {
-            let arg_exprs_and_tys = args
+            let fun_sig = ctx.fun_sig(fn_name);
+
+            let arg_exprs = args
                 .iter()
-                .map(|arg| annotate_expression(ctx, arg))
+                .map(|arg| infer(ctx, env, arg))
                 .collect::<Result<Vec<_>, _>>()?;
+
+            let arg_tys: Vec<Ty> = arg_exprs.iter().map(|e| e.ty).collect();
+            let expected_tys: Vec<Ty> = fun_sig.args.iter().map(|p| p.1).collect();
+
+            if arg_tys.len() != expected_tys.len() {
+                return Err(AstTypeError::FunctionCallTypeError {
+                    message: format!(
+                        "function '{}' expects {} arguments but found {}",
+                        ctx.original_fun_name(*fn_name),
+                        expected_tys.len(),
+                        arg_tys.len()
+                    ),
+                    expected: expected_tys,
+                    found: arg_tys,
+                    range: expr.range,
+                });
+            }
+
+            let _arg_typecheck: Option<()> = arg_tys
+                .iter()
+                .zip(&expected_tys)
+                .enumerate()
+                .find(|(_, (found, expected))| found.type_neq(expected))
+                .map(|(i, (found, expected))| {
+                    Err(AstTypeError::FunctionCallTypeError {
+                        message: format!(
+                            "argument {} of function '{}' expects type {:?} but found {:?}",
+                            i + 1,
+                            ctx.original_fun_name(*fn_name),
+                            expected,
+                            found
+                        ),
+                        expected: vec![*expected],
+                        found: vec![*found],
+                        range: args[i].range,
+                    })
+                })
+                .transpose()?;
 
             Ok(typed_hir::Expr {
                 expr: typed_hir::Expression::Call {
                     fn_name: *fn_name,
-                    args: arg_exprs_and_tys,
+                    args: arg_exprs,
                 },
                 range: expr.range,
-                ty: ctx.get_fun_sig(fn_name).expect("untyped function").ret_ty,
+                ty: fun_sig.ret_ty,
             })
         }
         qhir::Expression::IntrinsicCall { fn_name, args } => {
-            let arg_exprs_and_tys = args
+            let (_, fn_sig) = &INTRINSICS[fn_name];
+
+            let arg_exprs = args
                 .iter()
-                .map(|arg| annotate_expression(ctx, arg))
+                .map(|arg| infer(ctx, env, arg))
                 .collect::<Result<Vec<_>, _>>()?;
+
+            let arg_tys: Vec<Ty> = arg_exprs.iter().map(|e| e.ty).collect();
+
+            if arg_tys.len() != fn_sig.args.len() {
+                return Err(AstTypeError::FunctionCallTypeError {
+                    message: format!(
+                        "intrinsic '{}' expects {} arguments but found {}",
+                        fn_name,
+                        fn_sig.args.len(),
+                        arg_tys.len()
+                    ),
+                    expected: fn_sig.args.to_vec(),
+                    found: arg_tys,
+                    range: expr.range,
+                });
+            }
+
+            let _arg_typecheck: Option<()> = arg_tys
+                .iter()
+                .zip(&fn_sig.args)
+                .enumerate()
+                .find(|(_, (found, expected))| found.type_neq(expected))
+                .map(|(i, (found, expected))| {
+                    Err(AstTypeError::FunctionCallTypeError {
+                        message: format!(
+                            "argument {} of intrinsic '{}' expects type {:?} but found {:?}",
+                            i + 1,
+                            fn_name,
+                            expected,
+                            found
+                        ),
+                        expected: vec![*expected],
+                        found: vec![*found],
+                        range: args[i].range,
+                    })
+                })
+                .transpose()?;
 
             Ok(typed_hir::Expr {
                 expr: typed_hir::Expression::IntrinsicCall {
                     fn_name: *fn_name,
-                    args: arg_exprs_and_tys,
+                    args: arg_exprs,
                 },
                 range: expr.range,
-                ty: INTRINSICS[fn_name].1.ret_ty,
+                ty: fn_sig.ret_ty,
             })
         }
         qhir::Expression::Block {
             statements,
             expr: ret_expr,
         } => {
-            let typed_statements = statements
-                .iter()
-                .map(|stmt| annotate_statement(ctx, stmt))
-                .collect::<Result<Vec<_>, _>>()?;
+            let (typed_statements, final_env) = statements.iter().try_fold(
+                (Vec::with_capacity(statements.len()), env.clone()),
+                |(mut stmts, mut env), stmt| {
+                    stmts.push(infer_statement(ctx, &mut env, stmt)?);
+                    Ok((stmts, env))
+                },
+            )?;
 
             let (typed_expr, ret_ty) = if let Some(e) = ret_expr {
-                let t_expr = annotate_expression(ctx, e)?;
+                let t_expr = infer(ctx, &final_env, e)?;
                 let ret_ty = t_expr.ty;
                 (Some(Box::new(t_expr)), ret_ty)
             } else {
@@ -243,37 +390,84 @@ fn annotate_expression<'tyc, 'run>(
     }
 }
 
-fn annotate_statement<'tyc, 'run>(
-    ctx: &'tyc mut CompileCtx<'run>,
+fn infer_statement(
+    ctx: &CompileCtx,
+    env: &mut TypeEnv,
     stmt: &qhir::Statement,
 ) -> Result<typed_hir::Statement, AstTypeError> {
-    let typed_stmt = match stmt {
+    match stmt {
         qhir::Statement::Declaration {
             name,
-            ty,
+            ty: annotation,
+            is_mutable,
             val,
             range,
         } => {
-            let val_expr = annotate_expression(ctx, val)?;
-            typed_hir::Statement::Declaration {
+            let val_expr = infer(ctx, env, val)?;
+            let ty = match annotation {
+                Some(declared_ty) => {
+                    if val_expr.ty.type_neq(declared_ty) {
+                        return Err(AstTypeError::TypeError {
+                            message: format!(
+                                "declared variable '{}' has type {:?} but initializer has type {:?}",
+                                ctx.uniq_variable_name(name),
+                                declared_ty,
+                                val_expr.ty
+                            ),
+                            expected: *declared_ty,
+                            found: val_expr.ty,
+                            range: *range,
+                        });
+                    }
+                    *declared_ty
+                }
+                None => val_expr.ty,
+            };
+            env.insert(*name, (ty, *is_mutable));
+            Ok(typed_hir::Statement::Declaration {
                 name: *name,
                 range: *range,
-                ty: *ty,
+                ty,
                 val: val_expr,
-            }
+            })
         }
         qhir::Statement::Assignment { name, val, range } => {
-            let val_expr = annotate_expression(ctx, val)?;
-            typed_hir::Statement::Assignment {
+            let (var_ty, is_mutable) =
+                env.get(name)
+                    .copied()
+                    .ok_or_else(|| AstTypeError::UnboundVariable {
+                        name: ctx.uniq_variable_name(name),
+                        range: *range,
+                    })?;
+            if !is_mutable {
+                return Err(AstTypeError::ImmutableAssignment {
+                    name: ctx.uniq_variable_name(name),
+                    range: *range,
+                });
+            }
+            let val_expr = infer(ctx, env, val)?;
+            if val_expr.ty.type_neq(&var_ty) {
+                return Err(AstTypeError::TypeError {
+                    message: format!(
+                        "variable '{}' has type {:?} but assigned value has type {:?}",
+                        ctx.uniq_variable_name(name),
+                        var_ty,
+                        val_expr.ty
+                    ),
+                    expected: var_ty,
+                    found: val_expr.ty,
+                    range: *range,
+                });
+            }
+            Ok(typed_hir::Statement::Assignment {
                 name: *name,
                 range: *range,
                 val: val_expr,
-            }
+            })
         }
         qhir::Statement::Expr(e) => {
-            let e_expr = annotate_expression(ctx, e)?;
-            typed_hir::Statement::Expr(e_expr)
+            let e_expr = infer(ctx, env, e)?;
+            Ok(typed_hir::Statement::Expr(e_expr))
         }
-    };
-    Ok(typed_stmt)
+    }
 }

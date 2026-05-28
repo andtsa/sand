@@ -23,7 +23,6 @@ use crate::compiler::structure::Set;
 use crate::compiler::structure::UniqVar;
 use crate::compiler::structure::VarName;
 use crate::ir_types::hhir::HirVar;
-use crate::lang::types::Ty;
 use crate::passes::parse::Rule;
 
 /// this should not be used and is on purpose mistyped to be easily detectable.
@@ -34,8 +33,6 @@ pub struct CompileCtx<'run> {
     original_variables: Vec<OriginalVar>,
     pub variable_usages: Map<OriginalVarRef, Set<Range>>,
     global_variables: Vec<UniqVar>,
-
-    variable_types: Map<UniqVar, Ty>,
 
     // functions
     global_functions: Vec<OriginalFun>,
@@ -76,7 +73,6 @@ impl<'run> CompileCtx<'run> {
             original_variables: Default::default(),
             variable_usages: Default::default(),
             global_variables: Default::default(),
-            variable_types: Default::default(),
             global_functions: Default::default(),
             function_signatures: Default::default(),
             entrypoint: None,
@@ -125,6 +121,10 @@ impl<'run> CompileCtx<'run> {
         self.original_variables[uv.orig.0].name.name()
     }
 
+    pub fn uniq_var_declaration(&self, uv: &UniqVar) -> Range {
+        self.original_variables[uv.orig.0].declaration
+    }
+
     /// Returns the friendly name of the given HIR variable,
     /// should not be used for logic, just for display
     pub fn hir_var_name(&self, hv: &HirVar) -> String {
@@ -144,23 +144,6 @@ impl<'run> CompileCtx<'run> {
                 e.insert(range);
             })
             .or_insert(Set::from([range]));
-    }
-
-    pub fn get_var_type(&self, var: &UniqVar) -> Option<Ty> {
-        debug_assert!(self.global_variables.contains(var));
-        self.variable_types.get(var).cloned()
-    }
-
-    #[track_caller]
-    pub fn var_type(&self, var: &UniqVar) -> Ty {
-        debug_assert!(self.global_variables.contains(var));
-        self.variable_types[var]
-    }
-
-    pub fn set_var_type(&mut self, var: UniqVar, ty: Ty) {
-        debug_assert!(self.global_variables.contains(&var));
-        let out = self.variable_types.insert(var, ty);
-        debug_assert!(out.is_none());
     }
 
     // ============================= Functions ================================

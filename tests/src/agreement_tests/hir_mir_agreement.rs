@@ -87,8 +87,8 @@ fn agree_nested_if() {
 fn agree_while_sum() {
     assert_hir_mir_agree(
         "def main(): Int := {
-            let i: Int = 1;
-            let s: Int = 0;
+            let mut i: Int = 1;
+            let mut s: Int = 0;
             while i <= 10 do {
                 s = s + i;
                 i = i + 1;
@@ -115,7 +115,7 @@ fn agree_nested_blocks() {
 fn agree_variable_assignment() {
     assert_hir_mir_agree(
         "def main(): Int := {
-            let x: Int = 10;
+            let mut x: Int = 10;
             x = x + 5;
             x
         }",
@@ -214,7 +214,7 @@ fn deeply_nested_arithmetic_agrees() {
 fn while_result_is_unit_in_both() {
     assert_hir_mir_agree(
         "def main(): Unit := {
-            let i: Int = 0;
+            let mut i: Int = 0;
             while i < 5 do { i = i + 1; };
         }",
     );

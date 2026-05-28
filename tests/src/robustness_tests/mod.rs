@@ -8,6 +8,7 @@ pub mod integer_literals;
 pub mod mir_block_structure;
 pub mod mir_structure;
 pub mod missing_keywords;
+pub mod mutability;
 pub mod overflow_underflow;
 pub mod return_type_mismatch;
 pub mod variable_scope;

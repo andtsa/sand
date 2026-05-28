@@ -1,8 +1,7 @@
 //! a simple interpreter for the typed_hir IR
 
-use std::collections::HashMap;
-
 use crate::compiler::context::CompileCtx;
+use crate::compiler::structure::Map;
 use crate::compiler::structure::UniqVar;
 use crate::ir_types::typed_hir::*;
 use crate::lang::intrinsics::Intrinsic;
@@ -28,7 +27,7 @@ pub enum InterpError {
     UnOpTypeError(String),
 }
 
-type Env = HashMap<UniqVar, Expression>;
+type Env = Map<UniqVar, Expression>;
 
 impl TypedProgram {
     pub fn interpret(&self, ctx: &CompileCtx) -> Result<Expression, InterpError> {

@@ -1,0 +1,7 @@
+
+tracked_files = [
+    "dec.sand",
+    "enc.sand",
+    "m.sand",
+    "main.sand",
+]
