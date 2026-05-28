@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -u
 
-DEBUG_BIN="/Users/andtsa/proj/sand/target/debug/lsp"
-RELEASE_BIN="/Users/andtsa/proj/sand/target/release/lsp"
+DEBUG_BIN="/Users/andtsa/proj/sand/target/debug/sand-lsp"
+RELEASE_BIN="/Users/andtsa/proj/sand/target/release/sand-lsp"
 
 LSP_ARGS=("$@")
 

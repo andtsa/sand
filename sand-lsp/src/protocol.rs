@@ -9,25 +9,33 @@ use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 
 use crate::diagnostics::setup_warning_to_lsp;
+use crate::hover;
 use crate::lsp::Backend;
+use tracing::debug;
+use tracing::info;
+use tracing::warn;
+use tracing::error;
 
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
+        debug!("initialising sand-lsp");
         let Some(uri) = params.root_uri.as_ref() else {
+            debug!("no root uri provided for initialisation");
             return Ok(Self::capabilities());
         };
         let Ok(root_path) = uri.to_file_path() else {
+            debug!("invalid root uri during initialisation: {uri}");
             return Ok(Self::capabilities());
         };
 
         *self.root.write().await = Some(root_path.clone());
+        info!("initialised sand-lsp with root: {}", root_path.display());
 
         let (project, warnings) = match Project::from_rootdir(&root_path) {
             Ok(result) => (result.project, result.warnings),
             Err(e) => {
-                self.log(MessageType::WARNING, format!("config error: {e}"))
-                    .await;
+                error!("config error: {e}");
                 // fall back to discovery
                 let paths = match spawn_blocking(|| discover_files(root_path))
                     .await
@@ -36,7 +44,7 @@ impl LanguageServer for Backend {
                 {
                     Ok(paths) => paths,
                     Err(e) => {
-                        self.log(MessageType::ERROR, format!("discovery failed: {e}")).await;
+                        error!("discovery failed: {e}");
                         vec![]
                     }
                 };
@@ -51,6 +59,7 @@ impl LanguageServer for Backend {
 
         // surface setup warnings as LSP diagnostics on the config file
         for warning in &warnings {
+            warn!("{}", warning.message);
             self.log(MessageType::WARNING, &warning.message).await;
         }
         // publish them against the sand.toml URI
@@ -107,6 +116,21 @@ impl LanguageServer for Backend {
         self.check_project().await;
     }
 
+    async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
+        let result_guard = self.last_result.read().await;
+        let Some(lang::castles::project::CheckResult::Success { ctx, ast }) = result_guard.as_ref()
+        else {
+            return Ok(None);
+        };
+        let project_guard = self.project.read().await;
+        let Some(project) = project_guard.as_ref() else {
+            return Ok(None);
+        };
+        let uri = &params.text_document_position_params.text_document.uri;
+        let lsp_pos = params.text_document_position_params.position;
+        Ok(hover::hover_at_position(lsp_pos, uri, ctx, ast, project))
+    }
+
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
         let uri = params.text_document.uri;
         // Use the last change — with full sync this is always the complete document
@@ -124,6 +148,7 @@ impl Backend {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
                     TextDocumentSyncKind::FULL, // fixes B2
                 )),
+                hover_provider: Some(HoverProviderCapability::Simple(true)),
                 ..Default::default()
             },
             ..Default::default()
