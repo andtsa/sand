@@ -21,6 +21,9 @@
 (function_call
   function: (identifier) @function.call)
 
+(module_declaration
+  name: (identifier) @module)
+
 ; ========= Keywords =========
 [
   "if"
@@ -30,6 +33,7 @@
   "do"
   "let"
   "def"
+  "module"
 ] @keyword
 
 ; ========= Types =========

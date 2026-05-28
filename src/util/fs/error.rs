@@ -14,7 +14,7 @@ pub type FsCtx = Ctx<String, String>;
 )]
 pub struct FsError {
     #[source]
-    source: FsErrorSource,
+    source: Box<FsErrorSource>,
     context: Option<Ctx<String, String>>,
 }
 
@@ -37,7 +37,7 @@ pub enum FsErrorSource {
 impl FsError {
     pub fn new(err: &str) -> Self {
         Self {
-            source: FsErrorSource::Other(err.to_string()),
+            source: Box::new(FsErrorSource::Other(err.to_string())),
             context: None,
         }
     }
@@ -65,7 +65,7 @@ pub trait Context<T, E> {
 impl<E: Into<FsErrorSource>> From<E> for FsError {
     fn from(err: E) -> Self {
         Self {
-            source: err.into(),
+            source: Box::new(err.into()),
             context: None,
         }
     }

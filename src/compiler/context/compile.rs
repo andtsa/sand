@@ -263,9 +263,9 @@ impl<'run> CompileCtx<'run> {
     /// return a reference to a dummy file.
     /// this should ONLY EVER be invoked at the start of a file-less
     /// compilation.
-    pub fn dummy_file(&self) -> FileRef {
+    pub fn stub_file(&self) -> FileRef {
         assert!(self.project_modules.is_empty());
-        FileRef(69420)
+        FileRef(usize::MAX)
     }
 
     pub fn get_mod_by_name(&self, name: &str) -> Option<ModuleRef> {

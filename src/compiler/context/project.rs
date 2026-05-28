@@ -59,7 +59,29 @@ impl ProjectCtx {
         &self.code_files[fr.0]
     }
 
-    pub fn register_dummy_file(&mut self) -> FileRef {
+    pub fn code_file_mut(&mut self, fr: FileRef) -> &mut CodeFile {
+        &mut self.code_files[fr.0]
+    }
+
+    /// registers a file without having to provide a valid URL.
+    ///
+    /// **Panics:** this function will panic if `name` causes
+    /// `"virtual:///tmp/internal/{name}.sand"` being an invalid [`Url`]
+    pub fn register_virtual_file(&mut self, name: &str) -> FileRef {
+        let idx = self.code_files.len();
+        let fr = FileRef(idx);
+        let cf = CodeFile {
+            uri: Url::parse(&format!("virtual:///tmp/internal/{name}.sand")).unwrap(),
+            name: FileName::virt(name),
+            index: fr,
+            default_module: None,
+        };
+        self.code_files.push(cf);
+        self.dummy_file = Some(fr);
+        fr
+    }
+
+    pub fn dummy_file(&mut self) -> FileRef {
         if let Some(fr) = self.dummy_file {
             fr
         } else {

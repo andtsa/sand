@@ -3,46 +3,82 @@
 //! - read input file from command line args
 //! - find repeated expressions
 //! - print to stdout
+//!
+//! TODO: move this to the main CLI
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::path::PathBuf;
 
+use sand::analysis::ProgramAnnotations;
 use sand::analysis::analyse;
+use sand::analysis::flipped_occurence_map;
 use sand::analysis::interactions::has_other_side_effects;
-use sand::compile_hir;
+use sand::castles::project::Project;
 use sand::compiler::context::CompileCtx;
-use sand::compiler::structure::Map;
-use sand::compiler::structure::ModuleRef;
+use sand::compiler::structure::FileRef;
 use sand::compiler::structure::Range;
 use sand::ir_types::typed_hir::Expr;
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
-    if args.len() != 2 {
-        eprintln!("Usage: {} <input-file>", args[0]);
+    if args.len() < 2 {
+        eprintln!("Usage: {} <input_file(s)>...", args[0]);
         std::process::exit(1);
     }
 
-    let input_file = &args[1];
-    let program_src = std::fs::read_to_string(input_file)
-        .map_err(|e| anyhow::anyhow!("failed to read input file {}: {}", input_file, e))?;
-
-    let mut ctx = CompileCtx::initial();
-    let fr = ctx.dummy_file();
-    let ast = compile_hir(Map::from([(fr, program_src.as_str())]), &mut ctx)?;
+    let proj = Project::from_paths(
+        &args[1..]
+            .iter()
+            .map(PathBuf::from)
+            .collect::<Vec<_>>(),
+    )?
+    .ok();
+    let (ctx, ast) = proj.check().result()?;
     let annotations = analyse(&ctx, &ast);
 
     println!(
         "Program Annotations:\n{}",
-        visualise_annotations(&program_src, &annotations.expr_occurrences)
+        visualise_annotations(&ctx, &proj, annotations)
     );
 
     Ok(())
 }
 
-type OccurenceMap = HashMap<Expr, HashSet<(ModuleRef, Range)>>;
+type OccurenceMap<'a> = HashMap<&'a Expr, HashSet<Range>>;
 
-fn visualise_annotations(text: &str, repeated_expressions: &OccurenceMap) -> String {
+fn visualise_annotations(
+    ctx: &CompileCtx,
+    proj: &Project,
+    annotations: ProgramAnnotations,
+) -> String {
+    let mut files: HashMap<FileRef, OccurenceMap<'_>> = HashMap::new();
+    for (mr, hm) in flipped_occurence_map(&annotations.expr_occurrences) {
+        files
+            .entry(ctx.file_of_module(mr))
+            .and_modify(|h| {
+                for (e, occs) in &hm {
+                    h.entry(e)
+                        .and_modify(|s: &mut HashSet<Range>| s.extend(occs.iter()))
+                        .or_insert(occs.clone());
+                }
+            })
+            .or_insert(hm);
+    }
+
+    let mut out = String::new();
+    for (f, occs) in files {
+        out.push_str(&format!("File {}:\n", proj.file_name(f)));
+
+        out.push_str(&visualise_for_file(proj.text_for_file(f).unwrap(), &occs));
+
+        out.push('\n');
+    }
+
+    out
+}
+
+fn visualise_for_file(text: &str, repeated_expressions: &OccurenceMap) -> String {
     // collect lines preserving newline characters
     let lines_inclusive: Vec<&str> = text.split_inclusive('\n').collect();
 
@@ -62,7 +98,7 @@ fn visualise_annotations(text: &str, repeated_expressions: &OccurenceMap) -> Str
         if has_other_side_effects(expr) {
             continue;
         }
-        for ((sl, sc), (el, ec)) in occs.iter().map(|(_, r)| r.destruct()) {
+        for ((sl, sc), (el, ec)) in occs.iter().map(|r| r.destruct()) {
             if sl == 0 || el == 0 {
                 continue;
             }

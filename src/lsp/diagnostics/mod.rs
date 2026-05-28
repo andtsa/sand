@@ -6,14 +6,14 @@ use tower_lsp::lsp_types::DiagnosticSeverity;
 use tower_lsp::lsp_types::Location;
 use tower_lsp::lsp_types::Url;
 
-use crate::castles::project::CheckResult;
-use crate::castles::project::Project;
-use crate::castles::project::init::SetupWarning;
-use crate::compiler::diagnostics::DiagnosticSeverity as SandDiagnosticSeverity;
-use crate::compiler::diagnostics::Diagnostics;
-use crate::compiler::diagnostics::SandDiagnostic;
-use crate::compiler::diagnostics::SandDiagnostics;
-use crate::lsp::util::lsp_range_from_pest;
+use sand::castles::project::CheckResult;
+use sand::castles::project::Project;
+use sand::castles::project::init::SetupWarning;
+use sand::compiler::diagnostics::DiagnosticSeverity as SandDiagnosticSeverity;
+use sand::compiler::diagnostics::Diagnostics;
+use sand::compiler::diagnostics::SandDiagnostic;
+use sand::compiler::diagnostics::SandDiagnostics;
+use crate::util::lsp_range_from_pest;
 
 pub type LspDiagnostics = Diagnostics<Url, Diagnostic>;
 

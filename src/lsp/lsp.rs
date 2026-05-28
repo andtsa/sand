@@ -7,14 +7,8 @@ use tokio::sync::RwLock;
 use tower_lsp::Client;
 use tower_lsp::lsp_types::*;
 
-use crate::castles::project::CheckResult;
-use crate::castles::project::Project;
-
-pub mod annotate;
-pub mod backend;
-pub mod diagnostics;
-pub mod protocol;
-pub mod util;
+use sand::castles::project::CheckResult;
+use sand::castles::project::Project;
 
 pub struct Backend {
     pub client: Client,

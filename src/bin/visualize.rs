@@ -1,23 +1,26 @@
 use std::fs;
+use std::path::PathBuf;
 
 use petgraph::dot::Config;
 use petgraph::dot::Dot;
 use sand::analysis::cfg;
-use sand::compile_hir;
-use sand::compiler::context::CompileCtx;
-use sand::compiler::structure::Map;
+use sand::castles::project::Project;
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
-        eprintln!("Usage: cargo run --bin visualize <source_file>");
+        eprintln!("Usage: cargo run --bin visualize <source_file(s)>...");
         std::process::exit(1);
     }
 
-    let src = fs::read_to_string(&args[1])?;
-    let mut ctx = CompileCtx::initial();
-    let fr = ctx.dummy_file();
-    let ast = compile_hir(Map::from([(fr, src.as_str())]), &mut ctx)?;
+    let proj = Project::from_paths(
+        &args[1..]
+            .iter()
+            .map(PathBuf::from)
+            .collect::<Vec<_>>(),
+    )?
+    .ok();
+    let (ctx, ast) = proj.check().result()?;
     let cfg = cfg::construct_cfg(&ctx, &ast);
 
     let dot = format!(

@@ -8,6 +8,10 @@ default-run = "debug"
 name = "sand"
 path = "src/sand/main.rs"
 
+[[bin]]
+name = "lsp"
+path = "src/lsp/main.rs"
+
 # integration tests under tests/ directory
 
 [dependencies]

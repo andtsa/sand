@@ -4,14 +4,14 @@ use tower_lsp::lsp_types::Diagnostic;
 use tower_lsp::lsp_types::DiagnosticSeverity;
 use tower_lsp::lsp_types::MessageType;
 
-use crate::analysis::ProgramAnnotations;
-use crate::analysis::analyse;
-use crate::analysis::interactions::has_other_side_effects;
-use crate::compiler::context::CompileCtx;
-use crate::ir_types::typed_hir::TypedProgram;
+use sand::analysis::ProgramAnnotations;
+use sand::analysis::analyse;
+use sand::analysis::interactions::has_other_side_effects;
+use sand::compiler::context::CompileCtx;
+use sand::ir_types::typed_hir::TypedProgram;
 use crate::lsp::Backend;
-use crate::lsp::diagnostics::LspDiagnostics;
-use crate::lsp::util::lsp_range_from_pest;
+use crate::diagnostics::LspDiagnostics;
+use crate::util::lsp_range_from_pest;
 
 impl Backend {
     /// if an expression without side effects appears multiple times in the

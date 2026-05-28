@@ -2,11 +2,11 @@
 
 use tower_lsp::lsp_types::*;
 
-use crate::castles::project::Project;
-use crate::compiler::context::CompileCtx;
-use crate::compiler::structure::ModuleRef;
-use crate::compiler::structure::Pos;
-use crate::compiler::structure::Range as LangRange;
+use sand::castles::project::Project;
+use sand::compiler::context::CompileCtx;
+use sand::compiler::structure::ModuleRef;
+use sand::compiler::structure::Pos;
+use sand::compiler::structure::Range as LangRange;
 
 pub(super) fn lsp_position_from_pest(text: &str, pos: Pos) -> Position {
     // pest reports 1-based line/col; convert to 0-based

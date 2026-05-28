@@ -5,11 +5,11 @@ use tower_lsp::LanguageServer;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 
-use crate::castles::discovery::discover_files;
-use crate::castles::project::Project;
-use crate::castles::project::init::ProjectCreationResult;
+use sand::castles::discovery::discover_files;
+use sand::castles::project::Project;
+use sand::castles::project::init::ProjectCreationResult;
 use crate::lsp::Backend;
-use crate::lsp::diagnostics::setup_warning_to_lsp;
+use crate::diagnostics::setup_warning_to_lsp;
 
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {

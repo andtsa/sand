@@ -135,3 +135,24 @@ impl std::fmt::Display for AnnotatedExpression {
         Ok(())
     }
 }
+
+pub fn flipped_occurence_map(
+    map: &HashMap<Expr, HashSet<(ModuleRef, Range)>>,
+) -> HashMap<ModuleRef, HashMap<&Expr, HashSet<Range>>> {
+    let mut r = HashMap::new();
+    for (e, occ) in map {
+        for (mr, range) in occ {
+            r.entry(*mr)
+                .and_modify(|hm: &mut HashMap<&Expr, HashSet<Range>>| {
+                    hm.entry(e)
+                        .and_modify(|s: &mut HashSet<Range>| {
+                            s.insert(*range);
+                        })
+                        .or_insert(HashSet::from([*range]));
+                })
+                .or_insert(HashMap::from([(e, HashSet::from([*range]))]));
+        }
+    }
+
+    r
+}

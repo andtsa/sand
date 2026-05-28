@@ -46,6 +46,16 @@ impl Project {
         Ok(fr)
     }
 
+
+    /// Create a virtual file by directly providing the file contents.
+    /// Using this FileRef in the LSP module will raise an error when
+    /// trying to convert the URL to a [`std::fs::PathBuf`].
+    pub fn create_virtual_file(&mut self, content: String, module_name: &str) -> FileRef {
+        let fr = self.ctx.register_virtual_file(module_name);
+        self.file_contents.insert(fr, content);
+        fr
+    }
+
     /// Look up source text by [`FileRef`]
     pub fn text_for_file(&self, fr: FileRef) -> Option<&str> {
         self.file_contents.get(&fr).map(String::as_str)
@@ -57,7 +67,11 @@ impl Project {
     /// them, but we will still allow them for now.
     pub fn default_modname_for_file(&self, fr: FileRef) -> String {
         let cf = self.ctx.code_file(fr);
-        cf.module_name().to_string()
+        cf.module_name()
+    }
+
+    pub fn file_name(&self, fr: FileRef) -> String {
+        self.ctx.code_file(fr).file_name()
     }
 
     pub fn file_count(&self) -> usize {
@@ -103,7 +117,7 @@ impl Project {
             "project contains modules: {:?}",
             modules
                 .keys()
-                .map(|fr| self.ctx.code_file(*fr).module_name())
+                .map(|fr| self.default_modname_for_file(*fr))
                 .collect::<Vec<_>>()
         );
 
@@ -123,4 +137,41 @@ pub enum CheckResult {
         ctx: CompileCtx<'static>,
         error: SandLangError,
     },
+}
+
+
+impl CheckResult {
+    pub fn is_ok(&self) -> bool {
+        matches!(self, CheckResult::Success { .. })
+    }
+
+    pub fn is_err(&self) -> bool {
+        matches!(self, CheckResult::Failure { .. })
+    }
+
+
+    pub fn ctx_err(self) -> Option<(CompileCtx<'static>, SandLangError)> {
+        match self {
+            CheckResult::Success { .. } => None,
+            CheckResult::Failure { ctx, error } => Some((ctx, error))
+        }
+    }
+
+    pub fn err(self) -> Option<SandLangError> {
+        self.ctx_err().map(|(_, e)| e)
+    }
+
+    pub fn result(self) -> Result<(CompileCtx<'static>, TypedProgram), SandLangError> {
+        match self {
+            CheckResult::Success { ctx, ast } => Ok((ctx, ast)),
+            CheckResult::Failure { ctx: _, error } => Err(error),
+        }
+    }
+
+    pub fn ctx(self) -> CompileCtx<'static> {
+        match self {
+            CheckResult::Success { ctx, ast: _ } => ctx,
+            CheckResult::Failure { ctx, error: _ } => ctx,
+        }
+    }
 }

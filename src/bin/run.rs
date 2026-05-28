@@ -1,23 +1,24 @@
 //! run a program
 
-use sand::compile_hir;
-use sand::compiler::context::CompileCtx;
-use sand::compiler::structure::Map;
+use std::path::PathBuf;
+
+use sand::castles::project::Project;
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
-    if args.len() != 2 {
-        eprintln!("Usage: {} <input-file>", args[0]);
+    if args.len() < 2 {
+        eprintln!("Usage: {} <input-file(s)>...", args[0]);
         std::process::exit(1);
     }
 
-    let input_file = &args[1];
-    let program_src = std::fs::read_to_string(input_file)
-        .map_err(|e| anyhow::anyhow!("failed to read input file {}: {}", input_file, e))?;
-
-    let mut ctx = CompileCtx::initial();
-    let fr = ctx.dummy_file();
-    let ast = compile_hir(Map::from([(fr, program_src.as_str())]), &mut ctx)?;
+    let proj = Project::from_paths(
+        &args[1..]
+            .iter()
+            .map(PathBuf::from)
+            .collect::<Vec<_>>(),
+    )?
+    .ok();
+    let (ctx, ast) = proj.check().result()?;
 
     println!("{:?}", ast.interpret(&ctx));
 

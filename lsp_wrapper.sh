@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -u
 
-DEBUG_BIN="target/debug/lsp"
-RELEASE_BIN="target/release/lsp"
+DEBUG_BIN="/Users/andtsa/proj/sand/target/debug/lsp"
+RELEASE_BIN="/Users/andtsa/proj/sand/target/release/lsp"
 
 LSP_ARGS=("$@")
+
+# Save Neovim's stdin/stdout before entering any subshells or pipes.
+# Inside `fswatch | while`, fd 0 is replaced by fswatch's stdout,
+# so we must grab references to the real fds now
+exec 3<&0 4>&1
 
 # ----- helpers -----
 
@@ -14,25 +19,16 @@ latest_bin() {
   [[ -x "$d" ]] && d_ok=1
   [[ -x "$r" ]] && r_ok=1
 
-  if [[ $d_ok -eq 0 && $r_ok -eq 0 ]]; then
-    echo ""
-    return 0
-  fi
-  if [[ $d_ok -eq 1 && $r_ok -eq 0 ]]; then
-    echo "$d"; return 0
-  fi
-  if [[ $d_ok -eq 0 && $r_ok -eq 1 ]]; then
-    echo "$r"; return 0
-  fi
+  if [[ $d_ok -eq 0 && $r_ok -eq 0 ]]; then echo ""; return 0; fi
+  if [[ $d_ok -eq 1 && $r_ok -eq 0 ]]; then echo "$d"; return 0; fi
+  if [[ $d_ok -eq 0 && $r_ok -eq 1 ]]; then echo "$r"; return 0; fi
 
-  # Both exist: pick the newer mtime (BSD stat)
   local dt rt
   dt=$(stat -f %m "$d")
   rt=$(stat -f %m "$r")
   if (( rt >= dt )); then echo "$r"; else echo "$d"; fi
 }
 
-# Wait until file stops changing (mtime+size stable twice)
 wait_stable() {
   local f="$1"
   local m1 s1 m2 s2
@@ -49,9 +45,8 @@ wait_stable() {
 
 kill_child() {
   local pid="${1:-}"
-  [[ -n "${pid}" ]] || return 0
+  [[ -n "$pid" ]] || return 0
   kill -TERM "$pid" 2>/dev/null || true
-  # give it a moment
   for _ in {1..20}; do
     kill -0 "$pid" 2>/dev/null || return 0
     sleep 0.05
@@ -79,30 +74,24 @@ start_server() {
   wait_stable "$bin"
   echo "wrapper: starting $bin" >&2
 
-  # Start server with stdio connected to nvim
-  "$bin" "${LSP_ARGS[@]}" &
+  # <&3 >&4 explicitly wires up Neovim's stdio, overriding bash's
+  # default of redirecting background-process stdin to /dev/null.
+  "$bin" "${LSP_ARGS[@]+"${LSP_ARGS[@]}"}" <&3 >&4 &
   child_pid=$!
-  return 0
 }
 
-# Start initial server (block until one exists)
 until start_server; do
   sleep 0.2
 done
 
-# Watch for changes to either binary path (create/rename/write)
-# -0 makes it NUL-delimited, safer for paths, but we don't need the path text anyway.
 fswatch -0 "$DEBUG_BIN" "$RELEASE_BIN" 2>/dev/null | while IFS= read -r -d '' _; do
-  # On any event, pick newest and restart
   newbin="$(latest_bin)"
   [[ -n "$newbin" ]] || continue
 
-  # If the newest is still the same *file* and hasn't changed, this is harmless;
-  # restart anyway to keep logic simple, but only after stable.
   wait_stable "$newbin"
-
   echo "wrapper: restart triggered; switching to $newbin" >&2
+
   kill_child "$child_pid"
-  "$newbin" "${LSP_ARGS[@]}" &
+  "$newbin" "${LSP_ARGS[@]+"${LSP_ARGS[@]}"}" <&3 >&4 &
   child_pid=$!
 done

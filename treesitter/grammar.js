@@ -11,7 +11,16 @@ module.exports = grammar({
   conflicts: $ => [],
 
   rules: {
-    program: $ => repeat1($.function_definition),
+    program: $ => repeat(choice(
+        $.function_definition,
+        $.module_declaration
+    )),
+
+    module_declaration: $ => seq(
+        'module',
+        field('name', $.identifier),
+        optional(';')
+    ),
 
     // ========= Lexical =========
     comment: _ => token(choice(

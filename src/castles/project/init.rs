@@ -29,6 +29,12 @@ pub struct ProjectCreationResult {
     pub warnings: Vec<SetupWarning>,
 }
 
+impl ProjectCreationResult {
+    pub fn ok(self) -> Project {
+        self.project
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum FatalProjectCreationError {
     #[error(transparent)]

@@ -18,7 +18,6 @@ pub mod compiler;
 pub mod interpreter;
 pub mod ir_types;
 pub mod lang;
-pub mod lsp;
 pub mod passes;
 pub mod util;
 

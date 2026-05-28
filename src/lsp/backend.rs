@@ -4,9 +4,9 @@ use tokio::task::block_in_place;
 use tower_lsp::lsp_types::MessageType;
 use tower_lsp::lsp_types::Url;
 
-use crate::castles::project::CheckResult;
+use sand::castles::project::CheckResult;
 use crate::lsp::Backend;
-use crate::lsp::diagnostics::lsp_diagnostics_from_result;
+use crate::diagnostics::lsp_diagnostics_from_result;
 
 impl Backend {
     pub async fn uninit_err(&self) {

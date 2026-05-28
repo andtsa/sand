@@ -41,11 +41,14 @@ impl CodeFile {
         }
     }
 
-    pub fn module_name(&self) -> &str {
+    pub fn module_name(&self) -> String {
+        self.name.to_string()
+    }
+
+    pub fn file_name(&self) -> String {
         match &self.name {
-            FileName::Simple(name) => name.as_str(),
-            FileName::Dummy => "<dummy_file>",
-            FileName::Unknown => "<unknown>",
+            FileName::Simple(s) => format!("{s}.sand"),
+            _ => self.name.to_string()
         }
     }
 }
@@ -54,6 +57,8 @@ impl CodeFile {
 pub enum FileName {
     #[error("{0}")]
     Simple(String),
+    #[error("<virtual:{0}>")]
+    Virtual(String),
     #[error("<dummy_file>")]
     Dummy,
     #[error("<unknown>")]
@@ -75,6 +80,10 @@ impl FileName {
 
     pub fn dummy() -> Self {
         FileName::Dummy
+    }
+
+    pub fn virt(name: &str) -> Self {
+        FileName::Virtual(name.to_string())
     }
 
     /// not sure if there's a point to this since file name is needed for module
@@ -99,15 +108,6 @@ impl FileName {
 /// implemented as an index into the `context.code_files`
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct FileRef(pub(in crate::compiler) usize);
-
-impl FileRef {
-    pub fn test_new(_idx: usize) -> Self {
-        #[cfg(not(feature = "testing"))]
-        unreachable!("unsafe reference initialisation outside tests");
-        #[cfg(feature = "testing")]
-        Self(_idx)
-    }
-}
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash, serde::Deserialize)]
 pub struct ProjectConfig {

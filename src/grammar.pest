@@ -10,9 +10,9 @@ type_ = {
 }
 
 // keywords (prevent them from being identifiers)
-KEYWORD = { "if" | "then" | "else" | "let" | "def" | "true" | "false" | "Unit" | "Int" | "Bool" | "while" | "do" }
+KEYWORD = { "if" | "then" | "else" | "let" | "def" | "true" | "false" | "Unit" | "Int" | "Bool" | "while" | "do" | "module" }
 
-identifier = @{ !(KEYWORD ~ !(ASCII_ALPHANUMERIC | "_")) ~ "_"* ~ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
+identifier       = @{ !(KEYWORD ~ !(ASCII_ALPHANUMERIC | "_")) ~ "_"* ~ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
 empty_identifier = @{ "_" }
 
 number = @{ ASCII_DIGIT+ }
@@ -48,7 +48,7 @@ whileloop = {
     "while" ~ expression ~ "do" ~ expression
 }
 
-function_call = { identifier ~ "(" ~ (expression ~ ("," ~ expression)*)? ~ ")" }
+function_call          = { identifier ~ "(" ~ (expression ~ ("," ~ expression)*)? ~ ")" }
 external_function_call = { identifier ~ "::" ~ identifier ~ "(" ~ (expression ~ ("," ~ expression)*)? ~ ")" }
 
 // precedence chaining

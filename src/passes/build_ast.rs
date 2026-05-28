@@ -112,7 +112,7 @@ impl ProgramModule {
     }
 
     pub fn parse_stub<'run>(ctx: &mut CompileCtx<'run>, src: &str) -> Result<Self, AstError> {
-        let fr = ctx.dummy_file();
+        let fr = ctx.stub_file();
         let modules = Self::parse_source_file(ctx, src, fr)?;
         if modules.len() == 1 {
             Ok(modules.into_iter().next().unwrap())
