@@ -1,0 +1,22 @@
+[package]
+name = "lang"
+version = "0.1.0"
+edition = "2024"
+default-run = "debug"
+
+[dependencies]
+anyhow = { workspace = true }
+pest = { workspace = true }
+pest_derive = { workspace = true }
+petgraph = "0.8.3"
+thiserror = { workspace = true }
+tokio = { workspace = true }
+toml.workspace = true
+serde.workspace = true
+bimap.workspace = true
+inkwell.workspace = true
+anstyle = "1.0.14"
+tracing = { workspace = true }
+tracing-subscriber.workspace = true
+shellexpand.workspace = true
+url = { workspace = true }
