@@ -55,17 +55,20 @@ pub fn compile_hir<'run, 'proj>(
     let span = tracing::warn_span!("compile_hir");
     let _enter = span.enter();
 
-    let mut modules = Vec::new();
-    for (file, source) in code {
-        let err_ctx = SandLangErrorContext {
-            module: None,
-            file: Some(file),
-        };
-        modules.append(
-            &mut hhir::ProgramModule::parse_source_file(ctx, source, file)
-                .map_err(|e| err_ctx.wrap_err(e))?,
-        );
-    }
+    let modules = code
+        .into_iter()
+        .map(|(file, source)| {
+            let err_ctx = SandLangErrorContext {
+                module: None,
+                file: Some(file),
+            };
+            hhir::ProgramModule::parse_source_file(ctx, source, file)
+                .map_err(|e| err_ctx.wrap_err(e))
+        })
+        .collect::<Result<Vec<Vec<_>>, _>>()?
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
 
     tracing::trace!(
         "{} modules: {:?}",
