@@ -9,6 +9,7 @@ use thiserror::Error;
 
 use crate::compiler::diagnostics::SandDiagnostic;
 use crate::compiler::structure::CodeModule;
+use crate::compiler::structure::EnumDef;
 use crate::compiler::structure::FileRef;
 use crate::compiler::structure::FunRef;
 use crate::compiler::structure::FunSig;
@@ -22,7 +23,9 @@ use crate::compiler::structure::Range;
 use crate::compiler::structure::Set;
 use crate::compiler::structure::UniqVar;
 use crate::compiler::structure::VarName;
+use crate::internal_bug;
 use crate::ir_types::hhir::HirVar;
+use crate::lang::types::EnumRef;
 use crate::passes::parse::Rule;
 
 /// this should not be used and is on purpose mistyped to be easily detectable.
@@ -38,6 +41,14 @@ pub struct CompileCtx<'run> {
     global_functions: Vec<OriginalFun>,
     function_signatures: Map<FunRef, FunSig>,
     pub entrypoint: Option<FunRef>,
+
+    // enums
+    enum_defs: Vec<EnumDef>,
+    enum_names: Map<String, EnumRef>,
+    /// Interning table for ad-hoc tag-union types, keyed by sorted tag list.
+    anon_tag_types: Map<Vec<String>, EnumRef>,
+    /// Scratch: the module currently being built (set in `build_function`).
+    cur_build_module: Option<ModuleRef>,
 
     // modules
     project_modules: Vec<CodeModule>,
@@ -62,6 +73,13 @@ pub enum ContextError {
 
     #[error("cannot register function with rule {rule:?}")]
     IllegalFunctionRegistration { rule: Rule },
+
+    #[error("duplicate enum type '{name}'")]
+    DuplicateEnum {
+        name: String,
+        first: Range,
+        second: Range,
+    },
 }
 
 #[derive(Debug)]
@@ -76,6 +94,10 @@ impl<'run> CompileCtx<'run> {
             global_functions: Default::default(),
             function_signatures: Default::default(),
             entrypoint: None,
+            enum_defs: Default::default(),
+            enum_names: Default::default(),
+            anon_tag_types: Default::default(),
+            cur_build_module: None,
             // project_config: Default::default(),
             // code_files: Vec::new(),
             project_modules: Default::default(),
@@ -201,6 +223,110 @@ impl<'run> CompileCtx<'run> {
 
     pub fn is_main(&self, fun: FunRef) -> bool {
         self.entrypoint == Some(fun)
+    }
+
+    // ============================ Enums =====================================
+
+    pub fn register_enum(
+        &mut self,
+        name: &str,
+        variants: Vec<String>,
+        range: Range,
+        module: ModuleRef,
+    ) -> Result<EnumRef, ContextError> {
+        if let Some(existing) = self.enum_names.get(name) {
+            return Err(ContextError::DuplicateEnum {
+                name: name.to_string(),
+                first: self.enum_defs[existing.0].range,
+                second: range,
+            });
+        }
+        let er = EnumRef(self.enum_defs.len());
+        self.enum_defs.push(EnumDef {
+            name: name.to_string(),
+            variants,
+            range,
+            src_module: module,
+            index: er,
+            is_anonymous: false,
+        });
+        self.enum_names.insert(name.to_string(), er);
+        Ok(er)
+    }
+
+    pub fn get_enum(&self, er: EnumRef) -> &EnumDef {
+        &self.enum_defs[er.0]
+    }
+
+    pub fn lookup_enum_by_name(&self, name: &str) -> Option<EnumRef> {
+        self.enum_names.get(name).copied()
+    }
+
+    pub fn lookup_variant(&self, er: EnumRef, variant: &str) -> Option<usize> {
+        self.enum_defs[er.0]
+            .variants
+            .iter()
+            .position(|v| v == variant)
+    }
+
+    pub fn lookup_enum_in_module(&self, module: ModuleRef, name: &str) -> Option<EnumRef> {
+        self.enum_defs
+            .iter()
+            .enumerate()
+            .find(|(_, def)| def.src_module == module && def.name == name)
+            .map(|(i, _)| EnumRef(i))
+    }
+
+    /// Record the module currently being processed during AST building so that
+    /// anonymous tag-union types can be attributed to the right module.
+    /// Call this at the start of `build_function`.
+    pub fn set_build_module(&mut self, m: ModuleRef) {
+        self.cur_build_module = Some(m);
+    }
+
+    /// intern an ad-hoc tag-union type from a sorted, deduplicated list of tag
+    /// names. returns the same `EnumRef` for any two call sites with the
+    /// same tag set (structural identity)
+    ///
+    /// the resulting `EnumDef` uses a sorted `variants` list so
+    /// that variant indices are stable regardless of the order in which the
+    /// tags were written
+    pub fn register_or_get_anon_enum(&mut self, mut tags: Vec<String>, range: Range) -> EnumRef {
+        tags.sort();
+        tags.dedup();
+        if let Some(&er) = self.anon_tag_types.get(&tags) {
+            return er;
+        }
+        let display_name = tags
+            .iter()
+            .map(|t| format!("#{t}"))
+            .collect::<Vec<_>>()
+            .join(" | ");
+        let src_module = self
+            .cur_build_module
+            .or(self.default_module)
+            .unwrap_or(ModuleRef(0));
+        let er = EnumRef(self.enum_defs.len());
+        self.enum_defs.push(EnumDef {
+            name: display_name,
+            variants: tags.clone(),
+            range,
+            src_module,
+            index: er,
+            is_anonymous: true,
+        });
+        // NOTE: we do NOT insert into `enum_names`, anonymous enums are only
+        // looked up via `anon_tag_types`
+        self.anon_tag_types.insert(tags, er);
+        er
+    }
+
+    pub fn enum_display(&self, enum_ref: EnumRef, variant: usize) -> String {
+        let variants = &self.enum_defs[enum_ref.0].variants;
+        if variants.len() <= variant {
+            internal_bug!("enum display indexed with oob variant: {enum_ref:?}[{variant}]");
+        }
+        variants[variant].clone()
     }
 
     // ============================ Modules ===================================

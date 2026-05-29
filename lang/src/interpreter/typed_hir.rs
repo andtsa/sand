@@ -103,6 +103,14 @@ impl TypedProgram {
                     .collect::<Result<Vec<_>, _>>()?;
                 eval_intrinsic(*fn_name, vals)
             }
+
+            Expression::Constructor {
+                enum_ref,
+                variant_idx,
+            } => Ok(Expression::Constructor {
+                enum_ref: *enum_ref,
+                variant_idx: *variant_idx,
+            }),
         }
     }
 }

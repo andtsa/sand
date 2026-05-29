@@ -56,6 +56,12 @@ pub enum AstError {
 
     #[error(transparent)]
     UriError(#[from] UriError),
+
+    #[error("unknown type '{name}' at {range}")]
+    UnknownType { name: String, range: Range },
+
+    #[error("unknown module '{module}' at {range}")]
+    UnknownModule { module: String, range: Range },
 }
 
 trait AstExt<T> {
@@ -137,14 +143,47 @@ pub fn build_program<'run>(
 ) -> Result<Map<ModuleRef, Vec<Function>>, AstError> {
     assert_eq!(pair.as_rule(), Rule::program);
 
-    // todo: discard unused modules from the ctx
+    // Collect all top-level children so we can do two passes.
+    let children: Vec<Pair<Rule>> = pair.into_inner().collect();
+
+    // ── First pass: register enum type declarations ──────────────────────────
+    // We also track the current module as module declarations are encountered,
+    // so that enum defs are attributed to the correct module.
+    {
+        let mut cur_mod = default_module;
+        for child in &children {
+            match child.as_rule() {
+                Rule::module => {
+                    let child_span = child.as_span();
+                    let modname_pair = child
+                        .clone()
+                        .into_inner()
+                        .next()
+                        .missing("module name", Range::from(child_span))?;
+                    cur_mod = ctx
+                        .get_mod_by_name(modname_pair.as_str())
+                        .unwrap_or_else(|| ctx.register_module(modname_pair.as_str(), file));
+                }
+                Rule::type_alias => {
+                    let range = Range::from(child);
+                    let mut inner = child.clone().into_inner();
+                    let name_pair = inner.next().missing("enum name", range)?;
+                    let enum_name = name_pair.as_str().to_string();
+                    let variants: Vec<String> = inner.map(|p| p.as_str().to_string()).collect();
+                    ctx.register_enum(&enum_name, variants, range, cur_mod)?;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // ── Second pass: build functions ─────────────────────────────────────────
     let mut mods: Map<ModuleRef, Vec<Function>> = Map::new();
     let mut funcs = Vec::new();
     let mut current_module = default_module;
-    for child in pair.into_inner() {
+    for child in children {
         match child.as_rule() {
             Rule::module => {
-                // parse module name
                 let child_span = child.as_span();
                 let modname_pair = child
                     .into_inner()
@@ -162,8 +201,6 @@ pub fn build_program<'run>(
                 if !funcs.is_empty() {
                     mods.entry(current_module).or_default().append(&mut funcs);
                 }
-                // reuse any existing module with this name so that `module m;` in
-                // multiple files all contribute to the same module
                 current_module = ctx
                     .get_mod_by_name(mod_span.as_str())
                     .unwrap_or_else(|| ctx.register_module(mod_span.as_str(), file));
@@ -171,10 +208,11 @@ pub fn build_program<'run>(
             Rule::function => {
                 funcs.push(build_function(ctx, child, src, &current_module)?);
             }
+            // type_alias declarations were handled in the first pass
+            Rule::type_alias => {}
             // ignore start/end markers
             Rule::EOI => continue,
             other => {
-                // debug
                 let range = Range::from(child);
                 eprintln!("parse error: unexpected top-level rule at {range} - got {other:?}");
                 return Err(AstError::UnexpectedRule {
@@ -199,6 +237,9 @@ fn build_function<'run>(
     src: &str,
     cur_module: &ModuleRef,
 ) -> Result<Function, AstError> {
+    // Keep the build-module hint up to date so that anonymous tag-union types
+    // declared in `build_type` are attributed to the right module.
+    ctx.set_build_module(*cur_module);
     let range = Range::from(&pair);
     if pair.as_rule() != Rule::function {
         return Err(AstError::UnexpectedRule {
@@ -316,7 +357,7 @@ fn build_parameter<'run>(
     })
 }
 
-fn build_type<'run>(_ctx: &mut CompileCtx<'run>, pair: Pair<Rule>) -> Result<Ty, AstError> {
+fn build_type<'run>(ctx: &mut CompileCtx<'run>, pair: Pair<Rule>) -> Result<Ty, AstError> {
     tracing::trace!("build_type called with {:?}", pair.as_str());
     assert_eq!(
         pair.as_rule(),
@@ -325,15 +366,62 @@ fn build_type<'run>(_ctx: &mut CompileCtx<'run>, pair: Pair<Rule>) -> Result<Ty,
         pair.as_rule(),
         pair.as_str()
     );
-    match pair.as_str() {
-        "Int" => Ok(Ty::Int),
-        "Bool" => Ok(Ty::Bool),
-        "Unit" => Ok(Ty::Unit),
-        _ => Err(AstError::UnexpectedRule {
-            expected: "type literal",
-            got: pair.as_rule(),
-            range: Range::from(pair),
-        }),
+    let range = Range::from(&pair);
+
+    // Check whether the inner token is a qualified_type, a tag_type, or a
+    // plain identifier / built-in keyword.
+    let inner_opt = pair.clone().into_inner().next();
+    match inner_opt {
+        Some(inner) if inner.as_rule() == Rule::tag_type => {
+            // tag_type = { "#" ~ identifier ~ ("|" ~ "#" ~ identifier)* }
+            // The "#" and "|" literals are anonymous; only `identifier` children are
+            // captured.
+            let tags: Vec<String> = inner.into_inner().map(|p| p.as_str().to_string()).collect();
+            let er = ctx.register_or_get_anon_enum(tags, range);
+            Ok(Ty::Enum(er))
+        }
+        Some(inner) if inner.as_rule() == Rule::qualified_type => {
+            // qualified_type = { identifier ~ "::" ~ identifier }
+            let qrange = Range::from(&inner);
+            let mut parts = inner.into_inner();
+            let mod_name = parts
+                .next()
+                .missing("module name in qualified type", qrange)?
+                .as_str();
+            let type_name = parts
+                .next()
+                .missing("type name in qualified type", qrange)?
+                .as_str();
+            let mod_ref = ctx
+                .get_mod_by_name(mod_name)
+                .ok_or_else(|| AstError::UnknownModule {
+                    module: mod_name.to_string(),
+                    range,
+                })?;
+            ctx.lookup_enum_in_module(mod_ref, type_name)
+                .map(Ty::Enum)
+                .ok_or_else(|| AstError::UnknownType {
+                    name: format!("{mod_name}::{type_name}"),
+                    range,
+                })
+        }
+        _ => {
+            // Built-in keyword or plain identifier (user-defined enum in same file).
+            let name = inner_opt
+                .map(|p| p.as_str().to_string())
+                .unwrap_or_else(|| pair.as_str().to_string());
+            match name.as_str() {
+                "Int" => Ok(Ty::Int),
+                "Bool" => Ok(Ty::Bool),
+                "Unit" => Ok(Ty::Unit),
+                other => ctx.lookup_enum_by_name(other).map(Ty::Enum).ok_or_else(|| {
+                    AstError::UnknownType {
+                        name: other.to_string(),
+                        range,
+                    }
+                }),
+            }
+        }
     }
 }
 
@@ -794,6 +882,68 @@ fn build_primary<'run>(
         Rule::ifstatement => build_if(ctx, inner, src),
         Rule::whileloop => build_while(ctx, inner, src),
         Rule::function_call | Rule::external_function_call => build_call(ctx, inner, src),
+        Rule::external_constructor_expr => {
+            // external_constructor_expr = { identifier ~ "::" ~ identifier ~ "#" ~
+            // identifier }
+            let inner_range = Range::from(&inner);
+            let mut parts = inner.into_inner();
+            let mod_name = parts
+                .next()
+                .missing("module name in external constructor", inner_range)?
+                .as_str()
+                .to_string();
+            let type_name = parts
+                .next()
+                .missing("type name in external constructor", inner_range)?
+                .as_str()
+                .to_string();
+            let variant = parts
+                .next()
+                .missing("variant in external constructor", inner_range)?
+                .as_str()
+                .to_string();
+            Ok(Expr {
+                expr: Expression::ExternalConstructor {
+                    mod_name,
+                    type_name,
+                    variant,
+                },
+                range: inner_range,
+            })
+        }
+        Rule::constructor_expr => {
+            // constructor_expr = { identifier ~ "#" ~ identifier }
+            let inner_range = Range::from(&inner);
+            let mut parts = inner.into_inner();
+            let type_name = parts
+                .next()
+                .missing("constructor type name", inner_range)?
+                .as_str()
+                .to_string();
+            let variant = parts
+                .next()
+                .missing("constructor variant", inner_range)?
+                .as_str()
+                .to_string();
+            Ok(Expr {
+                expr: Expression::Constructor { type_name, variant },
+                range: inner_range,
+            })
+        }
+        Rule::tag_expr => {
+            // tag_expr = { "#" ~ identifier }
+            let inner_range = Range::from(&inner);
+            let variant = inner
+                .into_inner()
+                .next()
+                .missing("tag variant", inner_range)?
+                .as_str()
+                .to_string();
+            Ok(Expr {
+                expr: Expression::Tag { variant },
+                range: inner_range,
+            })
+        }
         Rule::number => {
             let s = inner.as_str().to_string();
             let v = s.parse::<i64>().map_err(|e| AstError::InvalidInteger {

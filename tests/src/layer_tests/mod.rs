@@ -10,6 +10,7 @@
 //! Tests in this category do NOT verify agreement between layers—see
 //! `agreement_tests` for cross-layer verification.
 
+pub mod enum_tests;
 pub mod interpreter_tests;
 pub mod parse_tests;
 pub mod qualify_tests;

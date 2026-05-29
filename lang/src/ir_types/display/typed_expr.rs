@@ -213,6 +213,13 @@ impl<'fmt, 'run> Iterator for TypedExprFormatter<'fmt, 'run> {
                         }
                         return Some(("{".into(), Newline(Increase)));
                     }
+
+                    Constructor {
+                        enum_ref,
+                        variant_idx,
+                    } => {
+                        return Some((self.ctx.enum_display(*enum_ref, *variant_idx), Nothing));
+                    }
                 },
             }
         }

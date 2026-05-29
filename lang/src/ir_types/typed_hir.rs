@@ -96,6 +96,12 @@ pub enum Expression {
         statements: Vec<Statement>,
         expr: Option<Box<Expr>>,
     },
+    /// Fully-resolved enum constructor; all tags are resolved to this by the
+    /// type checker.
+    Constructor {
+        enum_ref: EnumRef,
+        variant_idx: usize,
+    },
 }
 
 // --- trait implementations ---

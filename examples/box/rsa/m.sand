@@ -3,8 +3,8 @@ def mod(a: Int, m: Int): Int :=
 
 def gcd(a: Int, b: Int): Int :=
 {
-    let x: Int = a;
-    let y: Int = b;
+    let mut x = a;
+    let mut y = b;
 
     while y != 0 do {
         let t: Int = y;
@@ -19,10 +19,10 @@ module cycg;
 
 def modinv(a: Int, m: Int): Int :=
 {
-    let t: Int = 0;
-    let newt: Int = 1;
-    let r: Int = m;
-    let newr: Int = a;
+    let mut t: Int = 0;
+    let mut newt: Int = 1;
+    let mut r: Int = m;
+    let mut newr: Int = a;
 
     while newr != 0 do {
         let q: Int = r / newr;
@@ -47,9 +47,9 @@ def modinv(a: Int, m: Int): Int :=
 
 def modexp(base: Int, exp: Int, m: Int): Int :=
 {
-    let result: Int = 1;
-    let b: Int = m::mod(base, m);
-    let e: Int = exp;
+    let mut result: Int = 1;
+    let mut b: Int = m::mod(base, m);
+    let mut e: Int = exp;
 
     while e > 0 do {
         if m::mod(e, 2) == 1 then {

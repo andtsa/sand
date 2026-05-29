@@ -106,6 +106,21 @@ pub enum Expression {
         statements: Vec<Statement>,
         expr: Option<Box<Expr>>,
     },
+    /// Fully-qualified enum constructor: `Light#Red`
+    Constructor {
+        type_name: String,
+        variant: String,
+    },
+    /// Cross-module qualified enum constructor: `mod::Light#Red`
+    ExternalConstructor {
+        mod_name: String,
+        type_name: String,
+        variant: String,
+    },
+    /// Bare tag: `#Red` — type unknown until check mode resolves it
+    Tag {
+        variant: String,
+    },
 }
 
 impl HirVar {

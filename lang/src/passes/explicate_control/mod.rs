@@ -121,6 +121,7 @@ fn collect_locals(cx: &mut FnCx, expr: &th::Expr) {
         th::Expression::Var(_)
         | th::Expression::Int(_)
         | th::Expression::Bool(_)
-        | th::Expression::Unit => {}
+        | th::Expression::Unit
+        | th::Expression::Constructor { .. } => {}
     }
 }

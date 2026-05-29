@@ -6,6 +6,7 @@ use crate::compiler::structure::Range;
 use crate::compiler::structure::UniqVar;
 use crate::lang::intrinsics::Intrinsic;
 use crate::lang::ops::*;
+use crate::lang::types::EnumRef;
 use crate::lang::types::Ty;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -109,6 +110,10 @@ pub enum Constant {
     Int(i64),
     Bool(bool),
     Unit,
+    EnumVariant {
+        enum_ref: EnumRef,
+        variant_idx: usize,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

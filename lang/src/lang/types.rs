@@ -1,3 +1,8 @@
+/// Opaque index into the compiler's enum-definition registry.
+/// Freely `Copy`, comparable, hashable — same pattern as `FunRef`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct EnumRef(pub usize);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Ty {
     Int,
@@ -5,6 +10,7 @@ pub enum Ty {
     Unit,
     Top,    // the any type. used for error reporting when type inference fails
     Bottom, // the never type, for when an expression can never produce a value
+    Enum(EnumRef),
 }
 
 impl Ty {
@@ -19,6 +25,7 @@ impl Ty {
             (Int, Int) => true,
             (Bool, Bool) => true,
             (Unit, Unit) => true,
+            (Enum(a), Enum(b)) => a == b,
             _ => false,
         }
     }

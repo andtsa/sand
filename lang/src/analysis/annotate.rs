@@ -55,7 +55,10 @@ pub fn collect_dependencies(expr: &Expression, dependencies: &mut HashSet<UniqVa
                 collect_dependencies(&e.expr, dependencies);
             }
         }
-        Expression::Int(_) | Expression::Bool(_) | Expression::Unit => {}
+        Expression::Int(_)
+        | Expression::Bool(_)
+        | Expression::Unit
+        | Expression::Constructor { .. } => {}
     }
 }
 

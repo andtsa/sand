@@ -42,7 +42,7 @@ pub fn hover_at_position(
                 return Some(make_hover(format!(
                     "**{}: {}**\nParameter",
                     name,
-                    fmt_ty(param.ty)
+                    fmt_ty(ctx, param.ty)
                 )));
             }
         }
@@ -80,7 +80,11 @@ fn find_in_expr(expr: &Expr, pos: Pos) -> Option<&Expr> {
             .iter()
             .find_map(|s| find_in_stmt(s, pos))
             .or_else(|| expr.as_deref().and_then(|e| find_in_expr(e, pos))),
-        Expression::Var(_) | Expression::Int(_) | Expression::Bool(_) | Expression::Unit => None,
+        Expression::Var(_)
+        | Expression::Int(_)
+        | Expression::Bool(_)
+        | Expression::Unit
+        | Expression::Constructor { .. } => None,
     };
     child.or(Some(expr))
 }
@@ -113,7 +117,7 @@ fn format_hover(expr: &Expr, ctx: &CompileCtx) -> Hover {
             format!(
                 "**{}: {}**\nDeclared at line {}, col {}",
                 name,
-                fmt_ty(expr.ty),
+                fmt_ty(ctx, expr.ty),
                 decl.start.line,
                 decl.start.col
             )
@@ -128,7 +132,7 @@ fn format_hover(expr: &Expr, ctx: &CompileCtx) -> Hover {
                 "**{}({}) → {}**\nDefined in module `{}`",
                 name,
                 args,
-                fmt_ty(sig.ret_ty),
+                fmt_ty(ctx, sig.ret_ty),
                 module.name
             )
         }
@@ -137,38 +141,39 @@ fn format_hover(expr: &Expr, ctx: &CompileCtx) -> Hover {
                 let args = sig
                     .args
                     .iter()
-                    .map(|t| fmt_ty(*t).to_string())
+                    .map(|t| fmt_ty(ctx, *t).to_string())
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!(
                     "**{}({}) → {}**\nBuilt-in intrinsic",
                     fn_name,
                     args,
-                    fmt_ty(sig.ret_ty)
+                    fmt_ty(ctx, sig.ret_ty)
                 )
             } else {
                 format!("**intrinsic {}**", fn_name)
             }
         }
-        _ => format!(": {}", fmt_ty(expr.ty)),
+        _ => format!(": {}", fmt_ty(ctx, expr.ty)),
     };
     make_hover(content)
 }
 
 fn fmt_sig_args(args: &[(lang::compiler::structure::UniqVar, Ty)], ctx: &CompileCtx) -> String {
     args.iter()
-        .map(|(uv, ty)| format!("{}: {}", ctx.uniq_variable_name(uv), fmt_ty(*ty)))
+        .map(|(uv, ty)| format!("{}: {}", ctx.uniq_variable_name(uv), fmt_ty(ctx, *ty)))
         .collect::<Vec<_>>()
         .join(", ")
 }
 
-fn fmt_ty(ty: Ty) -> &'static str {
+fn fmt_ty(ctx: &CompileCtx, ty: Ty) -> String {
     match ty {
-        Ty::Int => "Int",
-        Ty::Bool => "Bool",
-        Ty::Unit => "Unit",
-        Ty::Top => "Top",
-        Ty::Bottom => "Bottom",
+        Ty::Int => "Int".to_string(),
+        Ty::Bool => "Bool".to_string(),
+        Ty::Unit => "Unit".to_string(),
+        Ty::Top => "Top".to_string(),
+        Ty::Bottom => "Bottom".to_string(),
+        Ty::Enum(er) => ctx.get_enum(er).name.clone(),
     }
 }
 

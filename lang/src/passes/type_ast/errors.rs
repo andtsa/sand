@@ -36,4 +36,14 @@ pub enum AstTypeError {
         found: Vec<Ty>,
         range: Range,
     },
+    #[error("bare tag '#{variant}' used without an expected type context at {range}")]
+    TagWithoutContext { variant: String, range: Range },
+    #[error("bare tag '#{variant}' used where a non-enum type was expected at {range}")]
+    TagInNonEnumContext { variant: String, range: Range },
+    #[error("unknown variant '{variant}' on enum '{enum_name}' at {range}")]
+    UnknownTagVariant {
+        variant: String,
+        enum_name: String,
+        range: Range,
+    },
 }

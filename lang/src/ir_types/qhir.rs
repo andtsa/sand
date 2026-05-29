@@ -102,6 +102,16 @@ pub enum Expression {
         statements: Vec<Statement>,
         expr: Option<Box<Expr>>,
     },
+    /// Fully-resolved enum constructor: type and variant index are known.
+    Constructor {
+        enum_ref: EnumRef,
+        variant_idx: usize,
+    },
+    /// Bare tag `#Red` — still carries the string name; resolved by the type
+    /// checker.
+    Tag {
+        variant: String,
+    },
 }
 
 impl Eq for Statement {}

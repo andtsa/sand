@@ -267,6 +267,22 @@ fn uniquify_expr(e: &Expr, u: &mut UniqCtx) -> Result<Expr, UniquifyError> {
         Expression::Int(i) => Expression::Int(*i),
         Expression::Bool(b) => Expression::Bool(*b),
         Expression::Unit => Expression::Unit,
+        Expression::Constructor { type_name, variant } => Expression::Constructor {
+            type_name: type_name.clone(),
+            variant: variant.clone(),
+        },
+        Expression::ExternalConstructor {
+            mod_name,
+            type_name,
+            variant,
+        } => Expression::ExternalConstructor {
+            mod_name: mod_name.clone(),
+            type_name: type_name.clone(),
+            variant: variant.clone(),
+        },
+        Expression::Tag { variant } => Expression::Tag {
+            variant: variant.clone(),
+        },
 
         Expression::Block { statements, expr } => {
             u.enter_scope();

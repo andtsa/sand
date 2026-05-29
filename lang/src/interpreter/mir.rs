@@ -8,12 +8,17 @@ use crate::lang::intrinsics::Intrinsic;
 use crate::lang::ops::Bop;
 use crate::lang::ops::CompOp;
 use crate::lang::ops::Uop;
+use crate::lang::types::EnumRef;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum MirValue {
     Int(i64),
     Bool(bool),
     Unit,
+    EnumVariant {
+        enum_ref: EnumRef,
+        variant_idx: usize,
+    },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -37,10 +42,15 @@ impl MirProgram {
             .find(|(fr, _)| ctx.is_main(**fr))
             .ok_or(MirInterpError::NoEntryPoint)?;
 
-        self.call_function(*main_ref, &[])
+        self.call_function(*main_ref, &[], ctx)
     }
 
-    fn call_function(&self, fun: FunRef, args: &[MirValue]) -> Result<MirValue, MirInterpError> {
+    fn call_function(
+        &self,
+        fun: FunRef,
+        args: &[MirValue],
+        ctx: &CompileCtx,
+    ) -> Result<MirValue, MirInterpError> {
         let func = &self.functions[&fun];
 
         // initialise locals: all unset to start
@@ -57,7 +67,7 @@ impl MirProgram {
             let block = &func.blocks[current.0];
 
             for stmt in &block.statements {
-                execute_statement(stmt, &mut locals, self)?;
+                execute_statement(stmt, &mut locals, self, ctx)?;
             }
 
             match &block.terminator {
@@ -91,15 +101,16 @@ fn execute_statement(
     stmt: &Statement,
     locals: &mut [Option<MirValue>],
     prog: &MirProgram,
+    ctx: &CompileCtx,
 ) -> Result<(), MirInterpError> {
     match stmt {
         Statement::Assign { dst, value, .. } => {
-            let v = eval_rvalue(value, locals, prog)?;
+            let v = eval_rvalue(value, locals, prog, ctx)?;
             locals[dst.local.0] = Some(v);
             Ok(())
         }
         Statement::Eval { value, .. } => {
-            eval_rvalue(value, locals, prog)?;
+            eval_rvalue(value, locals, prog, ctx)?;
             Ok(())
         }
     }
@@ -109,6 +120,7 @@ fn eval_rvalue(
     rv: &RValue,
     locals: &mut [Option<MirValue>],
     prog: &MirProgram,
+    ctx: &CompileCtx,
 ) -> Result<MirValue, MirInterpError> {
     match rv {
         RValue::Use(op) => eval_operand(op, locals),
@@ -129,7 +141,7 @@ fn eval_rvalue(
                 .iter()
                 .map(|a| eval_operand(a, locals))
                 .collect::<Result<Vec<_>, _>>()?;
-            prog.call_function(*fn_name, &arg_vals)
+            prog.call_function(*fn_name, &arg_vals, ctx)
         }
 
         RValue::IntrinsicCall { fn_name, args } => {
@@ -137,7 +149,7 @@ fn eval_rvalue(
                 .iter()
                 .map(|a| eval_operand(a, locals))
                 .collect::<Result<Vec<_>, _>>()?;
-            eval_intrinsic(*fn_name, arg_vals)
+            eval_intrinsic(*fn_name, arg_vals, ctx)
         }
     }
 }
@@ -148,6 +160,13 @@ fn eval_operand(op: &Operand, locals: &[Option<MirValue>]) -> Result<MirValue, M
             Constant::Int(i) => MirValue::Int(*i),
             Constant::Bool(b) => MirValue::Bool(*b),
             Constant::Unit => MirValue::Unit,
+            Constant::EnumVariant {
+                enum_ref,
+                variant_idx,
+            } => MirValue::EnumVariant {
+                enum_ref: *enum_ref,
+                variant_idx: *variant_idx,
+            },
         }),
         Operand::Copy(place) => locals[place.local.0]
             .clone()
@@ -187,6 +206,28 @@ fn eval_binop(op: Bop, l: MirValue, r: MirValue) -> Result<MirValue, MirInterpEr
         })),
         (Bop::Comp(CompOp::Eq), MirValue::Bool(a), MirValue::Bool(b)) => Ok(MirValue::Bool(a == b)),
         (Bop::Comp(CompOp::Ne), MirValue::Bool(a), MirValue::Bool(b)) => Ok(MirValue::Bool(a != b)),
+        (
+            Bop::Comp(CompOp::Eq),
+            MirValue::EnumVariant {
+                enum_ref: er1,
+                variant_idx: vi1,
+            },
+            MirValue::EnumVariant {
+                enum_ref: er2,
+                variant_idx: vi2,
+            },
+        ) => Ok(MirValue::Bool(er1 == er2 && vi1 == vi2)),
+        (
+            Bop::Comp(CompOp::Ne),
+            MirValue::EnumVariant {
+                enum_ref: er1,
+                variant_idx: vi1,
+            },
+            MirValue::EnumVariant {
+                enum_ref: er2,
+                variant_idx: vi2,
+            },
+        ) => Ok(MirValue::Bool(er1 != er2 || vi1 != vi2)),
         (op, l, r) => internal_bug!("type error in MIR binop: {:?} {:?} {:?}", l, op, r),
     }
 }
@@ -199,28 +240,44 @@ fn eval_unop(op: Uop, v: MirValue) -> Result<MirValue, MirInterpError> {
     }
 }
 
-fn eval_intrinsic(fn_name: Intrinsic, args: Vec<MirValue>) -> Result<MirValue, MirInterpError> {
+fn eval_intrinsic(
+    fn_name: Intrinsic,
+    args: Vec<MirValue>,
+    ctx: &CompileCtx,
+) -> Result<MirValue, MirInterpError> {
     match fn_name {
         Intrinsic::Println => {
             for arg in &args {
-                print!("{} ", fmt_value(arg));
+                print!("{} ", fmt_value(arg, ctx));
             }
             println!();
             Ok(MirValue::Unit)
         }
         Intrinsic::Print => {
             for arg in &args {
-                print!("{} ", fmt_value(arg));
+                print!("{} ", fmt_value(arg, ctx));
             }
             Ok(MirValue::Unit)
         }
     }
 }
 
-fn fmt_value(v: &MirValue) -> String {
+fn fmt_value(v: &MirValue, ctx: &CompileCtx) -> String {
     match v {
         MirValue::Int(i) => i.to_string(),
         MirValue::Bool(b) => b.to_string(),
         MirValue::Unit => "()".to_string(),
+        MirValue::EnumVariant {
+            enum_ref,
+            variant_idx,
+        } => {
+            let def = ctx.get_enum(*enum_ref);
+            let name = &def.variants[*variant_idx];
+            if def.is_anonymous {
+                format!("#{name}")
+            } else {
+                name.clone()
+            }
+        }
     }
 }

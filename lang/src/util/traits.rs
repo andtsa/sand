@@ -62,6 +62,19 @@ impl fmt::Display for Expression {
                 }
                 write!(f, " }}")
             }
+            Expression::Constructor { type_name, variant } => {
+                write!(f, "{type_name}#{variant}")
+            }
+            Expression::ExternalConstructor {
+                mod_name,
+                type_name,
+                variant,
+            } => {
+                write!(f, "{mod_name}::{type_name}#{variant}")
+            }
+            Expression::Tag { variant } => {
+                write!(f, "#{variant}")
+            }
         }
     }
 }
@@ -129,6 +142,7 @@ impl fmt::Display for Ty {
             Ty::Unit => write!(f, "Unit"),
             Ty::Top => write!(f, "Top"),
             Ty::Bottom => write!(f, "Bottom"),
+            Ty::Enum(er) => write!(f, "Enum({:?})", er),
         }
     }
 }

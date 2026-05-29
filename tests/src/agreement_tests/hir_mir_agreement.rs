@@ -32,6 +32,13 @@ fn assert_hir_mir_agree(src: &str) {
         MirValue::Int(i) => Expression::Int(i),
         MirValue::Bool(b) => Expression::Bool(b),
         MirValue::Unit => Expression::Unit,
+        MirValue::EnumVariant {
+            enum_ref,
+            variant_idx,
+        } => Expression::Constructor {
+            enum_ref,
+            variant_idx,
+        },
     };
 
     assert_eq!(

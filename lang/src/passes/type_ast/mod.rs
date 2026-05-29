@@ -43,27 +43,12 @@ fn infer_function(
         .map(|p| (p.name, (p.ty, p.is_mutable)))
         .collect();
 
-    let body = infer(ctx, &env, &func.body).map_err(|e| TypeError {
+    // Use check() so that bare tags in return position are resolved against the
+    // declared return type.
+    let body = check(ctx, &env, &func.body, func.ret_type).map_err(|e| TypeError {
         error: e,
         module: func.src_module,
     })?;
-
-    if body.ty != func.ret_type {
-        return Err(TypeError {
-            error: AstTypeError::TypeError {
-                message: format!(
-                    "function '{}' has return type {:?} but body has type {:?}",
-                    ctx.original_fun_name(func.name),
-                    func.ret_type,
-                    body.ty
-                ),
-                expected: func.ret_type,
-                found: body.ty,
-                range: func.range,
-            },
-            module: func.src_module,
-        });
-    }
 
     Ok((
         func.name,
@@ -76,6 +61,111 @@ fn infer_function(
             src_module: func.src_module,
         },
     ))
+}
+
+/// Bidirectional type checking: verify that `expr` has type `expected`,
+/// propagating the expected type into sub-expressions where useful (primarily
+/// bare `#Tag` expressions and the trailing expression of if-else / blocks).
+fn check(
+    ctx: &CompileCtx,
+    env: &TypeEnv,
+    expr: &qhir::Expr,
+    expected: Ty,
+) -> Result<typed_hir::Expr, AstTypeError> {
+    match &expr.expr {
+        // Resolve a bare #Tag against the expected enum type.
+        qhir::Expression::Tag { variant } => {
+            let er = match expected {
+                Ty::Enum(er) => er,
+                _ => {
+                    return Err(AstTypeError::TagInNonEnumContext {
+                        variant: variant.clone(),
+                        range: expr.range,
+                    });
+                }
+            };
+            let variant_idx =
+                ctx.lookup_variant(er, variant)
+                    .ok_or_else(|| AstTypeError::UnknownTagVariant {
+                        variant: variant.clone(),
+                        enum_name: ctx.get_enum(er).name.clone(),
+                        range: expr.range,
+                    })?;
+            Ok(typed_hir::Expr {
+                expr: typed_hir::Expression::Constructor {
+                    enum_ref: er,
+                    variant_idx,
+                },
+                ty: expected,
+                range: expr.range,
+            })
+        }
+
+        // Propagate check mode into both branches of an if-else.
+        qhir::Expression::If {
+            cond,
+            t,
+            f: Some(f),
+        } => {
+            let cond_expr = infer(ctx, env, cond)?;
+            if cond_expr.ty != Ty::Bool {
+                return Err(AstTypeError::TypeError {
+                    message: format!("condition of 'if' must be Bool, found {:?}", cond_expr.ty),
+                    expected: Ty::Bool,
+                    found: cond_expr.ty,
+                    range: cond.range,
+                });
+            }
+            let t_expr = check(ctx, env, t, expected)?;
+            let f_expr = check(ctx, env, f, expected)?;
+            Ok(typed_hir::Expr {
+                expr: typed_hir::Expression::If {
+                    cond: Box::new(cond_expr),
+                    t: Box::new(t_expr),
+                    f: Box::new(f_expr),
+                },
+                ty: expected,
+                range: expr.range,
+            })
+        }
+
+        // Propagate check mode into the trailing expression of a block.
+        qhir::Expression::Block {
+            statements,
+            expr: Some(ret),
+        } => {
+            let (typed_statements, final_env) = statements.iter().try_fold(
+                (Vec::with_capacity(statements.len()), env.clone()),
+                |(mut stmts, mut env), stmt| {
+                    stmts.push(infer_statement(ctx, &mut env, stmt)?);
+                    Ok((stmts, env))
+                },
+            )?;
+            let typed_ret = check(ctx, &final_env, ret, expected)?;
+            Ok(typed_hir::Expr {
+                expr: typed_hir::Expression::Block {
+                    statements: typed_statements,
+                    expr: Some(Box::new(typed_ret)),
+                },
+                ty: expected,
+                range: expr.range,
+            })
+        }
+
+        // Everything else: infer, then verify type matches expected.
+        _ => {
+            let e = infer(ctx, env, expr)?;
+            if e.ty.type_neq(&expected) {
+                return Err(AstTypeError::TypeError {
+                    message: format!("expected type {:?} but found {:?}", expected, e.ty),
+                    expected,
+                    found: e.ty,
+                    range: expr.range,
+                });
+            }
+            Ok(e)
+        }
+    }
 }
 
 fn infer(
@@ -113,9 +203,39 @@ fn infer(
                 ty,
             })
         }
+        qhir::Expression::Constructor {
+            enum_ref,
+            variant_idx,
+        } => Ok(typed_hir::Expr {
+            expr: typed_hir::Expression::Constructor {
+                enum_ref: *enum_ref,
+                variant_idx: *variant_idx,
+            },
+            range: expr.range,
+            ty: Ty::Enum(*enum_ref),
+        }),
+
+        qhir::Expression::Tag { variant } => Err(AstTypeError::TagWithoutContext {
+            variant: variant.clone(),
+            range: expr.range,
+        }),
+
         qhir::Expression::BinOp { left, op, right } => {
-            let left_expr = infer(ctx, env, left)?;
-            let right_expr = infer(ctx, env, right)?;
+            // When one side is a bare Tag, infer the other side first, then
+            // use check() to resolve the tag against the inferred type.
+            let (left_expr, right_expr) = match (&left.expr, &right.expr) {
+                (_, qhir::Expression::Tag { .. }) => {
+                    let l = infer(ctx, env, left)?;
+                    let r = check(ctx, env, right, l.ty)?;
+                    (l, r)
+                }
+                (qhir::Expression::Tag { .. }, _) => {
+                    let r = infer(ctx, env, right)?;
+                    let l = check(ctx, env, left, r.ty)?;
+                    (l, r)
+                }
+                _ => (infer(ctx, env, left)?, infer(ctx, env, right)?),
+            };
 
             let ty = op
                 .accepts_types(left_expr.ty, right_expr.ty)
@@ -403,25 +523,17 @@ fn infer_statement(
             val,
             range,
         } => {
-            let val_expr = infer(ctx, env, val)?;
-            let ty = match annotation {
+            // When an annotation is present use check() so bare tags are resolved.
+            let (val_expr, ty) = match annotation {
                 Some(declared_ty) => {
-                    if val_expr.ty.type_neq(declared_ty) {
-                        return Err(AstTypeError::TypeError {
-                            message: format!(
-                                "declared variable '{}' has type {:?} but initializer has type {:?}",
-                                ctx.uniq_variable_name(name),
-                                declared_ty,
-                                val_expr.ty
-                            ),
-                            expected: *declared_ty,
-                            found: val_expr.ty,
-                            range: *range,
-                        });
-                    }
-                    *declared_ty
+                    let checked = check(ctx, env, val, *declared_ty)?;
+                    (checked, *declared_ty)
                 }
-                None => val_expr.ty,
+                None => {
+                    let inferred = infer(ctx, env, val)?;
+                    let ty = inferred.ty;
+                    (inferred, ty)
+                }
             };
             env.insert(*name, (ty, *is_mutable));
             Ok(typed_hir::Statement::Declaration {

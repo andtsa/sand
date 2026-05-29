@@ -73,6 +73,12 @@ fn fmt_constant(c: &Constant) -> String {
         Constant::Int(i) => i.to_string(),
         Constant::Bool(b) => b.to_string(),
         Constant::Unit => "()".to_string(),
+        Constant::EnumVariant {
+            enum_ref,
+            variant_idx,
+        } => {
+            format!("Enum({:?})#{}", enum_ref, variant_idx)
+        }
     }
 }
 

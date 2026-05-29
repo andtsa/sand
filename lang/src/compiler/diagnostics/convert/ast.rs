@@ -145,6 +145,31 @@ pub fn ast_error_to_diagnostics(
                 },
             );
         }
+
+        AstError::UnknownType { name, range } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    file: Some(file),
+                    severity: DiagnosticSeverity::Error,
+                    message: format!("unknown type '{name}'"),
+                    range: *range,
+                    ..Default::default()
+                },
+            );
+        }
+        AstError::UnknownModule { module, range } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    file: Some(file),
+                    severity: DiagnosticSeverity::Error,
+                    message: format!("unknown module '{module}'"),
+                    range: *range,
+                    ..Default::default()
+                },
+            );
+        }
     }
     diagnostics
 }

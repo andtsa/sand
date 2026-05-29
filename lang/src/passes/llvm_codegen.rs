@@ -26,12 +26,13 @@ pub struct LlvmCodegen<'ctx> {
 
 /// per-function state,
 /// thrown away after each function & rebuilt fresh for the next one.
-struct FnCtx<'ctx> {
+struct FnCtx<'a, 'ctx> {
     /// LocalId  ->  alloca'd stack slot
     locals: Map<LocalId, llvm::PointerValue<'ctx>>,
     local_tys: Map<LocalId, Ty>,
     /// BlockId  ->  LLVM BasicBlock (pre-created so forward jumps work)
     blocks: Map<BlockId, LLVMBasicBlock<'ctx>>,
+    compile_ctx: &'a CompileCtx<'a>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -96,7 +97,7 @@ impl<'ctx> LlvmCodegen<'ctx> {
         f: &MirFunction,
         llvm_fn: llvm::FunctionValue<'ctx>,
         fns: &Map<FunRef, llvm::FunctionValue<'ctx>>,
-        _ctx: &CompileCtx,
+        ctx: &CompileCtx,
     ) -> Result<(), CodegenError> {
         // 1. entry block for allocas
         let entry_bb = self.context.append_basic_block(llvm_fn, "entry");
@@ -139,6 +140,7 @@ impl<'ctx> LlvmCodegen<'ctx> {
             locals,
             local_tys,
             blocks,
+            compile_ctx: ctx,
         };
 
         // 6. fill each block
@@ -153,7 +155,7 @@ impl<'ctx> LlvmCodegen<'ctx> {
     fn emit_block(
         &self,
         bb: &BasicBlock,
-        fn_ctx: &FnCtx<'ctx>,
+        fn_ctx: &FnCtx<'_, 'ctx>,
         fns: &Map<FunRef, llvm::FunctionValue<'ctx>>,
     ) -> Result<(), CodegenError> {
         self.builder.position_at_end(fn_ctx.blocks[&bb.id]);
@@ -171,7 +173,7 @@ impl<'ctx> LlvmCodegen<'ctx> {
     fn emit_statement(
         &self,
         stmt: &Statement,
-        fn_ctx: &FnCtx<'ctx>,
+        fn_ctx: &FnCtx<'_, 'ctx>,
         fns: &Map<FunRef, llvm::FunctionValue<'ctx>>,
     ) -> Result<(), CodegenError> {
         match stmt {
@@ -191,7 +193,7 @@ impl<'ctx> LlvmCodegen<'ctx> {
     fn emit_rvalue(
         &self,
         rv: &RValue,
-        fn_ctx: &FnCtx<'ctx>,
+        fn_ctx: &FnCtx<'_, 'ctx>,
         fns: &Map<FunRef, llvm::FunctionValue<'ctx>>,
     ) -> Result<llvm::BasicValueEnum<'ctx>, CodegenError> {
         match rv {
@@ -229,7 +231,7 @@ impl<'ctx> LlvmCodegen<'ctx> {
     fn emit_operand(
         &self,
         op: &Operand,
-        fn_ctx: &FnCtx<'ctx>,
+        fn_ctx: &FnCtx<'_, 'ctx>,
     ) -> Result<llvm::BasicValueEnum<'ctx>, CodegenError> {
         match op {
             Operand::Copy(Place { local }) => {
@@ -245,6 +247,12 @@ impl<'ctx> LlvmCodegen<'ctx> {
             Constant::Int(i) => self.context.i64_type().const_int(*i as u64, true).into(),
             Constant::Bool(b) => self.context.bool_type().const_int(*b as u64, false).into(),
             Constant::Unit => self.context.struct_type(&[], false).const_zero().into(),
+            // enum variants are represented as a single i64 holding the variant index
+            Constant::EnumVariant { variant_idx, .. } => self
+                .context
+                .i64_type()
+                .const_int(*variant_idx as u64, false)
+                .into(),
         }
     }
 
@@ -306,7 +314,7 @@ impl<'ctx> LlvmCodegen<'ctx> {
     fn emit_terminator(
         &self,
         term: &Terminator,
-        fn_ctx: &FnCtx<'ctx>,
+        fn_ctx: &FnCtx<'_, 'ctx>,
         _fns: &Map<FunRef, llvm::FunctionValue<'ctx>>,
     ) -> Result<(), CodegenError> {
         match term {
@@ -345,7 +353,7 @@ impl<'ctx> LlvmCodegen<'ctx> {
         &self,
         fn_name: Intrinsic,
         args: &[Operand],
-        fn_ctx: &FnCtx<'ctx>,
+        fn_ctx: &FnCtx<'_, 'ctx>,
     ) -> Result<llvm::BasicValueEnum<'ctx>, CodegenError> {
         let printf = self.get_or_declare_printf();
 
@@ -356,14 +364,13 @@ impl<'ctx> LlvmCodegen<'ctx> {
                     let fmt = self
                         .builder
                         .build_global_string_ptr("%ld ", "fmt_int")?
-                        .as_pointer_value(); // ← .as_pointer_value()
+                        .as_pointer_value();
                     self.builder
                         .build_call(printf, &[fmt.into(), val.into()], "")?;
                 }
                 Ty::Bool => {
-                    // variadic call — i1 must be promoted to i32
+                    // variadic call, i1 must be promoted to i32
                     let as_i32 = self.builder.build_int_z_extend(
-                        // ← z_extend not z_ext
                         val.into_int_value(),
                         self.context.i32_type(),
                         "bool_ext",
@@ -376,6 +383,36 @@ impl<'ctx> LlvmCodegen<'ctx> {
                         .build_call(printf, &[fmt.into(), as_i32.into()], "")?;
                 }
                 Ty::Unit => {}
+                Ty::Enum(er) => {
+                    // build (or reuse) a global [N x ptr] variant-name table for
+                    // this enum, then index into it at runtime with the variant
+                    // index stored in `val`.
+                    let table = self.get_or_create_variant_table(er, fn_ctx.compile_ctx);
+                    let enum_def = fn_ctx.compile_ctx.get_enum(er);
+                    let n = enum_def.variants.len() as u32;
+                    let table_ty = self.context.ptr_type(Default::default()).array_type(n);
+                    // SAFETY: table is a private constant array we just created;
+                    // the index is a valid enum variant index produced by the compiler.
+                    let name_ptr = unsafe {
+                        self.builder.build_in_bounds_gep(
+                            table_ty,
+                            table.as_pointer_value(),
+                            &[self.context.i64_type().const_zero(), val.into_int_value()],
+                            "variant_name_ptr",
+                        )?
+                    };
+                    let loaded = self.builder.build_load(
+                        self.context.ptr_type(Default::default()),
+                        name_ptr,
+                        "variant_name",
+                    )?;
+                    let fmt = self
+                        .builder
+                        .build_global_string_ptr("%s ", "fmt_enum")?
+                        .as_pointer_value();
+                    self.builder
+                        .build_call(printf, &[fmt.into(), loaded.into()], "")?;
+                }
                 ty => panic!("unexpected type in intrinsic: {:?}", ty),
             }
         }
@@ -398,7 +435,64 @@ impl<'ctx> LlvmCodegen<'ctx> {
             Operand::Const(Constant::Int(_)) => Ty::Int,
             Operand::Const(Constant::Bool(_)) => Ty::Bool,
             Operand::Const(Constant::Unit) => Ty::Unit,
+            // The variant index is stored as i64; use Int as the LLVM type for now.
+            Operand::Const(Constant::EnumVariant { enum_ref, .. }) => Ty::Enum(*enum_ref),
         }
+    }
+
+    /// Return a global `[N x ptr]` constant whose elements point to
+    /// null-terminated variant-name strings for the given enum.
+    /// The global is named `__enum_<idx>_variants` and is created only once.
+    fn get_or_create_variant_table(
+        &self,
+        er: crate::lang::types::EnumRef,
+        ctx: &CompileCtx,
+    ) -> llvm::GlobalValue<'ctx> {
+        let global_name = format!("__enum_{}_variants", er.0);
+
+        // Reuse if already emitted (e.g. the same enum printed in multiple places).
+        if let Some(g) = self.module.get_global(&global_name) {
+            return g;
+        }
+
+        let enum_def = ctx.get_enum(er);
+        let ptr_ty = self.context.ptr_type(Default::default());
+
+        // One global i8 array per variant name.
+        // For anonymous tag-union types, prefix names with `#` so that
+        // `println(tag_val)` produces e.g. `#gt` rather than bare `gt`.
+        let prefix = if enum_def.is_anonymous { "#" } else { "" };
+        let name_ptrs: Vec<llvm::BasicValueEnum<'ctx>> = enum_def
+            .variants
+            .iter()
+            .enumerate()
+            .map(|(i, name)| {
+                let str_global_name = format!("__enum_{}_variant_{}_name", er.0, i);
+                // build_global_string_ptr caches by content, not by name, so use
+                // add_global + set_initializer directly to guarantee our own name.
+                let display = format!("{prefix}{name}");
+                let s = self.context.const_string(display.as_bytes(), true);
+                let g = self.module.add_global(s.get_type(), None, &str_global_name);
+                g.set_initializer(&s);
+                g.set_constant(true);
+                g.set_linkage(inkwell::module::Linkage::Private);
+                g.as_pointer_value().into()
+            })
+            .collect();
+
+        let array_const = ptr_ty.const_array(
+            &name_ptrs
+                .iter()
+                .map(|v| v.into_pointer_value())
+                .collect::<Vec<_>>(),
+        );
+        let table = self
+            .module
+            .add_global(array_const.get_type(), None, &global_name);
+        table.set_initializer(&array_const);
+        table.set_constant(true);
+        table.set_linkage(inkwell::module::Linkage::Private);
+        table
     }
 
     fn get_or_declare_printf(&self) -> llvm::FunctionValue<'ctx> {
@@ -432,6 +526,7 @@ impl<'ctx> LlvmCodegen<'ctx> {
             Ty::Int => self.context.i64_type().into(),
             Ty::Bool => self.context.bool_type().into(),
             Ty::Unit => self.context.struct_type(&[], false).into(),
+            Ty::Enum(_) => self.context.i64_type().into(),
             _ => panic!("no LLVM type for {:?}", ty),
         }
     }

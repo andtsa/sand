@@ -24,6 +24,13 @@ fn run_both(src: &str) -> Expression {
         MirValue::Int(i) => Expression::Int(i),
         MirValue::Bool(b) => Expression::Bool(b),
         MirValue::Unit => Expression::Unit,
+        MirValue::EnumVariant {
+            enum_ref,
+            variant_idx,
+        } => Expression::Constructor {
+            enum_ref,
+            variant_idx,
+        },
     };
     assert_eq!(hir, mir, "HIR and MIR interpreters disagree for:\n  {src}");
     hir

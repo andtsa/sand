@@ -186,6 +186,43 @@ pub fn qualify_error_to_diagnostics(
                 },
             );
         }
+
+        QualifyError::UnknownConstructorType {
+            name,
+            range,
+            source_module,
+        } => {
+            let file = ctx.file_of_module(source_module.index);
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    message: format!("unknown enum type '{name}' in constructor expression"),
+                    range: *range,
+                    file: Some(file),
+                    ..Default::default()
+                },
+            );
+        }
+
+        QualifyError::UnknownVariant {
+            type_name,
+            variant,
+            range,
+            source_module,
+        } => {
+            let file = ctx.file_of_module(source_module.index);
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    message: format!("unknown variant '{variant}' on enum type '{type_name}'"),
+                    range: *range,
+                    file: Some(file),
+                    ..Default::default()
+                },
+            );
+        }
     }
     diagnostics
 }

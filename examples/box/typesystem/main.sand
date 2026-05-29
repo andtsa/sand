@@ -1,0 +1,29 @@
+
+def compare(x: Int, y: Int): #gt | #lt | #eq := {
+    if x > y then {
+        #gt
+    } else if x < y then {
+        #lt
+    } else {
+        #eq
+    }
+}
+
+type Test = One | Two | Three;
+
+def main(): Unit := {
+    let x = 2;
+    
+    let mut y = 0;
+    while y < 5 do {
+        println(compare(x, y));
+        y = y + 1;
+    };
+
+    let z = Test#One;
+
+    println(z);
+    println(Test#Two == Test#Three);
+
+    println(compare(2, 2) == #eq);
+}

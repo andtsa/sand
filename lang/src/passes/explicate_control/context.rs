@@ -115,6 +115,13 @@ impl FnCx {
             th::Expression::Int(i) => Some(Operand::Const(Constant::Int(*i))),
             th::Expression::Bool(b) => Some(Operand::Const(Constant::Bool(*b))),
             th::Expression::Unit => Some(Operand::Const(Constant::Unit)),
+            th::Expression::Constructor {
+                enum_ref,
+                variant_idx,
+            } => Some(Operand::Const(Constant::EnumVariant {
+                enum_ref: *enum_ref,
+                variant_idx: *variant_idx,
+            })),
             _ => None,
         }
     }
@@ -257,6 +264,7 @@ impl FnCx {
             th::Expression::Int(_)
             | th::Expression::Bool(_)
             | th::Expression::Unit
+            | th::Expression::Constructor { .. }
             | th::Expression::Var(_) => {
                 let op = self
                     .simple_operand(expr)

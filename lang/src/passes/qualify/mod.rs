@@ -238,6 +238,56 @@ fn qualify_expr(
             };
             qhir::Expression::Var(u)
         }
+        hhir::Expression::Constructor { type_name, variant } => {
+            let er = q
+                .compile_ctx
+                .lookup_enum_by_name(&type_name)
+                .ok_or_else(|| QualifyError::UnknownConstructorType {
+                    name: type_name.clone(),
+                    range: expr.range,
+                    source_module: q.compile_ctx.module_info(module_name),
+                })?;
+            let variant_idx = q.compile_ctx.lookup_variant(er, &variant).ok_or_else(|| {
+                QualifyError::UnknownVariant {
+                    type_name: type_name.clone(),
+                    variant: variant.clone(),
+                    range: expr.range,
+                    source_module: q.compile_ctx.module_info(module_name),
+                }
+            })?;
+            qhir::Expression::Constructor {
+                enum_ref: er,
+                variant_idx,
+            }
+        }
+        hhir::Expression::ExternalConstructor {
+            mod_name,
+            type_name,
+            variant,
+        } => {
+            let mod_ref = q.get_module_by_name(&mod_name, *module_name, expr.range)?;
+            let er = q
+                .compile_ctx
+                .lookup_enum_in_module(mod_ref, &type_name)
+                .ok_or_else(|| QualifyError::UnknownConstructorType {
+                    name: format!("{mod_name}::{type_name}"),
+                    range: expr.range,
+                    source_module: q.compile_ctx.module_info(module_name),
+                })?;
+            let variant_idx = q.compile_ctx.lookup_variant(er, &variant).ok_or_else(|| {
+                QualifyError::UnknownVariant {
+                    type_name: format!("{mod_name}::{type_name}"),
+                    variant: variant.clone(),
+                    range: expr.range,
+                    source_module: q.compile_ctx.module_info(module_name),
+                }
+            })?;
+            qhir::Expression::Constructor {
+                enum_ref: er,
+                variant_idx,
+            }
+        }
+        hhir::Expression::Tag { variant } => qhir::Expression::Tag { variant },
         hhir::Expression::Call { fn_name, args } => {
             let qargs = args
                 .into_iter()

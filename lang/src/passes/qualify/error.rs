@@ -58,6 +58,21 @@ pub enum QualifyError {
         first_module: ModuleInfo,
         second_module: ModuleInfo,
     },
+
+    #[error("unknown enum type '{name}' used in constructor expression at {range}")]
+    UnknownConstructorType {
+        name: String,
+        range: Range,
+        source_module: ModuleInfo,
+    },
+
+    #[error("unknown variant '{variant}' on enum type '{type_name}' at {range}")]
+    UnknownVariant {
+        type_name: String,
+        variant: String,
+        range: Range,
+        source_module: ModuleInfo,
+    },
 }
 
 impl QualifyError {
@@ -70,6 +85,8 @@ impl QualifyError {
             QualifyError::FunctionQualFailedFunctionNotFound { module, .. } => module,
             QualifyError::DuplicateMain { first_module, .. } => first_module,
             QualifyError::UniquifyError { module, .. } => module,
+            QualifyError::UnknownConstructorType { source_module, .. } => source_module,
+            QualifyError::UnknownVariant { source_module, .. } => source_module,
         }
     }
 }

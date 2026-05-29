@@ -3,14 +3,24 @@ WHITESPACE = _{ " " | "\t" | "\n" | "\r" }
 COMMENT    = _{ ("/*" ~ (!"*/" ~ ANY)* ~ "*/") | ("//" ~ (!"\n" ~ ANY)*) }
 
 // primitive tokens
+
+// Qualified type: `mod::TypeName`
+qualified_type = { identifier ~ "::" ~ identifier }
+
+// Ad-hoc tag union type: `#ok | #err` — structural, anonymous
+tag_type = { "#" ~ identifier ~ ("|" ~ "#" ~ identifier)* }
+
 type_ = {
     "Int"
   | "Bool"
   | "Unit" // equivalent to rust (), python None, (sort of) java null
+  | qualified_type  // cross-module enum type: mod::TypeName
+  | tag_type        // ad-hoc tag union: #ok | #err
+  | identifier      // named enum type
 }
 
 // keywords (prevent them from being identifiers)
-KEYWORD = { "if" | "then" | "else" | "let" | "def" | "true" | "false" | "Unit" | "Int" | "Bool" | "while" | "do" | "module" | "mut" }
+KEYWORD = { "if" | "then" | "else" | "let" | "def" | "true" | "false" | "Unit" | "Int" | "Bool" | "while" | "do" | "module" | "mut" | "type" }
 
 identifier       = @{ !(KEYWORD ~ !(ASCII_ALPHANUMERIC | "_")) ~ "_"* ~ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
 empty_identifier = @{ "_" }
@@ -31,13 +41,21 @@ pow      = { "^" }
 negate   = { "!" }
 and      = { "&" }
 or       = { "|" }
-xor      = { "⊕" | "#" }
+xor      = { "⊕" | "¡" | "#" }
 gt       = { ">" }
 lt       = { "<" }
 ne       = { "≠" | "!=" }
 eq       = { "==" }
 ge       = { ">=" | "≥" }
 le       = { "<=" | "≤" }
+
+// enum type declarations
+type_alias = { "type" ~ identifier ~ "=" ~ identifier ~ ("|" ~ identifier)* ~ ";"? }
+
+// enum constructors: Light#Red (local), mod::Light#Red (cross-module), or #Red (bare tag, needs check mode)
+external_constructor_expr = { identifier ~ "::" ~ identifier ~ "#" ~ identifier }
+constructor_expr          = { identifier ~ "#" ~ identifier }
+tag_expr                  = { "#" ~ identifier }
 
 // language is built around expressions,
 ifstatement = {
@@ -58,6 +76,9 @@ primary = {
   | whileloop
   | function_call
   | external_function_call
+  | external_constructor_expr
+  | constructor_expr
+  | tag_expr
   | number
   | boolean
   | identifier
@@ -99,4 +120,4 @@ function = { "def" ~ identifier ~ "(" ~ parameters? ~ ")" ~ ":" ~ type_ ~ ":=" ~
 
 module = { "module" ~ identifier ~ ";"? }
 
-program = { SOI ~ (function | module)* ~ EOI }
+program = { SOI ~ (function | type_alias | module)* ~ EOI }
