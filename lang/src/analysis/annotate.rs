@@ -59,6 +59,12 @@ pub fn collect_dependencies(expr: &Expression, dependencies: &mut HashSet<UniqVa
         | Expression::Bool(_)
         | Expression::Unit
         | Expression::Constructor { .. } => {}
+        Expression::Match { scrutinee, arms } => {
+            collect_dependencies(&scrutinee.expr, dependencies);
+            for arm in arms {
+                collect_dependencies(&arm.body.expr, dependencies);
+            }
+        }
     }
 }
 
@@ -102,6 +108,11 @@ fn collect_mutations(expr: &Expression, mutations: &mut HashSet<UniqVar>) {
         }
         Expression::While { body, .. } => {
             collect_mutations(&body.expr, mutations);
+        }
+        Expression::Match { arms, .. } => {
+            for arm in arms {
+                collect_mutations(&arm.body.expr, mutations);
+            }
         }
         _ => {}
     }

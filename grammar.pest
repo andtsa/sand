@@ -20,7 +20,7 @@ type_ = {
 }
 
 // keywords (prevent them from being identifiers)
-KEYWORD = { "if" | "then" | "else" | "let" | "def" | "true" | "false" | "Unit" | "Int" | "Bool" | "while" | "do" | "module" | "mut" | "type" }
+KEYWORD = { "if" | "then" | "else" | "let" | "def" | "true" | "false" | "Unit" | "Int" | "Bool" | "while" | "do" | "module" | "mut" | "type" | "match" }
 
 identifier       = @{ !(KEYWORD ~ !(ASCII_ALPHANUMERIC | "_")) ~ "_"* ~ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
 empty_identifier = @{ "_" }
@@ -41,7 +41,7 @@ pow      = { "^" }
 negate   = { "!" }
 and      = { "&" }
 or       = { "|" }
-xor      = { "⊕" | "¡" | "#" }
+xor      = { "⊕" | "¡" }
 gt       = { ">" }
 lt       = { "<" }
 ne       = { "≠" | "!=" }
@@ -56,6 +56,14 @@ type_alias = { "type" ~ identifier ~ "=" ~ identifier ~ ("|" ~ identifier)* ~ ";
 external_constructor_expr = { identifier ~ "::" ~ identifier ~ "#" ~ identifier }
 constructor_expr          = { identifier ~ "#" ~ identifier }
 tag_expr                  = { "#" ~ identifier }
+
+// pattern matching
+wildcard_pattern    = { "_" }
+tag_pattern         = { "#" ~ identifier }
+constructor_pattern = { identifier ~ "#" ~ identifier }
+pattern             = { constructor_pattern | tag_pattern | wildcard_pattern }
+match_arm           = { pattern ~ "=>" ~ expression ~ ","? }
+match_expr          = { "match" ~ expression ~ "{" ~ match_arm+ ~ "}" }
 
 // language is built around expressions,
 ifstatement = {
@@ -74,6 +82,7 @@ primary = {
     ("(" ~ expression ~ ")")
   | ifstatement
   | whileloop
+  | match_expr
   | function_call
   | external_function_call
   | external_constructor_expr

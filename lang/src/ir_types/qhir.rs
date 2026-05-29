@@ -102,16 +102,41 @@ pub enum Expression {
         statements: Vec<Statement>,
         expr: Option<Box<Expr>>,
     },
-    /// Fully-resolved enum constructor: type and variant index are known.
     Constructor {
         enum_ref: EnumRef,
         variant_idx: usize,
     },
-    /// Bare tag `#Red` — still carries the string name; resolved by the type
-    /// checker.
     Tag {
         variant: String,
     },
+    Match {
+        scrutinee: Box<Expr>,
+        arms: Vec<QMatchArm>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct QMatchArm {
+    pub pattern: QPattern,
+    pub body: Expr,
+    pub range: Range,
+}
+
+/// a pattern after the qualify pass.
+/// constructor patterns are fully resolved to (EnumRef, variant_idx),
+/// tag patterns keep their string name for resolution by the type checker,
+/// wildcards are left as-is.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum QPattern {
+    /// fully resolved enum variant: `T::A` -> (EnumRef, 0)
+    Variant {
+        enum_ref: EnumRef,
+        variant_idx: usize,
+    },
+    /// Bare tag `#tag`, resolved by the type checker
+    Tag { variant: String },
+    /// Wildcard `_`
+    Wildcard,
 }
 
 impl Eq for Statement {}

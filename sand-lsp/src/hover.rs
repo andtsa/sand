@@ -85,6 +85,8 @@ fn find_in_expr(expr: &Expr, pos: Pos) -> Option<&Expr> {
         | Expression::Bool(_)
         | Expression::Unit
         | Expression::Constructor { .. } => None,
+        Expression::Match { scrutinee, arms } => find_in_expr(scrutinee, pos)
+            .or_else(|| arms.iter().find_map(|arm| find_in_expr(&arm.body, pos))),
     };
     child.or(Some(expr))
 }

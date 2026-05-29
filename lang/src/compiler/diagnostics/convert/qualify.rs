@@ -223,6 +223,23 @@ pub fn qualify_error_to_diagnostics(
                 },
             );
         }
+        QualifyError::UnknownPatternType {
+            name,
+            range,
+            source_module,
+        } => {
+            let file = ctx.file_of_module(source_module.index);
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    message: format!("unknown enum type '{name}' used in match pattern"),
+                    range: *range,
+                    file: Some(file),
+                    ..Default::default()
+                },
+            );
+        }
     }
     diagnostics
 }

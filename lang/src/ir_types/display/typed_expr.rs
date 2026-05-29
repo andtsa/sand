@@ -220,6 +220,32 @@ impl<'fmt, 'run> Iterator for TypedExprFormatter<'fmt, 'run> {
                     } => {
                         return Some((self.ctx.enum_display(*enum_ref, *variant_idx), Nothing));
                     }
+
+                    Match { scrutinee, arms } => {
+                        // emission order: match scrutinee { arm1 arm2 ... }
+                        self.stack.push(Token("}".into(), Nothing));
+                        self.stack.push(Sep(Newline(Decrease)));
+                        // push arms in reverse order
+                        for arm in arms.iter().rev() {
+                            let pattern_str = match &arm.pattern {
+                                crate::ir_types::typed_hir::MatchPattern::Variant {
+                                    enum_ref,
+                                    variant_idx,
+                                } => self.ctx.enum_display(*enum_ref, *variant_idx),
+                                crate::ir_types::typed_hir::MatchPattern::Wildcard => {
+                                    "_".to_string()
+                                }
+                            };
+                            self.stack.push(Token(",".into(), Newline(Same)));
+                            self.stack.push(Exp(&arm.body));
+                            self.stack.push(Token("=>".into(), Whitespace));
+                            self.stack.push(Sep(Whitespace));
+                            self.stack.push(Token(pattern_str, Nothing));
+                        }
+                        self.stack.push(Exp(scrutinee));
+                        self.stack.push(Sep(Whitespace));
+                        return Some(("match".into(), Whitespace));
+                    }
                 },
             }
         }

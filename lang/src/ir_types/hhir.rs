@@ -106,21 +106,36 @@ pub enum Expression {
         statements: Vec<Statement>,
         expr: Option<Box<Expr>>,
     },
-    /// Fully-qualified enum constructor: `Light#Red`
     Constructor {
         type_name: String,
         variant: String,
     },
-    /// Cross-module qualified enum constructor: `mod::Light#Red`
     ExternalConstructor {
         mod_name: String,
         type_name: String,
         variant: String,
     },
-    /// Bare tag: `#Red` — type unknown until check mode resolves it
     Tag {
         variant: String,
     },
+    Match {
+        scrutinee: Box<Expr>,
+        arms: Vec<HirMatchArm>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct HirMatchArm {
+    pub pattern: HirPattern,
+    pub body: Expr,
+    pub range: Range,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum HirPattern {
+    Constructor { type_name: String, variant: String },
+    Tag { variant: String },
+    Wildcard,
 }
 
 impl HirVar {

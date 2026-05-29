@@ -96,12 +96,33 @@ pub enum Expression {
         statements: Vec<Statement>,
         expr: Option<Box<Expr>>,
     },
-    /// Fully-resolved enum constructor; all tags are resolved to this by the
-    /// type checker.
     Constructor {
         enum_ref: EnumRef,
         variant_idx: usize,
     },
+    Match {
+        scrutinee: Box<Expr>,
+        arms: Vec<TypedMatchArm>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TypedMatchArm {
+    pub pattern: MatchPattern,
+    pub body: Expr,
+    pub range: Range,
+}
+
+/// a pattern in a typed match expression.
+/// all constructor and tag patterns have been resolved to (EnumRef,
+/// variant_idx). wildcards are left as-is.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum MatchPattern {
+    Variant {
+        enum_ref: EnumRef,
+        variant_idx: usize,
+    },
+    Wildcard,
 }
 
 // --- trait implementations ---

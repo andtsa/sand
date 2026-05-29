@@ -46,4 +46,26 @@ pub enum AstTypeError {
         enum_name: String,
         range: Range,
     },
+    #[error("match scrutinee has type {ty:?} but match requires an enum type at {range}")]
+    MatchNonEnumScrutinee { ty: Ty, range: Range },
+    #[error(
+        "match on enum '{enum_name}' is not exhaustive at {range}; uncovered variants: {uncovered:?}"
+    )]
+    NonExhaustiveMatch {
+        enum_name: String,
+        uncovered: Vec<String>,
+        range: Range,
+    },
+    #[error("duplicate match pattern '{pattern}' at {range}")]
+    DuplicateMatchPattern { pattern: String, range: Range },
+    #[error("unreachable match arm at {range} (appears after a wildcard or exhaustive pattern)")]
+    UnreachableMatchArm { range: Range },
+    #[error(
+        "match arm pattern is for enum '{found_enum}' but scrutinee has type '{expected_enum}' at {range}"
+    )]
+    MatchWrongEnumType {
+        expected_enum: String,
+        found_enum: String,
+        range: Range,
+    },
 }

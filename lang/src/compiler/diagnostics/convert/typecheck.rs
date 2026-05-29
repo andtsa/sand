@@ -183,6 +183,88 @@ pub fn type_error_to_diagnostic(
                 },
             );
         }
+        MatchNonEnumScrutinee { ty, range } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    message: format!(
+                        "match scrutinee has type {ty:?} — match requires an enum type"
+                    ),
+                    range: *range,
+                    related: vec![],
+                    file: Some(file),
+                    ..Default::default()
+                },
+            );
+        }
+        NonExhaustiveMatch {
+            enum_name,
+            uncovered,
+            range,
+        } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    message: format!(
+                        "match on '{enum_name}' is not exhaustive; missing variants: {}",
+                        uncovered.join(", ")
+                    ),
+                    range: *range,
+                    related: vec![],
+                    file: Some(file),
+                    ..Default::default()
+                },
+            );
+        }
+        DuplicateMatchPattern { pattern, range } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    message: format!("duplicate match pattern '{pattern}'"),
+                    range: *range,
+                    related: vec![],
+                    file: Some(file),
+                    ..Default::default()
+                },
+            );
+        }
+        UnreachableMatchArm { range } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    message:
+                        "unreachable match arm (appears after a wildcard or exhaustive pattern)"
+                            .into(),
+                    range: *range,
+                    related: vec![],
+                    file: Some(file),
+                    ..Default::default()
+                },
+            );
+        }
+        MatchWrongEnumType {
+            expected_enum,
+            found_enum,
+            range,
+        } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    message: format!(
+                        "match arm pattern is for enum '{found_enum}' but scrutinee has type '{expected_enum}'"
+                    ),
+                    range: *range,
+                    related: vec![],
+                    file: Some(file),
+                    ..Default::default()
+                },
+            );
+        }
     }
     diagnostics
 }

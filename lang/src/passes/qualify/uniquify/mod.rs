@@ -284,6 +284,21 @@ fn uniquify_expr(e: &Expr, u: &mut UniqCtx) -> Result<Expr, UniquifyError> {
             variant: variant.clone(),
         },
 
+        Expression::Match { scrutinee, arms } => {
+            let scrutinee = Box::new(uniquify_expr(scrutinee, u)?);
+            let arms = arms
+                .iter()
+                .map(|arm| {
+                    Ok(HirMatchArm {
+                        pattern: arm.pattern.clone(),
+                        body: uniquify_expr(&arm.body, u)?,
+                        range: arm.range,
+                    })
+                })
+                .collect::<Result<Vec<_>, UniquifyError>>()?;
+            Expression::Match { scrutinee, arms }
+        }
+
         Expression::Block { statements, expr } => {
             u.enter_scope();
 

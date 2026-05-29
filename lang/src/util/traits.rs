@@ -75,6 +75,22 @@ impl fmt::Display for Expression {
             Expression::Tag { variant } => {
                 write!(f, "#{variant}")
             }
+            Expression::Match { scrutinee, arms } => {
+                write!(f, "match {} {{ ", scrutinee.expr)?;
+                for arm in arms {
+                    match &arm.pattern {
+                        crate::ir_types::hhir::HirPattern::Constructor { type_name, variant } => {
+                            write!(f, "{type_name}::{variant}")?
+                        }
+                        crate::ir_types::hhir::HirPattern::Tag { variant } => {
+                            write!(f, "#{variant}")?;
+                        }
+                        crate::ir_types::hhir::HirPattern::Wildcard => write!(f, "_")?,
+                    }
+                    write!(f, " => {}, ", arm.body.expr)?;
+                }
+                write!(f, "}}")
+            }
         }
     }
 }

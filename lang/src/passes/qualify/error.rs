@@ -73,6 +73,13 @@ pub enum QualifyError {
         range: Range,
         source_module: ModuleInfo,
     },
+
+    #[error("unknown enum type '{name}' used in match pattern at {range}")]
+    UnknownPatternType {
+        name: String,
+        range: Range,
+        source_module: ModuleInfo,
+    },
 }
 
 impl QualifyError {
@@ -87,6 +94,7 @@ impl QualifyError {
             QualifyError::UniquifyError { module, .. } => module,
             QualifyError::UnknownConstructorType { source_module, .. } => source_module,
             QualifyError::UnknownVariant { source_module, .. } => source_module,
+            QualifyError::UnknownPatternType { source_module, .. } => source_module,
         }
     }
 }

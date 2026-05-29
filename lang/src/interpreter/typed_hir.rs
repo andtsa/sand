@@ -111,6 +111,30 @@ impl TypedProgram {
                 enum_ref: *enum_ref,
                 variant_idx: *variant_idx,
             }),
+
+            Expression::Match { scrutinee, arms } => {
+                let scrut_val = self.eval_expr(&scrutinee.expr, env)?;
+                for arm in arms {
+                    let matches = match &arm.pattern {
+                        crate::ir_types::typed_hir::MatchPattern::Wildcard => true,
+                        crate::ir_types::typed_hir::MatchPattern::Variant {
+                            enum_ref,
+                            variant_idx,
+                        } => {
+                            scrut_val
+                                == Expression::Constructor {
+                                    enum_ref: *enum_ref,
+                                    variant_idx: *variant_idx,
+                                }
+                        }
+                    };
+                    if matches {
+                        return self.eval_expr(&arm.body.expr, env);
+                    }
+                }
+                // Exhaustiveness is guaranteed by the type checker
+                unreachable!("non-exhaustive match reached at runtime")
+            }
         }
     }
 }

@@ -944,6 +944,7 @@ fn build_primary<'run>(
                 range: inner_range,
             })
         }
+        Rule::match_expr => build_match(ctx, inner, src),
         Rule::number => {
             let s = inner.as_str().to_string();
             let v = s.parse::<i64>().map_err(|e| AstError::InvalidInteger {
@@ -1033,6 +1034,83 @@ fn build_while<'run>(
         },
         range,
     })
+}
+
+fn build_match<'run>(
+    ctx: &mut CompileCtx<'run>,
+    pair: Pair<Rule>,
+    src: &str,
+) -> Result<Expr, AstError> {
+    assert_eq!(pair.as_rule(), Rule::match_expr);
+    let range = Range::from(&pair);
+
+    let mut inner = pair.into_inner();
+    let scrutinee_pair = inner.next().missing("match scrutinee", range)?;
+    let scrutinee = build_expr(ctx, scrutinee_pair, src)?;
+
+    let mut arms = Vec::new();
+    for arm_pair in inner {
+        assert_eq!(arm_pair.as_rule(), Rule::match_arm);
+        let arm_range = Range::from(&arm_pair);
+        let mut arm_inner = arm_pair.into_inner();
+        let pattern_pair = arm_inner.next().missing("match arm pattern", arm_range)?;
+        let body_pair = arm_inner.next().missing("match arm body", arm_range)?;
+
+        let pattern = build_pattern(pattern_pair)?;
+        let body = build_expr(ctx, body_pair, src)?;
+        arms.push(HirMatchArm {
+            pattern,
+            body,
+            range: arm_range,
+        });
+    }
+
+    Ok(Expr {
+        expr: Expression::Match {
+            scrutinee: Box::new(scrutinee),
+            arms,
+        },
+        range,
+    })
+}
+
+fn build_pattern(pair: Pair<Rule>) -> Result<HirPattern, AstError> {
+    assert_eq!(pair.as_rule(), Rule::pattern);
+    let range = Range::from(&pair);
+    let inner = pair.into_inner().next().missing("pattern body", range)?;
+    match inner.as_rule() {
+        Rule::constructor_pattern => {
+            // constructor_pattern = { identifier ~ "#" ~ identifier }
+            let mut parts = inner.into_inner();
+            let type_name = parts
+                .next()
+                .missing("constructor type name", range)?
+                .as_str()
+                .to_string();
+            let variant = parts
+                .next()
+                .missing("constructor variant name", range)?
+                .as_str()
+                .to_string();
+            Ok(HirPattern::Constructor { type_name, variant })
+        }
+        Rule::tag_pattern => {
+            // tag_pattern = { "#" ~ identifier }
+            let variant = inner
+                .into_inner()
+                .next()
+                .missing("tag pattern variant", range)?
+                .as_str()
+                .to_string();
+            Ok(HirPattern::Tag { variant })
+        }
+        Rule::wildcard_pattern => Ok(HirPattern::Wildcard),
+        other => Err(AstError::UnexpectedRule {
+            expected: "constructor_pattern | tag_pattern | wildcard_pattern",
+            got: other,
+            range,
+        }),
+    }
 }
 
 fn build_call<'run>(

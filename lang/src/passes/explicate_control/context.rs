@@ -8,6 +8,7 @@ use crate::internal_bug;
 use crate::ir_types::mir::*;
 use crate::ir_types::typed_hir as th;
 use crate::lang::ops::Bop;
+use crate::lang::ops::CompOp;
 use crate::lang::ops::Uop;
 use crate::lang::types::Ty;
 
@@ -369,6 +370,60 @@ impl FnCx {
                     .zip(arg_temps)
                     .rev()
                     .fold(final_bb, |k, (arg, tmp)| self.lower_assign(arg, tmp, k))
+            }
+
+            th::Expression::Match { scrutinee, arms } => {
+                // evaluate scrutinee into a fresh temp.
+                let scrut_tmp = self.fresh_temp("match_scrutinee", scrutinee.ty, scrutinee.range);
+
+                // lower each arm body (all continue to `cont` after assigning `dst`).
+                let arm_bbs: Vec<BlockId> = arms
+                    .iter()
+                    .map(|arm| self.lower_assign(&arm.body, dst, cont))
+                    .collect();
+
+                // build the dispatch chain backwards.
+                // after the last comparison falls through -> unreachable (requiring exhaustive
+                // match)
+                let mut fallthrough_bb = self.new_block(vec![], Terminator::Unreachable);
+
+                for (arm, arm_bb) in arms.iter().zip(arm_bbs.iter()).rev() {
+                    match &arm.pattern {
+                        th::MatchPattern::Wildcard => {
+                            // wildcard: unconditional fall-through to this arm
+                            fallthrough_bb = *arm_bb;
+                        }
+                        th::MatchPattern::Variant {
+                            enum_ref,
+                            variant_idx,
+                        } => {
+                            let cmp_tmp = self.fresh_temp("match_cmp", Ty::Bool, arm.range);
+                            let check_bb = self.new_block(
+                                vec![self.assign_stmt(
+                                    cmp_tmp,
+                                    RValue::BinaryOp {
+                                        op: Bop::Comp(CompOp::Eq),
+                                        left: Operand::Copy(Self::place(scrut_tmp)),
+                                        right: Operand::Const(Constant::EnumVariant {
+                                            enum_ref: *enum_ref,
+                                            variant_idx: *variant_idx,
+                                        }),
+                                    },
+                                    arm.range,
+                                )],
+                                Terminator::Branch {
+                                    cond: Operand::Copy(Self::place(cmp_tmp)),
+                                    then_bb: *arm_bb,
+                                    else_bb: fallthrough_bb,
+                                },
+                            );
+                            fallthrough_bb = check_bb;
+                        }
+                    }
+                }
+
+                // lower the scrutinee, then jump into the dispatch chain
+                self.lower_assign(scrutinee, scrut_tmp, fallthrough_bb)
             }
         }
     }

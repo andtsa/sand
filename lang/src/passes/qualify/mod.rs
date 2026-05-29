@@ -288,6 +288,25 @@ fn qualify_expr(
             }
         }
         hhir::Expression::Tag { variant } => qhir::Expression::Tag { variant },
+        hhir::Expression::Match { scrutinee, arms } => {
+            let q_scrutinee = qualify_expr(q, module_name, *scrutinee)?;
+            let q_arms = arms
+                .into_iter()
+                .map(|arm| {
+                    let q_pattern = qualify_pattern(q, module_name, arm.pattern, arm.range)?;
+                    let q_body = qualify_expr(q, module_name, arm.body)?;
+                    Ok(qhir::QMatchArm {
+                        pattern: q_pattern,
+                        body: q_body,
+                        range: arm.range,
+                    })
+                })
+                .collect::<Result<Vec<_>, QualifyError>>()?;
+            qhir::Expression::Match {
+                scrutinee: Box::new(q_scrutinee),
+                arms: q_arms,
+            }
+        }
         hhir::Expression::Call { fn_name, args } => {
             let qargs = args
                 .into_iter()
@@ -327,6 +346,40 @@ fn qualify_expr(
         expr: expression,
         range: expr.range,
     })
+}
+
+fn qualify_pattern(
+    q: &mut QualfiyCtx<'_, '_>,
+    module_name: &ModuleRef,
+    pattern: hhir::HirPattern,
+    range: Range,
+) -> Result<qhir::QPattern, QualifyError> {
+    match pattern {
+        hhir::HirPattern::Constructor { type_name, variant } => {
+            let er = q
+                .compile_ctx
+                .lookup_enum_by_name(&type_name)
+                .ok_or_else(|| QualifyError::UnknownPatternType {
+                    name: type_name.clone(),
+                    range,
+                    source_module: q.compile_ctx.module_info(module_name),
+                })?;
+            let variant_idx = q.compile_ctx.lookup_variant(er, &variant).ok_or_else(|| {
+                QualifyError::UnknownVariant {
+                    type_name: type_name.clone(),
+                    variant: variant.clone(),
+                    range,
+                    source_module: q.compile_ctx.module_info(module_name),
+                }
+            })?;
+            Ok(qhir::QPattern::Variant {
+                enum_ref: er,
+                variant_idx,
+            })
+        }
+        hhir::HirPattern::Tag { variant } => Ok(qhir::QPattern::Tag { variant }),
+        hhir::HirPattern::Wildcard => Ok(qhir::QPattern::Wildcard),
+    }
 }
 
 fn qualify_statement(

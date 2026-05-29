@@ -188,9 +188,9 @@ fn agree_multiple_function_calls() {
 
 #[test]
 fn xor_operator_agrees() {
-    assert_hir_mir_agree("def main(): Bool := true # false");
-    assert_hir_mir_agree("def main(): Bool := true # true");
-    assert_hir_mir_agree("def main(): Bool := false # false");
+    assert_hir_mir_agree("def main(): Bool := true ¡ false");
+    assert_hir_mir_agree("def main(): Bool := true ¡ true");
+    assert_hir_mir_agree("def main(): Bool := false ¡ false");
 }
 
 #[test]

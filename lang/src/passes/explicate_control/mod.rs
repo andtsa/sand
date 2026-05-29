@@ -123,5 +123,11 @@ fn collect_locals(cx: &mut FnCx, expr: &th::Expr) {
         | th::Expression::Bool(_)
         | th::Expression::Unit
         | th::Expression::Constructor { .. } => {}
+        th::Expression::Match { scrutinee, arms } => {
+            collect_locals(cx, scrutinee);
+            for arm in arms {
+                collect_locals(cx, &arm.body);
+            }
+        }
     }
 }
