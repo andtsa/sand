@@ -186,6 +186,7 @@ fn qualify_parameter(_q: &mut QualfiyCtx<'_, '_>, param: hhir::Parameter) -> qhi
         name: u,
         range: param.range,
         ty: param.ty,
+        is_mutable: param.is_mutable,
     }
 }
 

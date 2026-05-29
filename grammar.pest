@@ -92,7 +92,7 @@ statement = {
 }
 
 // functions are highest-order tokens
-parameter  = { (identifier | empty_identifier) ~ ":" ~ type_ }
+parameter  = { mut_kw? ~ (identifier | empty_identifier) ~ ":" ~ type_ }
 parameters = { parameter ~ ("," ~ parameter)* ~ ","? }
 
 function = { "def" ~ identifier ~ "(" ~ parameters? ~ ")" ~ ":" ~ type_ ~ ":=" ~ expression }

@@ -27,6 +27,7 @@ pub struct Parameter {
     pub name: UniqVar,
     pub ty: Ty,
     pub range: Range,
+    pub is_mutable: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]

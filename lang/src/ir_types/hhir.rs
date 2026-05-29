@@ -36,6 +36,7 @@ pub struct Parameter {
     pub name: HirVar,
     pub ty: Ty,
     pub range: Range,
+    pub is_mutable: bool,
 }
 
 #[derive(Debug, Clone)]

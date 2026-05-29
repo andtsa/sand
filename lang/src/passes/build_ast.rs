@@ -298,7 +298,12 @@ fn build_parameter<'run>(
     // capture span before into_inner
     let range = Range::from(&pair);
     let mut inner = pair.into_inner();
-    let name = inner.next().missing("parameter name", range)?; // identifier
+    let first = inner.next().missing("parameter name", range)?;
+    let (is_mutable, name) = if first.as_rule() == Rule::mut_kw {
+        (true, inner.next().missing("parameter name", range)?)
+    } else {
+        (false, first)
+    };
     let ty_pair = inner.next().missing("parameter type", range)?;
     tracing::trace!("parameter : {} : {}", name.as_str(), ty_pair.as_str());
     let ty = build_type(ctx, ty_pair)?;
@@ -307,6 +312,7 @@ fn build_parameter<'run>(
         name: var,
         ty,
         range,
+        is_mutable,
     })
 }
 

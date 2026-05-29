@@ -40,7 +40,7 @@ fn infer_function(
     let env: TypeEnv = func
         .parameters
         .iter()
-        .map(|p| (p.name, (p.ty, false)))
+        .map(|p| (p.name, (p.ty, p.is_mutable)))
         .collect();
 
     let body = infer(ctx, &env, &func.body).map_err(|e| TypeError {

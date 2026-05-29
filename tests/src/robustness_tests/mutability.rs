@@ -102,3 +102,65 @@ fn assignment_to_inferred_mutable_let_succeeds() {
         MirValue::Int(20)
     );
 }
+
+// ── mutable parameters
+// ────────────────────────────────────────────────────────
+
+/// A `mut` parameter can be reassigned inside the function body.
+#[test]
+fn mutable_parameter_can_be_reassigned() {
+    assert_eq!(
+        run_mir(
+            "def f(mut x: Int): Int := { x = 99; x }
+             def main(): Int := f(1)"
+        ),
+        MirValue::Int(99)
+    );
+}
+
+/// A plain (immutable) parameter cannot be reassigned — type error.
+#[test]
+fn immutable_parameter_assignment_is_type_error() {
+    typecheck_fails(
+        "def f(x: Int): Int := { x = 99; x }
+         def main(): Int := f(1)",
+    );
+}
+
+/// Reassigning a `mut` parameter does not affect the caller's value.
+#[test]
+fn mutable_parameter_mutation_is_local() {
+    assert_eq!(
+        run_mir(
+            "def bump(mut n: Int): Int := { n = n + 1; n }
+             def main(): Int := {
+                 let a: Int = 5;
+                 let b: Int = bump(a);
+                 a + b
+             }"
+        ),
+        // a stays 5; b = 6; result = 11
+        MirValue::Int(11)
+    );
+}
+
+/// A `mut` parameter works alongside immutable ones in the same signature.
+#[test]
+fn mixed_mut_and_immutable_parameters() {
+    assert_eq!(
+        run_mir(
+            "def f(x: Int, mut y: Int): Int := { y = y + x; y }
+             def main(): Int := f(3, 10)"
+        ),
+        MirValue::Int(13)
+    );
+}
+
+/// Assigning to the immutable parameter in a mixed signature still fails.
+#[test]
+fn assignment_to_immutable_in_mixed_signature_is_type_error() {
+    typecheck_fails(
+        "def f(x: Int, mut y: Int): Int := { x = 0; y }
+         def main(): Int := f(1, 2)",
+    );
+}

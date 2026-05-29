@@ -193,6 +193,7 @@ fn uniquify_function(f: &Function, u: &mut UniqCtx) -> Result<Function, Uniquify
             name: HirVar::Uniq(new_name),
             ty: p.ty,
             range: p.range,
+            is_mutable: p.is_mutable,
         });
     }
     let body = uniquify_expr(&f.body, u)?; // Enter a new context and recursively uniquify its expressions
