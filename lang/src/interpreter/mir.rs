@@ -31,6 +31,8 @@ pub enum MirInterpError {
     DivisionByZero,
     #[error("reached unreachable terminator")]
     Unreachable,
+    #[error("runtime error: {0}")]
+    Runtime(String),
 }
 
 impl MirProgram {
@@ -193,6 +195,9 @@ fn eval_binop(op: Bop, l: MirValue, r: MirValue) -> Result<MirValue, MirInterpEr
             }
         }
         (Bop::Pow, MirValue::Int(a), MirValue::Int(b)) => Ok(MirValue::Int(a.pow(b as u32))),
+        (Bop::And, MirValue::Int(a), MirValue::Int(b)) => Ok(MirValue::Int(a & b)),
+        (Bop::Or, MirValue::Int(a), MirValue::Int(b)) => Ok(MirValue::Int(a | b)),
+        (Bop::Xor, MirValue::Int(a), MirValue::Int(b)) => Ok(MirValue::Int(a ^ b)),
         (Bop::And, MirValue::Bool(a), MirValue::Bool(b)) => Ok(MirValue::Bool(a && b)),
         (Bop::Or, MirValue::Bool(a), MirValue::Bool(b)) => Ok(MirValue::Bool(a || b)),
         (Bop::Xor, MirValue::Bool(a), MirValue::Bool(b)) => Ok(MirValue::Bool(a ^ b)),
@@ -236,6 +241,7 @@ fn eval_unop(op: Uop, v: MirValue) -> Result<MirValue, MirInterpError> {
     match (op, v) {
         (Uop::Neg, MirValue::Int(i)) => Ok(MirValue::Int(-i)),
         (Uop::Not, MirValue::Bool(b)) => Ok(MirValue::Bool(!b)),
+        (Uop::Not, MirValue::Int(i)) => Ok(MirValue::Int(!i)),
         (op, v) => internal_bug!("type error in MIR unop: {:?} {:?}", op, v),
     }
 }
@@ -258,6 +264,51 @@ fn eval_intrinsic(
                 print!("{} ", fmt_value(arg, ctx));
             }
             Ok(MirValue::Unit)
+        }
+        Intrinsic::Abs => {
+            debug_assert_eq!(args.len(), 1, "Abs expects 1 arg");
+            match args[0] {
+                MirValue::Int(n) => Ok(MirValue::Int(n.abs())),
+                ref v => Err(MirInterpError::Runtime(format!(
+                    "__abs: expected Int, got {:?}",
+                    v
+                ))),
+            }
+        }
+        Intrinsic::Min => {
+            debug_assert_eq!(args.len(), 2, "Min expects 2 args");
+            match (&args[0], &args[1]) {
+                (MirValue::Int(a), MirValue::Int(b)) => Ok(MirValue::Int(*a.min(b))),
+                _ => Err(MirInterpError::Runtime("__min: expected (Int, Int)".into())),
+            }
+        }
+        Intrinsic::Max => {
+            debug_assert_eq!(args.len(), 2, "Max expects 2 args");
+            match (&args[0], &args[1]) {
+                (MirValue::Int(a), MirValue::Int(b)) => Ok(MirValue::Int(*a.max(b))),
+                _ => Err(MirInterpError::Runtime("__max: expected (Int, Int)".into())),
+            }
+        }
+        Intrinsic::ReadInt => {
+            let mut line = String::new();
+            std::io::stdin()
+                .read_line(&mut line)
+                .map_err(|e| MirInterpError::Runtime(format!("__read_int: io error: {e}")))?;
+            let n = line
+                .trim()
+                .parse::<i64>()
+                .map_err(|e| MirInterpError::Runtime(format!("__read_int: parse error: {e}")))?;
+            Ok(MirValue::Int(n))
+        }
+        Intrinsic::Exit => {
+            debug_assert_eq!(args.len(), 1, "Exit expects 1 arg");
+            match args[0] {
+                MirValue::Int(code) => std::process::exit(code as i32),
+                ref v => Err(MirInterpError::Runtime(format!(
+                    "__exit: expected Int, got {:?}",
+                    v
+                ))),
+            }
         }
     }
 }
