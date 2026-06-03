@@ -26,6 +26,7 @@ use crate::compiler::structure::VarName;
 use crate::internal_bug;
 use crate::ir_types::hhir::HirVar;
 use crate::lang::types::EnumRef;
+use crate::lang::types::Ty;
 use crate::passes::parse::Rule;
 
 /// this should not be used and is on purpose mistyped to be easily detectable.
@@ -258,6 +259,12 @@ impl<'run> CompileCtx<'run> {
         &self.enum_defs[er.0]
     }
 
+    /// returns a [`Display`]-able wrapper for [`Ty`] that resolves enum names via
+    /// this context
+    pub fn display_ty(&self, ty: Ty) -> TyDisplay<'_> {
+        TyDisplay { ty, ctx: self }
+    }
+
     pub fn lookup_enum_by_name(&self, name: &str) -> Option<EnumRef> {
         self.enum_names.get(name).copied()
     }
@@ -377,6 +384,19 @@ impl<'run> CompileCtx<'run> {
         FileRef(usize::MAX)
     }
 
+    /// register (idempotently) the synthetic core library module and return its
+    /// FileRef
+    ///
+    /// uses a reserved sentinel FileRef(usize::MAX - 1) that never
+    /// conflicts with real files or with test stubs
+    pub fn ensure_core_module(&mut self) -> FileRef {
+        let core_file = FileRef(usize::MAX - 1);
+        if !self.file_defaults.contains_key(&core_file) {
+            self.create_default_module(core_file, "__core");
+        }
+        core_file
+    }
+
     pub fn get_mod_by_name(&self, name: &str) -> Option<ModuleRef> {
         self.project_modules
             .iter()
@@ -394,5 +414,23 @@ impl<'run> CompileCtx<'run> {
 
     pub fn file_of_module(&self, mr: ModuleRef) -> FileRef {
         self.project_modules[mr.0].from_file
+    }
+}
+
+/// a [`Display`]-able wrapper for [`Ty`] that resolves enum names via a
+/// [`CompileCtx`]
+///
+/// obtain via [`CompileCtx::display_ty`]
+pub struct TyDisplay<'a> {
+    ty: Ty,
+    ctx: &'a CompileCtx<'a>,
+}
+
+impl std::fmt::Display for TyDisplay<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.ty {
+            Ty::Enum(er) => write!(f, "{}", self.ctx.get_enum(er).name),
+            other => write!(f, "{}", other),
+        }
     }
 }

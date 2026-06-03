@@ -67,6 +67,19 @@ impl<'qual, 'run> QualfiyCtx<'qual, 'run> {
         }
     }
 
+    /// search all modules for a function with the given name
+    /// (used for global/unqualified lookup)
+    fn find_function_globally(&self, name: &str) -> Option<FunRef> {
+        for fn_ref_set in self.available_functions.values() {
+            for fr in fn_ref_set {
+                if name == self.compile_ctx.original_fun_name(*fr) {
+                    return Some(*fr);
+                }
+            }
+        }
+        None
+    }
+
     fn get_module_by_name(
         &self,
         name: &str,
@@ -320,9 +333,20 @@ fn qualify_expr(
                             args: qargs,
                         }
                     } else {
-                        // need to find the function we're calling
-                        let fn_ref =
-                            q.get_function_by_name(&name, module_name, expr.range, module_name)?;
+                        // try the caller's own module first, then fall back to any module
+                        // (this allows core library functions to be called without qualification)
+                        let fn_ref = q
+                            .get_function_by_name(&name, module_name, expr.range, module_name)
+                            .or_else(|_| {
+                                q.find_function_globally(&name).ok_or_else(|| {
+                                    QualifyError::FunctionQualFailedFunctionNotFound {
+                                        func: name.clone(),
+                                        range: expr.range,
+                                        module: q.compile_ctx.module_info(module_name),
+                                        source_module: q.compile_ctx.module_info(module_name),
+                                    }
+                                })
+                            })?;
                         qhir::Expression::Call {
                             fn_name: fn_ref,
                             args: qargs,

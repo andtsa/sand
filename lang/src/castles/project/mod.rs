@@ -55,9 +55,17 @@ impl Project {
         fr
     }
 
-    /// Look up source text by [`FileRef`]
+    /// look up source text by [`FileRef`]
     pub fn text_for_file(&self, fr: FileRef) -> Option<&str> {
+        // sentinel FileRefs (e.g. the core library) are not in file_contents
         self.file_contents.get(&fr).map(String::as_str)
+    }
+
+    /// returns whether this FileRef refers to a synthetic (compiler-internal)
+    /// file that has no on-disk representation, such as the core standard
+    /// library
+    pub fn is_synthetic_file(&self, fr: FileRef) -> bool {
+        !self.file_contents.contains_key(&fr)
     }
 
     /// we need a name for this module to use for function qualifying. we will
@@ -78,6 +86,10 @@ impl Project {
     }
 
     pub fn uri_of_file(&self, fr: FileRef) -> Url {
+        if self.is_synthetic_file(fr) {
+            // synthetic files (core library) have no real URI; return a placeholder
+            return Url::parse("sand:/__core__").unwrap();
+        }
         self.ctx.url_of_file(fr)
     }
 

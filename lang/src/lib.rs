@@ -48,6 +48,8 @@ pub enum SandLangErrorSource {
     TypeError(#[from] passes::type_ast::AstTypeError),
 }
 
+const CORE_SRC: &str = include_str!("core.sand");
+
 pub fn compile_hir<'run, 'proj>(
     code: Map<FileRef, &'_ str>,
     ctx: &'run mut CompileCtx<'proj>,
@@ -55,7 +57,11 @@ pub fn compile_hir<'run, 'proj>(
     let span = tracing::warn_span!("compile_hir");
     let _enter = span.enter();
 
-    let modules = code
+    let core_file = ctx.ensure_core_module();
+    let core_modules = hhir::ProgramModule::parse_source_file(ctx, CORE_SRC, core_file)
+        .map_err(|e| SandLangErrorContext::default().wrap_err(e))?;
+
+    let user_modules = code
         .into_iter()
         .map(|(file, source)| {
             let err_ctx = SandLangErrorContext {
@@ -69,6 +75,8 @@ pub fn compile_hir<'run, 'proj>(
         .into_iter()
         .flatten()
         .collect::<Vec<_>>();
+
+    let modules: Vec<_> = core_modules.into_iter().chain(user_modules).collect();
 
     tracing::trace!(
         "{} modules: {:?}",

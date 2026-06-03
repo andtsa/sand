@@ -5,7 +5,7 @@
 use crate::compiler::context::CompileCtx;
 use crate::ir_types::typed_hir::*;
 
-impl Expr {
+impl Expression {
     pub fn format<'fmt, 'run>(
         &'fmt self,
         ctx: &'fmt CompileCtx<'run>,
@@ -18,10 +18,39 @@ impl Expr {
             ctx,
         }
     }
+
+    pub fn fmt_inline(&self, ctx: &CompileCtx) -> String {
+        let mut out = String::new();
+        for (token, opt) in self.format(ctx) {
+            out.push_str(&token);
+            match opt {
+                FormatOpt::Space | FormatOpt::Whitespace | FormatOpt::Any => out.push(' '),
+                FormatOpt::Newline(_) => out.push(' '),
+                FormatOpt::Nothing => {}
+            }
+        }
+        out.trim_end().to_string()
+    }
+}
+
+impl Expr {
+    pub fn format<'fmt, 'run>(
+        &'fmt self,
+        ctx: &'fmt CompileCtx<'run>,
+    ) -> TypedExprFormatter<'fmt, 'run>
+    where
+        'run: 'fmt,
+    {
+        self.expr.format(ctx)
+    }
+
+    pub fn fmt_inline(&self, ctx: &CompileCtx) -> String {
+        self.expr.fmt_inline(ctx)
+    }
 }
 
 enum Either<'fmt> {
-    Exp(&'fmt Expr),
+    Exp(&'fmt Expression),
     Stm(&'fmt Statement),
     /// a pure spacing signal with no text; the consumer applies the
     /// [`FormatOpt`] and emits nothing for the token itself. used to inject
@@ -94,7 +123,7 @@ impl<'fmt, 'run> Iterator for TypedExprFormatter<'fmt, 'run> {
                         // emission order: let name : ty = val ;
                         // push in reverse (LIFO):
                         self.stack.push(Token(";".into(), Newline(Same)));
-                        self.stack.push(Exp(val));
+                        self.stack.push(Exp(&val.expr));
                         self.stack.push(Token("=".into(), Space));
                         self.stack.push(Token(ty.to_string(), Space));
                         self.stack.push(Token(":".into(), Space));
@@ -108,7 +137,7 @@ impl<'fmt, 'run> Iterator for TypedExprFormatter<'fmt, 'run> {
                     Stmt::Assignment { name, val, .. } => {
                         // emission order: name = val ;
                         self.stack.push(Token(";".into(), Newline(Same)));
-                        self.stack.push(Exp(val));
+                        self.stack.push(Exp(&val.expr));
                         self.stack.push(Token("=".into(), Space));
                         self.stack
                             .push(Token(self.ctx.uniq_variable_name(name), Space));
@@ -117,12 +146,12 @@ impl<'fmt, 'run> Iterator for TypedExprFormatter<'fmt, 'run> {
                     Stmt::Expr(e) => {
                         // a bare expression used as a statement still ends with ";"
                         self.stack.push(Token(";".into(), Newline(Same)));
-                        self.stack.push(Exp(e));
+                        self.stack.push(Exp(&e.expr));
                         continue;
                     }
                 },
 
-                Exp(expr) => match &expr.expr {
+                Exp(expr) => match &expr {
                     // --- terminals ---
                     Unit => return Some(("()".into(), Nothing)),
                     Bool(x) => return Some((x.to_string(), Nothing)),
@@ -132,23 +161,23 @@ impl<'fmt, 'run> Iterator for TypedExprFormatter<'fmt, 'run> {
                     // --- compound expressions ---
                     If { cond, t, f } => {
                         // emission order: if cond then t else f
-                        self.stack.push(Exp(f));
+                        self.stack.push(Exp(&f.expr));
                         self.stack.push(Token("else".into(), Whitespace));
                         self.stack.push(Sep(Whitespace)); // space after t's last token
-                        self.stack.push(Exp(t));
+                        self.stack.push(Exp(&t.expr));
                         self.stack.push(Token("then".into(), Whitespace));
                         self.stack.push(Sep(Whitespace)); // space after cond's last token
-                        self.stack.push(Exp(cond));
-                        self.stack.push(Sep(Whitespace)); // space after t's last token
+                        self.stack.push(Exp(&cond.expr));
+                        self.stack.push(Sep(Whitespace));
                         return Some(("if".into(), Whitespace));
                     }
 
                     While { cond, body } => {
                         // emission order: while cond do body
-                        self.stack.push(Exp(body));
+                        self.stack.push(Exp(&body.expr));
                         self.stack.push(Token("do".into(), Whitespace));
                         self.stack.push(Sep(Whitespace)); // space after cond's last token
-                        self.stack.push(Exp(cond));
+                        self.stack.push(Exp(&cond.expr));
                         return Some(("while".into(), Whitespace));
                     }
 
@@ -156,16 +185,16 @@ impl<'fmt, 'run> Iterator for TypedExprFormatter<'fmt, 'run> {
                         // emission order: left op right
                         // Sep(Space) injects the space before the operator that the
                         // left sub-expression's last token can't know to add itself.
-                        self.stack.push(Exp(right));
+                        self.stack.push(Exp(&right.expr));
                         self.stack.push(Token(op.to_string(), Space));
                         self.stack.push(Sep(Space)); // space before op
-                        self.stack.push(Exp(left));
+                        self.stack.push(Exp(&left.expr));
                         continue;
                     }
 
                     UnOp { op, right } => {
                         // emission order: op right  (no space, e.g. "!x", "-1")
-                        self.stack.push(Exp(right));
+                        self.stack.push(Exp(&right.expr));
                         return Some((op.to_string(), Nothing));
                     }
 
@@ -174,7 +203,7 @@ impl<'fmt, 'run> Iterator for TypedExprFormatter<'fmt, 'run> {
                         self.stack.push(Token(")".into(), Nothing));
                         // push args in reverse; insert a ", " separator between them
                         for (i, arg) in args.iter().enumerate().rev() {
-                            self.stack.push(Exp(arg));
+                            self.stack.push(Exp(&arg.expr));
                             if i > 0 {
                                 self.stack.push(Token(",".into(), Space));
                             }
@@ -186,7 +215,7 @@ impl<'fmt, 'run> Iterator for TypedExprFormatter<'fmt, 'run> {
                     IntrinsicCall { fn_name, args } => {
                         self.stack.push(Token(")".into(), Nothing));
                         for (i, arg) in args.iter().enumerate().rev() {
-                            self.stack.push(Exp(arg));
+                            self.stack.push(Exp(&arg.expr));
                             if i > 0 {
                                 self.stack.push(Token(",".into(), Space));
                             }
@@ -206,7 +235,7 @@ impl<'fmt, 'run> Iterator for TypedExprFormatter<'fmt, 'run> {
                         self.stack.push(Token("}".into(), Nothing));
                         self.stack.push(Sep(Newline(Decrease)));
                         if let Some(tail) = expr {
-                            self.stack.push(Exp(tail));
+                            self.stack.push(Exp(&tail.expr));
                         }
                         for stmt in statements.iter().rev() {
                             self.stack.push(Stm(stmt));
@@ -237,12 +266,12 @@ impl<'fmt, 'run> Iterator for TypedExprFormatter<'fmt, 'run> {
                                 }
                             };
                             self.stack.push(Token(",".into(), Newline(Same)));
-                            self.stack.push(Exp(&arm.body));
+                            self.stack.push(Exp(&arm.body.expr));
                             self.stack.push(Token("=>".into(), Whitespace));
                             self.stack.push(Sep(Whitespace));
                             self.stack.push(Token(pattern_str, Nothing));
                         }
-                        self.stack.push(Exp(scrutinee));
+                        self.stack.push(Exp(&scrutinee.expr));
                         self.stack.push(Sep(Whitespace));
                         return Some(("match".into(), Whitespace));
                     }

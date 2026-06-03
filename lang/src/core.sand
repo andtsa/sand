@@ -1,0 +1,24 @@
+def abs(n: Int): Int := __abs(n)
+
+def min(a: Int, b: Int): Int := __min(a, b)
+
+def max(a: Int, b: Int): Int := __max(a, b)
+
+def clamp(n: Int, lo: Int, hi: Int): Int := min(max(n, lo), hi)
+
+def is_odd(n: Int): Bool := (n & 1) != 0
+
+def is_even(n: Int): Bool := (n & 1) == 0
+
+def pow(base: Int, exp: Int): Int :=
+    if base == 0 then 0
+    else if base == 1 then 1
+    else if exp < 0 then 0
+    else if exp == 0 then 1
+    else if exp == 1 then base
+    else if is_even(exp) then pow(base, exp / 2) * pow(base, exp / 2)
+    else base * pow(base, exp - 1)
+
+def read_int(): Int := __read_int()
+
+def exit(code: Int): Unit := __exit(code)

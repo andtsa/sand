@@ -20,14 +20,14 @@ fn main() -> anyhow::Result<()> {
         Project::from_paths(&[PathBuf::from(&args[1])])?;
 
     for w in warnings {
-        eprintln!("WARN: {:?}", w.to_diagnostic().render());
+        eprintln!("{}", w.to_diagnostic().render(&project));
     }
 
     let cr = project.check();
     match cr {
         CheckResult::Success { ctx, ast } => {
             let formatted = ast.format(&ctx);
-            print!("{}", formatted.values().next().unwrap());
+            print!("{}", formatted.values().next().unwrap_or(&String::new()));
         }
         CheckResult::Failure { ctx: _, error } => {
             eprintln!("{error}");

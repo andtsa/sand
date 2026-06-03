@@ -90,6 +90,8 @@ impl Uop {
             Not => {
                 if right == Ty::Bool {
                     Ok(Ty::Bool)
+                } else if right == Ty::Int {
+                    Ok(Ty::Int)
                 } else {
                     Err(Ty::Bool)
                 }

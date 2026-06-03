@@ -2,7 +2,6 @@
 //! - expressions are annotated with their types
 //! - variables and functions are resolved (VarRef and FnRef instead of String)
 //! - uniquify has already been run, so no name clashes
-//! - is SSA form (each variable is assigned to exactly once)
 
 use std::hash::Hash;
 use std::hash::Hasher;

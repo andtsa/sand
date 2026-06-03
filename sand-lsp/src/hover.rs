@@ -8,6 +8,7 @@ use lang::compiler::structure::Range as LangRange;
 use lang::ir_types::typed_hir::Expr;
 use lang::ir_types::typed_hir::Expression;
 use lang::ir_types::typed_hir::Statement;
+use lang::ir_types::typed_hir::TypedFunction;
 use lang::ir_types::typed_hir::TypedProgram;
 use lang::lang::intrinsics::INTRINSICS;
 use lang::lang::types::Ty;
@@ -35,7 +36,12 @@ pub fn hover_at_position(
         if ctx.file_of_module(fun.src_module) != file_ref {
             continue;
         }
-        // Check parameters first (more specific than the body range)
+        // if cursor is on the function name itself,
+        // show signature, and run if main
+        if range_contains(fun.range, pos) {
+            return Some(format_function_hover(fun, ctx, ast));
+        }
+        // cursor on a parameter
         for param in &fun.parameters {
             if range_contains(param.range, pos) {
                 let name = ctx.uniq_variable_name(&param.name);
@@ -51,6 +57,50 @@ pub fn hover_at_position(
         }
     }
     None
+}
+
+fn format_function_hover(fun: &TypedFunction, ctx: &CompileCtx, ast: &TypedProgram) -> Hover {
+    let name = ctx.original_fun_name(fun.name);
+    let sig = ctx.fun_sig(&fun.name);
+    let args = fmt_sig_args(&sig.args, ctx);
+    let sig_line = format!("**{}({}) -> {}**", name, args, fmt_ty(ctx, sig.ret_ty));
+
+    if ctx.is_main(fun.name) {
+        let mut output_buf: Vec<u8> = Vec::new();
+        let run_result = ast.interpret_with_output(ctx, &mut output_buf);
+        let printed = String::from_utf8_lossy(&output_buf);
+
+        let content = match run_result {
+            Ok(val) => {
+                let mut s = sig_line;
+                if !printed.is_empty() {
+                    s.push_str("\n\n## Output:\n```\n");
+                    s.push_str(printed.trim_end());
+                    s.push_str("\n```");
+                }
+                s.push_str(&format!("\n\n## Returned:\n`{}`", fmt_expr_val(&val, ctx)));
+                s
+            }
+            Err(e) => format!("{sig_line}\n\n⚠ Runtime error: {e}"),
+        };
+        make_hover(content)
+    } else {
+        let module = ctx.module_info(&ctx.original_fun(&fun.name).module);
+        make_hover(format!("{sig_line}\nDefined in module `{}`", module.name))
+    }
+}
+
+fn fmt_expr_val(val: &Expression, ctx: &CompileCtx) -> String {
+    match val {
+        Expression::Int(n) => n.to_string(),
+        Expression::Bool(b) => b.to_string(),
+        Expression::Unit => "()".to_string(),
+        Expression::Constructor {
+            enum_ref,
+            variant_idx,
+        } => ctx.enum_display(*enum_ref, *variant_idx),
+        _ => "<value>".to_string(),
+    }
 }
 
 fn range_contains(range: LangRange, pos: Pos) -> bool {
@@ -169,14 +219,7 @@ fn fmt_sig_args(args: &[(lang::compiler::structure::UniqVar, Ty)], ctx: &Compile
 }
 
 fn fmt_ty(ctx: &CompileCtx, ty: Ty) -> String {
-    match ty {
-        Ty::Int => "Int".to_string(),
-        Ty::Bool => "Bool".to_string(),
-        Ty::Unit => "Unit".to_string(),
-        Ty::Top => "Top".to_string(),
-        Ty::Bottom => "Bottom".to_string(),
-        Ty::Enum(er) => ctx.get_enum(er).name.clone(),
-    }
+    ctx.display_ty(ty).to_string()
 }
 
 fn make_hover(value: String) -> Hover {

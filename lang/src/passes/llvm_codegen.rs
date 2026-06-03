@@ -7,10 +7,12 @@ use inkwell::basic_block::BasicBlock as LLVMBasicBlock;
 use inkwell::context::Context;
 use inkwell::types::BasicType;
 use inkwell::values as llvm;
+use inkwell::values::AnyValue;
 
 use crate::compiler::context::CompileCtx;
 use crate::compiler::structure::FunRef;
 use crate::compiler::structure::Map;
+use crate::internal_bug;
 use crate::ir_types::mir::*;
 use crate::lang::intrinsics::Intrinsic;
 use crate::lang::ops::Bop;
@@ -199,6 +201,25 @@ impl<'ctx> LlvmCodegen<'ctx> {
         match rv {
             RValue::Use(op) => self.emit_operand(op, fn_ctx),
 
+            RValue::BinaryOp {
+                op: Bop::Pow,
+                left,
+                right,
+            } => {
+                // `^` desugars to the `pow` function defined in core.sand.
+                let base = self.emit_operand(left, fn_ctx)?;
+                let exp = self.emit_operand(right, fn_ctx)?;
+                let pow_fn = fns
+                    .iter()
+                    .find(|(fr, _)| fn_ctx.compile_ctx.original_fun_name(**fr) == "pow")
+                    .map(|(_, fv)| *fv)
+                    .expect("core 'pow' function not found in compiled program");
+                let call = self
+                    .builder
+                    .build_call(pow_fn, &[base.into(), exp.into()], "pow")?;
+                Ok(call.try_as_basic_value().basic().unwrap())
+            }
+
             RValue::BinaryOp { op, left, right } => {
                 let l = self.emit_operand(left, fn_ctx)?;
                 let r = self.emit_operand(right, fn_ctx)?;
@@ -224,7 +245,12 @@ impl<'ctx> LlvmCodegen<'ctx> {
                     .unwrap_or_else(|| self.context.struct_type(&[], false).const_zero().into()))
             }
 
-            RValue::IntrinsicCall { fn_name, args } => self.emit_intrinsic(*fn_name, args, fn_ctx),
+            RValue::IntrinsicCall { fn_name, args } => match fn_name {
+                Intrinsic::Print | Intrinsic::Println => {
+                    self.emit_intrinsic(*fn_name, args, fn_ctx)
+                }
+                _ => self.emit_intrinsic_value(*fn_name, args, fn_ctx),
+            },
         }
     }
 
@@ -270,16 +296,8 @@ impl<'ctx> LlvmCodegen<'ctx> {
             Bop::Minus => self.builder.build_int_sub(li, ri, "sub")?.into(),
             Bop::Mult => self.builder.build_int_mul(li, ri, "mul")?.into(),
             Bop::Div => self.builder.build_int_signed_div(li, ri, "div")?.into(),
-            Bop::Pow => {
-                let ipow = self.get_or_declare_ipow();
-                let call = self
-                    .builder
-                    .build_call(ipow, &[li.into(), ri.into()], "pow")?;
-                use inkwell::values::AnyValue;
-                llvm::BasicValueEnum::try_from(call.as_any_value_enum()).map_err(|_| {
-                    CodegenError::LlvmError("__lang_ipow did not return a value".into())
-                })?
-            }
+            // pow is intercepted in emit_rvalue before reaching here
+            Bop::Pow => internal_bug!("Bop::Pow should be handled before emit_binop"),
             Bop::And => self.builder.build_and(li, ri, "and")?.into(),
             Bop::Or => self.builder.build_or(li, ri, "or")?.into(),
             Bop::Xor => self.builder.build_xor(li, ri, "xor")?.into(),
@@ -421,11 +439,70 @@ impl<'ctx> LlvmCodegen<'ctx> {
             let fmt = self
                 .builder
                 .build_global_string_ptr("\n", "fmt_nl")?
-                .as_pointer_value(); // ← .as_pointer_value()
+                .as_pointer_value();
             self.builder.build_call(printf, &[fmt.into()], "")?;
         }
 
         Ok(self.context.struct_type(&[], false).const_zero().into())
+    }
+
+    fn emit_intrinsic_value(
+        &self,
+        fn_name: Intrinsic,
+        args: &[Operand],
+        fn_ctx: &FnCtx<'_, 'ctx>,
+    ) -> Result<llvm::BasicValueEnum<'ctx>, CodegenError> {
+        let i64_ty = self.context.i64_type();
+        match fn_name {
+            Intrinsic::Abs => {
+                debug_assert_eq!(args.len(), 1, "Abs expects 1 arg");
+                let val = self.emit_operand(&args[0], fn_ctx)?.into_int_value();
+                // llvm.abs.i64(val, is_int_min_poison: false)
+                // The second argument tells LLVM whether INT_MIN is poison (UB).
+                // We pass false to keep defined behaviour for all inputs.
+                let is_int_min_poison = self.context.bool_type().const_int(0, false);
+                self.call_llvm_intrinsic(
+                    "llvm.abs",
+                    i64_ty,
+                    &[val.into(), is_int_min_poison.into()],
+                    "abs",
+                )
+            }
+            Intrinsic::Min => {
+                debug_assert_eq!(args.len(), 2, "Min expects 2 args");
+                let a = self.emit_operand(&args[0], fn_ctx)?.into_int_value();
+                let b = self.emit_operand(&args[1], fn_ctx)?.into_int_value();
+                self.call_llvm_intrinsic("llvm.smin", i64_ty, &[a.into(), b.into()], "min")
+            }
+            Intrinsic::Max => {
+                debug_assert_eq!(args.len(), 2, "Max expects 2 args");
+                let a = self.emit_operand(&args[0], fn_ctx)?.into_int_value();
+                let b = self.emit_operand(&args[1], fn_ctx)?.into_int_value();
+                self.call_llvm_intrinsic("llvm.smax", i64_ty, &[a.into(), b.into()], "max")
+            }
+            Intrinsic::ReadInt => {
+                let scanf = self.get_or_declare_scanf();
+                let slot = self.builder.build_alloca(i64_ty, "read_int_slot")?;
+                let fmt = self
+                    .builder
+                    .build_global_string_ptr("%ld", "fmt_read_int")?
+                    .as_pointer_value();
+                self.builder
+                    .build_call(scanf, &[fmt.into(), slot.into()], "")?;
+                Ok(self.builder.build_load(i64_ty, slot, "read_int_val")?)
+            }
+            Intrinsic::Exit => {
+                debug_assert_eq!(args.len(), 1, "Exit expects 1 arg");
+                let code = self.emit_operand(&args[0], fn_ctx)?.into_int_value();
+                let code_i32 =
+                    self.builder
+                        .build_int_truncate(code, self.context.i32_type(), "exit_code")?;
+                let exit_fn = self.get_or_declare_exit();
+                self.builder.build_call(exit_fn, &[code_i32.into()], "")?;
+                Ok(self.context.struct_type(&[], false).const_zero().into())
+            }
+            _ => unreachable!("emit_intrinsic_value called for print/println"),
+        }
     }
 
     /// Derive the MIR `Ty` of an operand without a type-check pass.
@@ -495,6 +572,26 @@ impl<'ctx> LlvmCodegen<'ctx> {
         table
     }
 
+    /// helper to call an LLVM intrinsic by name
+    fn call_llvm_intrinsic(
+        &self,
+        intrinsic_name: &str,
+        param_type: inkwell::types::IntType<'ctx>,
+        args: &[llvm::BasicMetadataValueEnum<'ctx>],
+        result_name: &str,
+    ) -> Result<llvm::BasicValueEnum<'ctx>, CodegenError> {
+        let intrinsic = inkwell::intrinsics::Intrinsic::find(intrinsic_name)
+            .ok_or_else(|| CodegenError::LlvmError(format!("{} not found", intrinsic_name)))?;
+        let decl = intrinsic
+            .get_declaration(&self.module, &[param_type.into()])
+            .ok_or_else(|| {
+                CodegenError::LlvmError(format!("{} declaration failed", intrinsic_name))
+            })?;
+        let call = self.builder.build_call(decl, args, result_name)?;
+        llvm::BasicValueEnum::try_from(call.as_any_value_enum())
+            .map_err(|_| CodegenError::LlvmError(format!("{} returned no value", intrinsic_name)))
+    }
+
     fn get_or_declare_printf(&self) -> llvm::FunctionValue<'ctx> {
         if let Some(f) = self.module.get_function("printf") {
             return f;
@@ -510,13 +607,30 @@ impl<'ctx> LlvmCodegen<'ctx> {
         self.module.add_function("printf", fn_ty, None)
     }
 
-    fn get_or_declare_ipow(&self) -> llvm::FunctionValue<'ctx> {
-        if let Some(f) = self.module.get_function("__lang_ipow") {
+    fn get_or_declare_scanf(&self) -> llvm::FunctionValue<'ctx> {
+        if let Some(f) = self.module.get_function("scanf") {
             return f;
         }
-        let i64_ty = self.context.i64_type().into();
-        let fn_ty = self.context.i64_type().fn_type(&[i64_ty, i64_ty], false);
-        self.module.add_function("__lang_ipow", fn_ty, None)
+        let ptr_ty = self
+            .context
+            .ptr_type(inkwell::AddressSpace::default())
+            .into();
+        let fn_ty = self
+            .context
+            .i32_type()
+            .fn_type(&[ptr_ty], /* variadic= */ true);
+        self.module.add_function("scanf", fn_ty, None)
+    }
+
+    fn get_or_declare_exit(&self) -> llvm::FunctionValue<'ctx> {
+        if let Some(f) = self.module.get_function("exit") {
+            return f;
+        }
+        let fn_ty = self
+            .context
+            .void_type()
+            .fn_type(&[self.context.i32_type().into()], false);
+        self.module.add_function("exit", fn_ty, None)
     }
 
     // type helpers

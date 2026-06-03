@@ -8,6 +8,10 @@ def compare(x: Int, y: Int): #gt | #lt | #eq := {
     }
 }
 
+def cmp_2(x: Int, y: Int): #gt | #lt := {
+    if x > y then #gt else #lt
+}
+
 type Test = One | Two | Three;
 
 def main(): Unit := {
@@ -16,7 +20,8 @@ def main(): Unit := {
     let mut y = 0;
     while y < 5 do {
         let mut result = (compare(x, y));
-        match result {
+        let cmp = compare(x, y);
+        match cmp {
             #gt => {
                 print(x);
                 print(result);
@@ -37,9 +42,14 @@ def main(): Unit := {
         y = y + 1;
     };
 
-    let z = Test#One;
+    let mut z = Test#One;
+
+    let y = z;
+
+    z = Test#Two;
 
     println(z);
+    println(y);
     println(Test#Two == Test#Three);
 
     println(compare(2, 2) == #eq);

@@ -17,6 +17,11 @@ pub const RESERVED_FUNCTION_NAMES: [&str; 6] =
 pub enum Intrinsic {
     Print,
     Println,
+    Abs,
+    Min,
+    Max,
+    ReadInt,
+    Exit,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -41,6 +46,41 @@ fn intrinsics() -> Map<Intrinsic, (FnName, IntrinsicSig)> {
                 ret_ty: Ty::Unit,
             },
         ),
+        (
+            Intrinsic::Abs,
+            IntrinsicSig {
+                args: vec![Ty::Int],
+                ret_ty: Ty::Int,
+            },
+        ),
+        (
+            Intrinsic::Min,
+            IntrinsicSig {
+                args: vec![Ty::Int, Ty::Int],
+                ret_ty: Ty::Int,
+            },
+        ),
+        (
+            Intrinsic::Max,
+            IntrinsicSig {
+                args: vec![Ty::Int, Ty::Int],
+                ret_ty: Ty::Int,
+            },
+        ),
+        (
+            Intrinsic::ReadInt,
+            IntrinsicSig {
+                args: vec![],
+                ret_ty: Ty::Int,
+            },
+        ),
+        (
+            Intrinsic::Exit,
+            IntrinsicSig {
+                args: vec![Ty::Int],
+                ret_ty: Ty::Unit,
+            },
+        ),
     ]
     .into_iter()
     .map(|(n, s)| (n, (FnName::from(n), s)))
@@ -52,6 +92,11 @@ impl Display for Intrinsic {
         match self {
             Intrinsic::Print => write!(f, "print"),
             Intrinsic::Println => write!(f, "println"),
+            Intrinsic::Abs => write!(f, "__abs"),
+            Intrinsic::Min => write!(f, "__min"),
+            Intrinsic::Max => write!(f, "__max"),
+            Intrinsic::ReadInt => write!(f, "__read_int"),
+            Intrinsic::Exit => write!(f, "__exit"),
         }
     }
 }
@@ -62,6 +107,11 @@ impl TryFrom<&str> for Intrinsic {
         match value {
             "print" | "printf" => Ok(Intrinsic::Print),
             "println" => Ok(Intrinsic::Println),
+            "__abs" => Ok(Intrinsic::Abs),
+            "__min" => Ok(Intrinsic::Min),
+            "__max" => Ok(Intrinsic::Max),
+            "__read_int" => Ok(Intrinsic::ReadInt),
+            "__exit" => Ok(Intrinsic::Exit),
             _ => Err(()),
         }
     }

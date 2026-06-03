@@ -15,8 +15,8 @@ thiserror   = "2"
 tracing     = "0.1.44"
 pest        = "2.8.4"
 pest_derive = "2.8.4"
-url         = "2"
-serde = "1.0.228"
+url         = { version = "2", features = ["serde"] }
+serde = { version = "1.0.228", features = ["derive"] }
 tokio       = { version = "1", features = ["macros", "rt-multi-thread", "io-std", "fs"] }
 toml        = "1"
 inkwell     = { version = "0.8.0", features = ["llvm21-1"] }

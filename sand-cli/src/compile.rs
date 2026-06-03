@@ -78,7 +78,7 @@ pub fn compile(args: CompileArgs, dry_run: bool) -> Result<(), CompileCliError> 
     let project = project_result.project;
 
     for warning in project_result.warnings {
-        tracing::warn!("project setup warning: {}", warning.message);
+        eprintln!("{}", warning.to_diagnostic().render(&project));
     }
 
     tracing::debug!("loaded {} files", project.file_count());
@@ -98,21 +98,20 @@ pub fn compile(args: CompileArgs, dry_run: bool) -> Result<(), CompileCliError> 
             ast.functions
                 .values()
                 .for_each(|f| tracing::trace!(name = ctx.original_fun_name(f.name)));
+            for diag in &ctx.diagnostics {
+                // Skip diagnostics from synthetic files (e.g. the core library).
+                if diag.file.is_some_and(|fr| project.is_synthetic_file(fr)) {
+                    continue;
+                }
+                eprintln!("{}", diag.render(&project));
+            }
             (ctx, ast)
         }
         CheckResult::Failure { ctx, error } => {
-            // Convert compiler errors to diagnostics and print them
             let diags = SandDiagnostic::from_compiler_error(&ctx, &error);
-            for (file_ref, file_diags) in diags.map {
-                let uri = project.uri_of_file(file_ref);
+            for (_file_ref, file_diags) in diags.map {
                 for diag in file_diags {
-                    let severity_str = match diag.severity {
-                        lang::compiler::diagnostics::DiagnosticSeverity::Error => "error",
-                        lang::compiler::diagnostics::DiagnosticSeverity::Warning => "warning",
-                        lang::compiler::diagnostics::DiagnosticSeverity::Info => "info",
-                        lang::compiler::diagnostics::DiagnosticSeverity::CompilerDebug => "debug",
-                    };
-                    eprintln!("{}: {}: {}", uri, severity_str, diag.message);
+                    eprintln!("{}", diag.render(&project));
                 }
             }
             return Err(CompileCliError::CompilerError {

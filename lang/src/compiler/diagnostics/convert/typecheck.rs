@@ -9,7 +9,7 @@ use crate::compiler::structure::FileRef;
 use crate::passes::type_ast::AstTypeError;
 
 pub fn type_error_to_diagnostic(
-    _ctx: &CompileCtx,
+    ctx: &CompileCtx,
     file: FileRef,
     err: &AstTypeError,
 ) -> SandDiagnostics {
@@ -85,13 +85,21 @@ pub fn type_error_to_diagnostic(
             found,
             range,
         } => {
-            let diagnostic_message =
-                format!("{} (expected {:?}, found {:?})", message, expected, found);
+            let diagnostic_message = format!(
+                "{} (expected {}, found {})",
+                message,
+                ctx.display_ty(*expected),
+                ctx.display_ty(*found)
+            );
 
             let related = SdRelatedInfo {
                 file,
                 range: *range,
-                message: format!("expected type: {:?}, found type: {:?}", expected, found),
+                message: format!(
+                    "expected type: {}, found type: {}",
+                    ctx.display_ty(*expected),
+                    ctx.display_ty(*found)
+                ),
             };
 
             diagnostics.add_one(
@@ -112,15 +120,26 @@ pub fn type_error_to_diagnostic(
             found,
             range,
         } => {
-            let diagnostic_message =
-                format!("{} (expected {:?}, found {:?})", message, expected, found);
+            let fmt_tys = |tys: &[_]| {
+                tys.iter()
+                    .map(|t| ctx.display_ty(*t).to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            let diagnostic_message = format!(
+                "{} (expected [{}], found [{}])",
+                message,
+                fmt_tys(expected),
+                fmt_tys(found)
+            );
 
             let related = SdRelatedInfo {
                 file,
                 range: *range,
                 message: format!(
-                    "expected argument types: {:?}, found argument types: {:?}",
-                    expected, found
+                    "expected argument types: [{}], found argument types: [{}]",
+                    fmt_tys(expected),
+                    fmt_tys(found),
                 ),
             };
 
@@ -189,7 +208,8 @@ pub fn type_error_to_diagnostic(
                 SandDiagnostic {
                     severity: DiagnosticSeverity::Error,
                     message: format!(
-                        "match scrutinee has type {ty:?} — match requires an enum type"
+                        "match scrutinee has type {}; match requires an enum type",
+                        ctx.display_ty(*ty)
                     ),
                     range: *range,
                     related: vec![],

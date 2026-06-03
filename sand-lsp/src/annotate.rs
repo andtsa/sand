@@ -84,7 +84,7 @@ impl Backend {
                 if let Some(text) = project.text_for_file(fr) {
                     let range = lsp_range_from_pest(text, range);
 
-                    let message = format!("reused expression: {:?}", e.expr);
+                    let message = format!("reused expression: {}", e.fmt_inline(ctx));
 
                     diagnostics.add_one(
                         uri.clone(),

@@ -16,6 +16,7 @@
 // it just strings together the appropriate compiler passes.
 pub mod compile;
 pub mod error;
+pub mod fmt;
 
 use clap::ArgAction;
 use clap::Parser;
@@ -25,6 +26,8 @@ use tracing::trace;
 
 use crate::compile::CompileArgs;
 use crate::compile::compile;
+use crate::fmt::FmtArgs;
+use crate::fmt::fmt;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -46,6 +49,8 @@ pub struct SandCLI {
 pub enum SandCommand {
     #[command()]
     Compile(CompileArgs),
+    #[command()]
+    Fmt(FmtArgs),
 }
 
 fn main() -> Result<(), anyhow::Error> {
@@ -74,9 +79,9 @@ fn main() -> Result<(), anyhow::Error> {
     debug!(log_level = ?log_level);
     trace!("args: {args:?}");
 
-    #[allow(clippy::single_match)]
     match args.command {
         SandCommand::Compile(compile_args) => compile(compile_args, args.dry)?,
+        SandCommand::Fmt(fmt_args) => fmt(fmt_args)?,
     }
 
     Ok(())
