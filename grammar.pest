@@ -13,7 +13,7 @@ tag_type = { "#" ~ identifier ~ ("|" ~ "#" ~ identifier)* }
 type_ = {
     "Int"
   | "Bool"
-  | "Unit" // equivalent to rust (), python None, (sort of) java null
+  | "Unit" // equivalent to rust (), python None
   | qualified_type  // cross-module enum type: mod::TypeName
   | tag_type        // ad-hoc tag union: #ok | #err
   | identifier      // named enum type

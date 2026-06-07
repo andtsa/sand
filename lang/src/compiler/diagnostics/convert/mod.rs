@@ -1,6 +1,7 @@
 //! convert internal errors into [`crate::compiler::diagnostics::Diagnostic`]
 
 pub mod ast;
+pub mod ownership;
 pub mod qualify;
 pub mod reused_expr;
 pub mod setup;
@@ -13,6 +14,7 @@ use crate::compiler::context::CompileCtx;
 use crate::compiler::diagnostics::SandDiagnostic;
 use crate::compiler::diagnostics::SandDiagnostics;
 use crate::compiler::diagnostics::convert::ast::ast_error_to_diagnostics;
+use crate::compiler::diagnostics::convert::ownership::ownership_error_to_diagnostic;
 use crate::compiler::diagnostics::convert::qualify::qualify_error_to_diagnostics;
 use crate::compiler::diagnostics::convert::typecheck::type_error_to_diagnostic;
 use crate::internal_bug;
@@ -32,6 +34,9 @@ impl SandDiagnostic {
                 qualify_error_to_diagnostics(ctx, source_file, err)
             }
             SandLangErrorSource::TypeError(err) => type_error_to_diagnostic(ctx, source_file, err),
+            SandLangErrorSource::OwnershipError(err) => {
+                ownership_error_to_diagnostic(ctx, source_file, err)
+            }
         }
     }
 }

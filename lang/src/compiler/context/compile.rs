@@ -259,8 +259,8 @@ impl<'run> CompileCtx<'run> {
         &self.enum_defs[er.0]
     }
 
-    /// returns a [`Display`]-able wrapper for [`Ty`] that resolves enum names via
-    /// this context
+    /// returns a [`Display`]-able wrapper for [`Ty`] that resolves enum names
+    /// via this context
     pub fn display_ty(&self, ty: Ty) -> TyDisplay<'_> {
         TyDisplay { ty, ctx: self }
     }

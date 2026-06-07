@@ -4,8 +4,6 @@
 
 pub mod error;
 
-use std::collections::BTreeMap;
-
 use crate::compiler::context::CompileCtx;
 use crate::compiler::structure::Map;
 use crate::compiler::structure::UniqVar;
@@ -17,14 +15,14 @@ use crate::passes::qualify::uniquify::error::UniquifyError;
 /// program's various levels and offers the functionality to keep track of and
 /// rename them.
 struct UniqCtx<'uniq, 'run> {
-    /// Each scope is represented as a BTreeMap from original names to renamed
+    /// Each scope is represented as a Map from original names to renamed
     /// names and are stored in a stack-like vector, where the last element
     /// is the current scope.
-    var_scopes: Vec<BTreeMap<String, UniqVar>>,
+    var_scopes: Vec<Map<String, UniqVar>>,
 
     // /// Function and variable names live in different namespaces in order to
     // /// allow function name shadowing without problems
-    // fun_scopes: BTreeMap<String, String>,
+    // fun_scopes: Map<String, String>,
     compile_ctx: &'uniq mut CompileCtx<'run>,
 }
 
@@ -34,7 +32,7 @@ impl<'uniq, 'run> UniqCtx<'uniq, 'run> {
     /// # Returns
     /// An initialized empty Context.
     fn new(ctx: &'uniq mut CompileCtx<'run>) -> Self {
-        // let mut global = BTreeMap::new();
+        // let mut global = Map::new();
 
         // for &name in RESERVED_FUNCTION_NAMES.iter() {
         //     global.insert(name.to_string(), name.to_string());
@@ -42,14 +40,14 @@ impl<'uniq, 'run> UniqCtx<'uniq, 'run> {
 
         Self {
             compile_ctx: ctx,
-            var_scopes: vec![BTreeMap::new()],
+            var_scopes: vec![Map::new()],
         }
     }
 
     /// Pushes a new empty scope onto the scope stack when entering a new block
     /// or function.
     fn enter_scope(&mut self) {
-        self.var_scopes.push(BTreeMap::new());
+        self.var_scopes.push(Map::new());
     }
 
     /// Pops the top scope from the scope stack when exiting a block or

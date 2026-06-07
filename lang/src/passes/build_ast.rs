@@ -146,9 +146,9 @@ pub fn build_program<'run>(
     // Collect all top-level children so we can do two passes.
     let children: Vec<Pair<Rule>> = pair.into_inner().collect();
 
-    // ── First pass: register enum type declarations ──────────────────────────
-    // We also track the current module as module declarations are encountered,
-    // so that enum defs are attributed to the correct module.
+    // first pass: register enum type declarations
+    // we also track the current module as module declarations are encountered,
+    // so that enum defs are attributed to the correct module
     {
         let mut cur_mod = default_module;
         for child in &children {
@@ -177,7 +177,7 @@ pub fn build_program<'run>(
         }
     }
 
-    // ── Second pass: build functions ─────────────────────────────────────────
+    // second pass: build functions
     let mut mods: Map<ModuleRef, Vec<Function>> = Map::new();
     let mut funcs = Vec::new();
     let mut current_module = default_module;
@@ -237,7 +237,7 @@ fn build_function<'run>(
     src: &str,
     cur_module: &ModuleRef,
 ) -> Result<Function, AstError> {
-    // Keep the build-module hint up to date so that anonymous tag-union types
+    // keep the build-module hint up to date so that anonymous tag-union types
     // declared in `build_type` are attributed to the right module.
     ctx.set_build_module(*cur_module);
     let range = Range::from(&pair);

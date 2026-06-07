@@ -134,6 +134,21 @@ pub fn interpret_example(name: &str) -> anyhow::Result<Expression> {
     Ok(hir_result)
 }
 
+/// parse -> qualify -> type-check -> ownership-check and expect the program to
+/// pass ownership checking (i.e., compile successfully)
+pub fn ownership_ok(src: &str) {
+    compile_hir(src).unwrap_or_else(|e| panic!("expected ownership check to pass, got: {e}"));
+}
+
+/// parse -> qualify -> type-check -> ownership-check and expect an ownership
+/// violation error
+pub fn ownership_fails(src: &str) {
+    assert!(
+        compile_hir(src).is_err(),
+        "expected ownership check to fail, but it succeeded"
+    );
+}
+
 /// Load, compile, and interpret an example program in the MIR interpreter
 pub fn interpret_mir_example(name: &str) -> anyhow::Result<Expression> {
     let src = open_example_from_file(name);

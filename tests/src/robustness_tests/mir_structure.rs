@@ -18,16 +18,27 @@ fn lower(src: &str) -> (MirProgram, CompileCtx<'static>) {
     (MirProgram::from_typed_program(&ast), ctx)
 }
 
+fn find_main<'a>(mir: &'a MirProgram, ctx: &CompileCtx) -> &'a lang::ir_types::mir::MirFunction {
+    mir.functions
+        .values()
+        .find(|f| ctx.original_fun_name(f.name) == "main")
+        .expect("no 'main' function found in MIR")
+}
+
 #[test]
 fn function_count_matches_source() {
+    // core library contributes 9 functions:
+    // abs, min, max, clamp, is_odd, is_even, pow, read_int, exit.
+    const CORE_FN_COUNT: usize = 9;
+
     let (mir, _ctx) = lower("def main(): Int := 42");
-    assert_eq!(mir.functions.len(), 1);
+    assert_eq!(mir.functions.len(), 1 + CORE_FN_COUNT);
 
     let (mir, _ctx) = lower(
         "def helper(): Int := 1
          def main(): Int := helper()",
     );
-    assert_eq!(mir.functions.len(), 2);
+    assert_eq!(mir.functions.len(), 2 + CORE_FN_COUNT);
 
     let (mir, _ctx) = lower(
         "def a(): Int := 1
@@ -35,7 +46,7 @@ fn function_count_matches_source() {
          def c(): Int := 3
          def main(): Int := a()",
     );
-    assert_eq!(mir.functions.len(), 4);
+    assert_eq!(mir.functions.len(), 4 + CORE_FN_COUNT);
 }
 
 #[test]
@@ -98,13 +109,13 @@ fn parameters_have_corresponding_locals() {
 
 #[test]
 fn if_expression_produces_branch_terminator() {
-    let (mir, _ctx) = lower(
+    let (mir, ctx) = lower(
         "def main(): Int := {
         let b: Bool = true;
         if b then 1 else 2
     }",
     );
-    let func = mir.functions.values().next().unwrap();
+    let func = find_main(&mir, &ctx);
     let has_branch = func
         .blocks
         .iter()
@@ -122,8 +133,8 @@ fn while_loop_produces_branch_and_goto() {
         while i < 3 do { i = i + 1; };
         i
     }";
-    let (mir, _ctx) = lower(src);
-    let func = mir.functions.values().next().unwrap();
+    let (mir, ctx) = lower(src);
+    let func = find_main(&mir, &ctx);
     let has_branch = func
         .blocks
         .iter()
@@ -163,8 +174,8 @@ fn let_bindings_produce_locals() {
         let b: Int = 2;
         a + b
     }";
-    let (mir, _ctx) = lower(src);
-    let func = mir.functions.values().next().unwrap();
+    let (mir, ctx) = lower(src);
+    let func = find_main(&mir, &ctx);
     let user_locals = func
         .locals
         .iter()

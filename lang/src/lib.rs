@@ -46,6 +46,9 @@ pub enum SandLangErrorSource {
 
     #[error("type error: {0}")]
     TypeError(#[from] passes::type_ast::AstTypeError),
+
+    #[error("ownership error: {0}")]
+    OwnershipError(#[from] passes::ownership::errors::OwnershipError),
 }
 
 const CORE_SRC: &str = include_str!("core.sand");
@@ -96,6 +99,9 @@ pub fn compile_hir<'run, 'proj>(
         ctx.entrypoint = None;
         SandLangErrorContext::with_module(e.module).wrap_err(e.error)
     })?;
+
+    let typed_program = passes::ownership::check(ctx, typed_program)
+        .map_err(|e| SandLangErrorContext::with_module(e.module).wrap_err(e.error))?;
 
     Ok(typed_program)
 }

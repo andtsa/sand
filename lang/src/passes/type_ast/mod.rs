@@ -19,7 +19,7 @@ pub use crate::passes::type_ast::errors::AstTypeError;
 use crate::passes::type_ast::errors::TypeError;
 use crate::passes::type_ast::infer::infer_function;
 
-type TypeEnv = Map<UniqVar, (Ty, bool)>; // (type, is_mutable)
+type TypeEnv = im::HashMap<UniqVar, (Ty, bool)>; // (type, is_mutable)
 
 impl typed_hir::TypedProgram {
     pub fn from_ast_program(ctx: &CompileCtx, ast: qhir::Program) -> Result<Self, TypeError> {

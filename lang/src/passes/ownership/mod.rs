@@ -1,0 +1,225 @@
+//! affine-type ownership checker.
+//!
+//! this pass runs on `TypedHIR` after type checking and before MIR lowering.
+//! it enforces "each owned value may be used at most once":
+//!
+//! # design
+//!
+//! the checker passes two pieces of state simultaneously through the
+//! expression tree:
+//!
+//! * `Result<(), OwnershipCheckError>`, mirroring `Either`
+//! * `&mut OwnershipEnv`, mirroring `StateT`
+//!
+//! this is the Rust equivalent of `StateT OwnershipEnv (Either
+//! OwnershipCheckError)`.
+//!
+//! at every branch point (if/match) the env is **cloned** to give each branch
+//! its own snapshot, then the per-branch results are *merged* conservatively:
+//! a variable is Owned after the join only if *all* branches left it Owned.
+
+pub mod env;
+pub mod errors;
+
+use env::OwnershipEnv;
+use env::OwnershipState;
+use errors::OwnershipCheckError;
+use errors::OwnershipError;
+
+use crate::compiler::context::CompileCtx;
+use crate::compiler::structure::ModuleRef;
+use crate::ir_types::typed_hir as th;
+use crate::ir_types::typed_hir::TypedProgram;
+
+pub fn check(ctx: &CompileCtx, program: TypedProgram) -> Result<TypedProgram, OwnershipCheckError> {
+    for func in program.functions.values() {
+        let checker = OwnershipChecker {
+            ctx,
+            module: func.src_module,
+        };
+
+        let mut env = OwnershipEnv::new();
+        for param in &func.parameters {
+            env.declare(param.name);
+        }
+
+        checker.check_expr(&func.body, &mut env)?;
+    }
+    Ok(program)
+}
+
+struct OwnershipChecker<'ctx> {
+    ctx: &'ctx CompileCtx<'ctx>,
+    module: ModuleRef,
+}
+
+impl<'ctx> OwnershipChecker<'ctx> {
+    fn err(&self, error: OwnershipError) -> OwnershipCheckError {
+        OwnershipCheckError {
+            error,
+            module: self.module,
+        }
+    }
+
+    fn check_statement(
+        &self,
+        stmt: &th::Statement,
+        env: &mut OwnershipEnv,
+    ) -> Result<(), OwnershipCheckError> {
+        match stmt {
+            th::Statement::Declaration { name, val, .. } => {
+                // check RHS first (it may move other variables)
+                self.check_expr(val, env)?;
+                // the new variable starts as Owned
+                env.declare(*name);
+                Ok(())
+            }
+
+            th::Statement::Assignment { name, val, .. } => {
+                self.check_expr(val, env)?;
+                // the LHS variable's old value is implicitly dropped
+                // for non-Copy types, re-declare as Owned
+                if !val.ty.is_copy() {
+                    env.declare(*name);
+                }
+                Ok(())
+            }
+
+            th::Statement::Expr(e) => self.check_expr(e, env),
+        }
+    }
+
+    fn check_expr(
+        &self,
+        expr: &th::Expr,
+        env: &mut OwnershipEnv,
+    ) -> Result<(), OwnershipCheckError> {
+        match &expr.expr {
+            th::Expression::Int(_)
+            | th::Expression::Bool(_)
+            | th::Expression::Unit
+            | th::Expression::Constructor { .. } => Ok(()),
+
+            th::Expression::Var(v) => {
+                if expr.ty.is_copy() {
+                    return Ok(());
+                }
+                match env.get(v) {
+                    Some(OwnershipState::Owned) => {
+                        env.mark_moved(*v, expr.range);
+                        Ok(())
+                    }
+                    Some(OwnershipState::Moved { at }) => {
+                        Err(self.err(OwnershipError::UseAfterMove {
+                            name: self.ctx.uniq_variable_name(v),
+                            moved_at: *at,
+                            used_at: expr.range,
+                        }))
+                    }
+                    None => Ok(()),
+                }
+            }
+
+            th::Expression::UnOp { right, .. } => self.check_expr(right, env),
+
+            th::Expression::BinOp { left, right, .. } => {
+                self.check_expr(left, env)?;
+                self.check_expr(right, env)
+            }
+
+            th::Expression::Call { args, .. } | th::Expression::IntrinsicCall { args, .. } => {
+                self.check_exprs(args, env)
+            }
+
+            th::Expression::If { cond, t, f } => {
+                self.check_expr(cond, env)?;
+
+                let mut then_env = env.clone();
+                let mut else_env = env.clone();
+
+                self.check_expr(t, &mut then_env)?;
+                self.check_expr(f, &mut else_env)?;
+
+                *env = OwnershipEnv::merge(&then_env, &else_env);
+                Ok(())
+            }
+
+            // moves inside the body are forbidden
+            th::Expression::While { cond, body } => {
+                self.check_expr(cond, env)?;
+
+                let mut body_env = env.clone();
+                self.check_expr(body, &mut body_env)?;
+
+                // any variable that was Owned before the loop but Moved in the
+                // body cannot be guaranteed to be re-initialized on every
+                // iteration
+                for (var, state) in body_env.iter() {
+                    if let OwnershipState::Moved { at } = state
+                        && matches!(env.get(var), Some(OwnershipState::Owned))
+                    {
+                        return Err(self.err(OwnershipError::MoveInLoop {
+                            name: self.ctx.uniq_variable_name(var),
+                            moved_at: *at,
+                            loop_range: expr.range,
+                        }));
+                    }
+                }
+                // the loop may execute 0 times, so the outer env
+                // is unchanged
+                Ok(())
+            }
+
+            th::Expression::Block {
+                statements,
+                expr: ret,
+            } => {
+                // snapshot which variables existed before the block so we can
+                // remove block-local variables on exit
+                let pre_block_vars = env.var_keys();
+
+                for stmt in statements {
+                    self.check_statement(stmt, env)?;
+                }
+                if let Some(e) = ret {
+                    self.check_expr(e, env)?;
+                }
+
+                env.restrict_to(&pre_block_vars);
+                Ok(())
+            }
+
+            th::Expression::Match { scrutinee, arms } => {
+                // the scrutinee is consumed
+                self.check_expr(scrutinee, env)?;
+
+                let arm_envs = arms
+                    .iter()
+                    .map(|arm| {
+                        let mut arm_env = env.clone();
+                        self.check_expr(&arm.body, &mut arm_env)?;
+                        Ok(arm_env)
+                    })
+                    .collect::<Result<Vec<_>, OwnershipCheckError>>()?;
+
+                if let Some((first, rest)) = arm_envs.split_first() {
+                    *env = rest
+                        .iter()
+                        .fold(first.clone(), |acc, e| OwnershipEnv::merge(&acc, e));
+                }
+                Ok(())
+            }
+        }
+    }
+
+    fn check_exprs(
+        &self,
+        exprs: &[th::Expr],
+        env: &mut OwnershipEnv,
+    ) -> Result<(), OwnershipCheckError> {
+        for e in exprs {
+            self.check_expr(e, env)?;
+        }
+        Ok(())
+    }
+}

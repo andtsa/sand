@@ -14,6 +14,13 @@ pub enum Ty {
 }
 
 impl Ty {
+    /// true for types that are implicitly copied on use (Int, Bool, Unit).  
+    ///
+    /// Enum types are *not* Copy, and are subject to move semantics.
+    pub fn is_copy(&self) -> bool {
+        matches!(self, Ty::Int | Ty::Bool | Ty::Unit)
+    }
+
     pub fn type_eq(&self, other: &Self) -> bool {
         use Ty::*;
         match (self, other) {

@@ -12,7 +12,7 @@ use crate::compiler::structure::UniqVar;
 use crate::lang::ops::*;
 use crate::lang::types::*;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ProgramModule {
     pub functions: Vec<Function>,
     pub module_name: ModuleRef,
@@ -39,7 +39,7 @@ pub struct Parameter {
     pub is_mutable: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Function {
     pub name: FunRef,
     pub range: Range,
