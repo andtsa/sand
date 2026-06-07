@@ -1,3 +1,5 @@
-tracked_files = [
+[project]
+name = "box_typesystem"
+sources = [
     "main.sand"
 ]

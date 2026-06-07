@@ -22,14 +22,20 @@ use lang::util::fs::real_fs::FileSystem;
 #[derive(Debug, Args)]
 pub struct CompileArgs {
     /// Input file(s) to compile
-    #[arg(required = true)]
+    #[arg(required = true, conflicts_with = "config")]
     input: Vec<PathBuf>,
+    /// Compile a project from a config file
+    #[arg(short, long)]
+    config: Option<PathBuf>,
     /// Output file to write
     #[arg(short, long)]
     output: Option<PathBuf>,
     /// Emit LLVM IR instead of machine code
     #[arg(short, long)]
     emit_llvm: bool,
+    /// Print the AST instead of compiling
+    #[arg(short, long)]
+    print_ast: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -70,11 +76,17 @@ pub fn compile(args: CompileArgs, dry_run: bool) -> Result<(), CompileCliError> 
         output_file.display()
     );
 
-    // Load input files using [`Project::from_paths`]
-    let span = tracing::debug_span!("loading project from paths");
-    let _g1 = span.enter();
-
-    let project_result = Project::from_paths(&args.input)?;
+    let project_result = if let Some(config) = &args.config {
+        // Load project from config file
+        let span = tracing::debug_span!("loading project from config");
+        let _g1 = span.enter();
+        Project::from_config(config)
+    } else {
+        // Load input files using [`Project::from_paths`]
+        let span = tracing::debug_span!("loading project from paths");
+        let _g1 = span.enter();
+        Project::from_paths(&args.input)
+    }?;
     let project = project_result.project;
 
     for warning in project_result.warnings {
@@ -82,7 +94,6 @@ pub fn compile(args: CompileArgs, dry_run: bool) -> Result<(), CompileCliError> 
     }
 
     tracing::debug!("loaded {} files", project.file_count());
-    drop(_g1);
 
     // Perform compilation check using the Project abstraction
     let span = tracing::debug_span!("compiling modules");
@@ -120,6 +131,11 @@ pub fn compile(args: CompileArgs, dry_run: bool) -> Result<(), CompileCliError> 
         }
     };
     drop(_g2);
+
+    if args.print_ast {
+        println!("{}", ast.dump(&ctx));
+        return Ok(());
+    }
 
     // Emit code
     let mir = MirProgram::from_typed_program(&ast);

@@ -3,6 +3,7 @@
 //!
 //! todo: move fmt params somewhere configurable (probably by the user)
 
+pub mod ast;
 pub mod mir;
 pub mod prog;
 pub mod typed_expr;

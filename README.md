@@ -2,6 +2,63 @@
 
 a compiler for a small statically-typed expression language, structured as a sequence of IR transformations from parsed source to LLVM IR.
 
+## usage
+
+1. [install rust](https://rust-lang.org/tools/install/)
+2. clone & cd in the repo
+3. `cargo build` to compile the compiler & all utilities
+
+now you have the 2 main binaries: `target/debug/sand-cli` and `target/debug/sand-lsp`, as well as 
+
+### `sand-cli`
+use it to compile `.sand` files to executables:
+```sh
+sand-cli compile <path-to-file.sand> --output <output-file>
+```
+or multiple files at once:
+```sh
+sand-cli compile <path-to-file.sand> <path-to-other-file.sand> ...
+```
+dump the AST to stdout:
+```sh
+sand-cli compile <path-to-file.sand> --print-ast
+```
+or emit LLVM IR:
+```sh
+sand-cli compile <path-to-file.sand> --emit-llvm
+```
+
+for projects with multiple files, a `sand.toml` can be used to group them together:
+```toml
+[project]
+name = "my-project"
+sources = [
+    "src/",
+    "main.sand"
+]
+```
+
+<details><summary>sand-lsp</summary>
+unfortunately most IDEs nowdays do not support custom LSPs easily, and instead require a plugin or extension to be installed (which doesnt exist for sand).
+
+however if you're using vim/nvim, you can add the lsp with:
+```lua
+vim.filetype.add({
+    extension = {
+        sand = "sand",
+    },
+})
+
+vim.lsp.config["sand"] = {
+    cmd = { "/path/to/sand-lsp" },
+    filetypes = { "sand" },
+    root_markers = { "sand.toml" },
+}
+
+vim.lsp.enable("sand")
+```
+</details>
+
 ## the language
 
 Sand is expression-oriented and statically typed. Every construct is an expression with a type.
@@ -27,6 +84,16 @@ def check(x: Int): #one | #two | #other :=
     if x < 0 then #one else if x > 0 then #two else #other
 ```
 
+### blocks
+`{ (stmt;)* expr? }`
+statements are executed in order, 
+the final expression is the block's value; omitting it gives `Unit`.
+```
+Statement ::=
+  | Declaration ("let" "mut"? identifier (":" type)? "=" expr ";")
+  | Assignment (identifier "=" expr ";")
+  | Expression (expr ";")
+```
 
 ### binding
 `let mut? name(: Type)? = value`
@@ -37,17 +104,6 @@ let x = 10;
 let y: Int = 20;
 let mut z = x;
 z = z + y;
-```
-
-### blocks
-`{ stmt; stmt; expr }`
-statements are executed in order, 
-the final expression is the block's value; omitting it gives `Unit`.
-```
-Statement ::=
-  | Declaration ("let" "mut"? identifier (":" type)? "=" expr ";")
-  | Assignment (identifier "=" expr ";")
-  | Expression (expr ";")
 ```
 
 ### pattern matching

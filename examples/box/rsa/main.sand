@@ -8,19 +8,6 @@ def test(message: Int): Unit := {
     println(plain);
 }
 
-type hello = world | vro | you;
-
-def greet(who: Int): hello := {
-    if who == 1 then {
-        hello#world
-    } else if who == 2 then {
-        hello#vro
-    } else {
-        hello#you
-    }
-}
-
-
 def main(): Int := {
     let message = 42;
     test(message);
@@ -28,12 +15,6 @@ def main(): Int := {
     let msg: Int = 12345 + 1345765 + 343543;
     test(12345 + 1345765 + 343543);
 
-    let mut i = 0;
-    while i <= 5 do {
-        println(greet(i));
-        i = i + 1;
-    };
-
-    m::test(1)
+    0
 }
 

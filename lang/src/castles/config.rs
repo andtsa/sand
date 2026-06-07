@@ -13,7 +13,7 @@ impl ProjectConfig {
         if !config_path.exists() {
             return Ok(None);
         }
-        let config = fs.read_utf8(config_path)?;
-        Ok(Some(fs.try_read_toml(&config)?))
+        tracing::trace!("reading config file from {config_path:?}");
+        Ok(Some(fs.try_read_toml(config_path)?))
     }
 }

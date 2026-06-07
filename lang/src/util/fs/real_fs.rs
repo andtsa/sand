@@ -168,4 +168,43 @@ impl FileOperations for FileSystem {
             "Ensure that you have sufficient permissions",
         ))
     }
+
+    fn is_file<P: AsRef<Path>>(&self, path: P) -> bool {
+        path.as_ref().is_file()
+    }
+
+    fn is_dir<P: AsRef<Path>>(&self, path: P) -> bool {
+        path.as_ref().is_dir()
+    }
+
+    fn read_dir<P: AsRef<Path>>(&self, path: P) -> Result<Vec<PathBuf>, FsError> {
+        fs::read_dir(&path)
+            .with_context(ctx!(
+                "Could not read directory {:?}", path.as_ref();
+                "Ensure that the directory exists and you have permissions to access it",
+            ))?
+            .map(|entry| {
+                entry.map(|e| e.path()).with_context(ctx!(
+                    "Could not read an entry of directory {:?}", path.as_ref();
+                    "Ensure that you have permissions to access it",
+                ))
+            })
+            .collect()
+    }
+
+    fn glob_expand(&self, pattern: &str) -> Result<Vec<PathBuf>, FsError> {
+        let expanded = shellexpand::tilde(pattern).to_string();
+        glob::glob(&expanded)
+            .with_context(ctx!(
+                "{:?} is not a valid glob pattern", expanded;
+                "Ensure that the pattern is well-formed",
+            ))?
+            .map(|res| {
+                res.with_context(ctx!(
+                    "Could not read a path matched by glob pattern {:?}", expanded;
+                    "Ensure that you have permissions to access it",
+                ))
+            })
+            .collect()
+    }
 }

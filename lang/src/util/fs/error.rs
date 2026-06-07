@@ -30,6 +30,10 @@ pub enum FsErrorSource {
     TomlDe(#[from] toml::de::Error),
     #[error(transparent)]
     TomlSer(#[from] toml::ser::Error),
+    #[error(transparent)]
+    GlobPattern(#[from] glob::PatternError),
+    #[error(transparent)]
+    Glob(#[from] glob::GlobError),
     #[error("{0}")]
     Other(String),
 }

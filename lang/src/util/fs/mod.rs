@@ -55,4 +55,71 @@ pub trait FileOperations {
 
     /// Delete a file.
     fn delete_file<P: AsRef<Path>>(&self, path: P) -> Result<(), FsError>;
+
+    /// Check whether `path` points to a regular file.
+    fn is_file<P: AsRef<Path>>(&self, path: P) -> bool;
+
+    /// Check whether `path` points to a directory.
+    fn is_dir<P: AsRef<Path>>(&self, path: P) -> bool;
+
+    /// List the immediate entries of a directory.
+    fn read_dir<P: AsRef<Path>>(&self, path: P) -> Result<Vec<PathBuf>, FsError>;
+
+    /// Expand a glob pattern (after `~` expansion) into the list of matching
+    /// paths. Patterns containing no glob metacharacters simply match
+    /// themselves, if they exist.
+    fn glob_expand(&self, pattern: &str) -> Result<Vec<PathBuf>, FsError>;
+}
+
+/// recursively collect all files under `dir`, depth-first
+pub fn collect_files_recursive(
+    fs: &impl FileOperations,
+    dir: &Path,
+    out: &mut Vec<PathBuf>,
+) -> Result<(), FsError> {
+    for entry in fs.read_dir(dir)? {
+        if fs.is_file(&entry) {
+            // canonicalize so callers always get absolute paths (required
+            // e.g. to build `file://` URLs via `Url::from_file_path`)
+            out.push(fs.canonicalize(&entry)?);
+        } else if fs.is_dir(&entry) {
+            collect_files_recursive(fs, &entry, out)?;
+        }
+    }
+    Ok(())
+}
+
+/// expand a glob pattern (or literal/relative path, or `~`-relative path) to
+/// the list of files it refers to, recursing into any matched directories.
+///
+/// returns an empty vec if nothing matches.
+pub fn expand_to_files(fs: &impl FileOperations, pattern: &str) -> Result<Vec<PathBuf>, FsError> {
+    let mut out = Vec::new();
+
+    let matches = fs.glob_expand(pattern)?;
+    if !matches.is_empty() {
+        for path in matches {
+            if fs.is_file(&path) {
+                // `glob` preserves the (possibly relative) form of the
+                // pattern; canonicalize so callers always get absolute paths
+                out.push(fs.canonicalize(&path)?);
+            } else if fs.is_dir(&path) {
+                collect_files_recursive(fs, &path, &mut out)?;
+            }
+        }
+        return Ok(out);
+    }
+
+    // fall back: treat as a literal path (handles non-glob relative/`~`
+    // paths that `glob` may not resolve, e.g. paths that don't exist yet
+    // relative to cwd but do once canonicalized)
+    if let Ok(canonical) = fs.canonicalize(pattern) {
+        if fs.is_file(&canonical) {
+            out.push(canonical);
+        } else if fs.is_dir(&canonical) {
+            collect_files_recursive(fs, &canonical, &mut out)?;
+        }
+    }
+
+    Ok(out)
 }

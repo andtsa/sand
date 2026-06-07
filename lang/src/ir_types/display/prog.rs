@@ -46,6 +46,11 @@ impl TypedProgram {
 
         // now we can start building the formatted code per file
         for (file, modules) in files {
+            // do not print the core file stub
+            if ctx.is_core_module(file) {
+                continue;
+            }
+
             // todo: initialise the string builder with a gross estimate of the final size
             // based on the AST's allocation size
             let mut file_out = String::new();

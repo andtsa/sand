@@ -397,6 +397,10 @@ impl<'run> CompileCtx<'run> {
         core_file
     }
 
+    pub fn is_core_module(&self, file: FileRef) -> bool {
+        file.0 == usize::MAX - 1
+    }
+
     pub fn get_mod_by_name(&self, name: &str) -> Option<ModuleRef> {
         self.project_modules
             .iter()

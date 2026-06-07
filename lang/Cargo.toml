@@ -8,6 +8,7 @@ default-run = "debug"
 anstyle = "1.0.14"
 anyhow = { workspace = true }
 bimap.workspace = true
+glob = "0.3.3"
 im = { workspace = true }
 inkwell.workspace = true
 pest = { workspace = true }

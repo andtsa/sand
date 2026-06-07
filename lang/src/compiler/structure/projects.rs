@@ -3,9 +3,13 @@
 use std::fmt::Display;
 use std::path::Path;
 use std::path::PathBuf;
+use std::str::FromStr;
 
 use thiserror::Error;
 use url::Url;
+
+use crate::util::fs::FileOperations;
+use crate::util::fs::expand_to_files;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ModuleRef(pub(in crate::compiler) usize);
@@ -111,8 +115,16 @@ pub struct FileRef(pub(in crate::compiler) usize);
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash, serde::Deserialize)]
 pub struct ProjectConfig {
-    //todo
-    pub tracked_files: Vec<Url>,
+    pub project: ProjectSection,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Eq, Hash, serde::Deserialize)]
+pub struct ProjectSection {
+    #[serde(default)]
+    pub name: Option<String>,
+
+    #[serde(default)]
+    pub sources: Vec<String>,
 }
 
 #[derive(Debug, Error)]
@@ -121,6 +133,23 @@ pub struct UriError {
     uri: String,
     message: String,
 }
+
+#[derive(Debug, Error)]
+pub enum ConfigError {
+    #[error(transparent)]
+    GlobPatternError(#[from] glob::PatternError),
+    #[error(transparent)]
+    GlobError(#[from] glob::GlobError),
+    #[error(transparent)]
+    UriError(#[from] UriError),
+    #[error("could not read path {0:?}")]
+    PathError(String),
+}
+
+pub fn as_url<P: AsRef<Path>>(path: P) -> Result<Url, UriError> {
+    Url::from_file_path(path.as_ref()).map_err(|_| UriError::from_path(path.as_ref()))
+}
+
 impl UriError {
     pub fn new(uri: Url, message: String) -> Self {
         Self {
@@ -154,5 +183,56 @@ impl UriError {
 impl Display for ModuleInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.name)
+    }
+}
+
+impl ProjectConfig {
+    /// try to parse each source as a [`Url`].
+    ///
+    /// if that fails, treat it as a glob pattern / path and expand it via
+    /// [`expand_to_files`], recursing into any matched directories.
+    ///
+    /// relative patterns (anything that isn't absolute or `~`-relative) are
+    /// resolved against `root` — the directory containing the project's
+    /// `sand.toml` — rather than the process's current working directory, so
+    /// that `sand-cli --config some/dir/sand.toml` works regardless of where
+    /// it's invoked from.
+    ///
+    /// convert all resulting paths to [`Url`]s, and return the combined list.
+    pub fn urls(&self, fs: &impl FileOperations, root: &Path) -> Result<Vec<Url>, ConfigError> {
+        let mut urls = Vec::new();
+
+        for file in &self.project.sources {
+            // a remote/absolute URL (http://, ssh://, file://, ...).
+            // reject single-letter "schemes" like `C:` (Windows drive letters)
+            // which `Url::from_str` would otherwise misparse.
+            if let Ok(url) = Url::from_str(file)
+                && url.scheme().len() > 1
+            {
+                urls.push(url);
+                continue;
+            }
+
+            // resolve relative (non-`~`) patterns against the project root
+            let resolved: PathBuf = if file.starts_with('~') || Path::new(file).is_absolute() {
+                PathBuf::from(file)
+            } else {
+                root.join(file)
+            };
+            let pattern = resolved.to_string_lossy().to_string();
+
+            let paths = expand_to_files(fs, &pattern)
+                .map_err(|_| ConfigError::PathError(file.to_string()))?;
+
+            if paths.is_empty() {
+                return Err(ConfigError::PathError(file.to_string()));
+            }
+
+            for path in paths {
+                urls.push(as_url(&path)?);
+            }
+        }
+
+        Ok(urls)
     }
 }

@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use url::Url;
 
 use crate::castles::project::Project;
+use crate::compiler::structure::ConfigError;
 use crate::compiler::structure::ProjectConfig;
 use crate::compiler::structure::UriError;
 use crate::internal_bug;
@@ -41,6 +42,8 @@ pub enum FatalProjectCreationError {
     Fs(#[from] FsError),
     #[error("project config file not found at {path:?}")]
     MissingConfig { path: PathBuf },
+    #[error(transparent)]
+    Config(#[from] ConfigError),
 }
 
 impl Project {
@@ -57,15 +60,21 @@ impl Project {
         let mut project = Project::empty();
         let mut warnings = Vec::new();
         let config_path = config.as_ref().to_path_buf();
+        tracing::debug!("loading project from config: {config_path:?}");
 
         let config = ProjectConfig::load(&project.fs, &config_path)?.ok_or_else(|| {
             FatalProjectCreationError::MissingConfig {
                 path: config_path.clone(),
             }
         })?;
+        let project_root = config_path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
         project.config_src = Some(config_path);
 
-        for url in &config.tracked_files {
+        let urls = config.urls(&project.fs, &project_root)?;
+        for url in &urls {
             match url
                 .to_file_path()
                 .map_err(|_| UriError::to_path(url))
@@ -105,6 +114,8 @@ impl Project {
     pub fn from_paths(
         paths: &[PathBuf],
     ) -> Result<ProjectCreationResult, FatalProjectCreationError> {
+        let span = tracing::debug_span!("loading project from paths");
+        let _g1 = span.enter();
         let mut project = Project::empty();
         let mut warnings = Vec::new();
         for path in paths {
@@ -112,6 +123,7 @@ impl Project {
             let Ok(uri) = Url::from_file_path(&pb) else {
                 internal_bug!("url from path failed after canonicalize");
             };
+            tracing::debug!("loading file: {path:?}");
             let content = project.fs.read_utf8(pb)?;
             if let Err(e) = project.insert_file(uri.clone(), content) {
                 warnings.push(SetupWarning {

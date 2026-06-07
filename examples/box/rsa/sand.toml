@@ -1,7 +1,8 @@
-
-tracked_files = [
+[project]
+name = "box_rsa"
+sources = [
     "dec.sand",
     "enc.sand",
-    "m.sand",
+    "m/",
     "main.sand",
 ]
