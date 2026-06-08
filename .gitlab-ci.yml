@@ -1,0 +1,22 @@
+variables:
+  CARGO_HOME: ${CI_PROJECT_DIR}/.cargo
+  LLVM_SYS_210_PREFIX: /usr/lib/llvm-21
+
+cache:
+  key: ${CI_COMMIT_REF_SLUG}
+  paths:
+    - .cargo/registry/
+    - .cargo/git/
+    - target/
+
+test:
+  image: rust:latest
+  before_script:
+    - apt-get update -qq
+    - apt-get install -y -qq lsb-release wget gnupg
+    - wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
+    - echo "deb http://apt.llvm.org/bookworm/ llvm-toolchain-bookworm-21 main" >> /etc/apt/sources.list.d/llvm.list
+    - apt-get update -qq
+    - apt-get install -y -qq llvm-21-dev libpolly-21-dev
+  script:
+    - cargo test
