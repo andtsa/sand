@@ -19,6 +19,7 @@ use crate::lang::ops::Bop;
 use crate::lang::ops::CompOp;
 use crate::lang::ops::Uop;
 use crate::lang::types::Ty;
+use crate::lang::types::TyKind;
 
 pub struct LlvmCodegen<'ctx> {
     context: &'ctx inkwell::context::Context,
@@ -81,12 +82,12 @@ impl<'ctx> LlvmCodegen<'ctx> {
         let param_types: Vec<_> = f
             .params
             .iter()
-            .map(|p| self.llvm_type(p.ty).into())
+            .map(|p| self.llvm_type(ctx, p.ty).into())
             .collect();
 
         let fn_type = match f.ret_type {
-            Ty::Unit => self.context.void_type().fn_type(&param_types, false),
-            ty => self.llvm_type(ty).fn_type(&param_types, false),
+            Ty::UNIT => self.context.void_type().fn_type(&param_types, false),
+            ty => self.llvm_type(ctx, ty).fn_type(&param_types, false),
         };
 
         let name = ctx.original_fun_name(f.name);
@@ -112,7 +113,7 @@ impl<'ctx> LlvmCodegen<'ctx> {
             .map(|decl| {
                 self
                     .builder
-                    .build_alloca(self.llvm_type(decl.ty), "local")
+                    .build_alloca(self.llvm_type(ctx, decl.ty), "local")
                     .map(|ptr|
                 (decl.id, ptr))
             })
@@ -261,7 +262,7 @@ impl<'ctx> LlvmCodegen<'ctx> {
     ) -> Result<llvm::BasicValueEnum<'ctx>, CodegenError> {
         match op {
             Operand::Copy(Place { local }) => {
-                let ty = self.llvm_type(fn_ctx.local_tys[local]);
+                let ty = self.llvm_type(fn_ctx.compile_ctx, fn_ctx.local_tys[local]);
                 Ok(self.builder.build_load(ty, fn_ctx.locals[local], "load")?)
             }
             Operand::Const(c) => Ok(self.emit_constant(c)),
@@ -377,8 +378,9 @@ impl<'ctx> LlvmCodegen<'ctx> {
 
         for arg in args {
             let val = self.emit_operand(arg, fn_ctx)?;
-            match Self::operand_ty(arg, fn_ctx) {
-                Ty::Int => {
+            let ty = Self::operand_ty(arg, fn_ctx);
+            match fn_ctx.compile_ctx.ty_kind(ty) {
+                TyKind::Int => {
                     let fmt = self
                         .builder
                         .build_global_string_ptr("%ld ", "fmt_int")?
@@ -386,7 +388,7 @@ impl<'ctx> LlvmCodegen<'ctx> {
                     self.builder
                         .build_call(printf, &[fmt.into(), val.into()], "")?;
                 }
-                Ty::Bool => {
+                TyKind::Bool => {
                     // variadic call, i1 must be promoted to i32
                     let as_i32 = self.builder.build_int_z_extend(
                         val.into_int_value(),
@@ -400,8 +402,9 @@ impl<'ctx> LlvmCodegen<'ctx> {
                     self.builder
                         .build_call(printf, &[fmt.into(), as_i32.into()], "")?;
                 }
-                Ty::Unit => {}
-                Ty::Enum(er) => {
+                TyKind::Unit => {}
+                TyKind::Enum(er) => {
+                    let er = *er;
                     // build (or reuse) a global [N x ptr] variant-name table for
                     // this enum, then index into it at runtime with the variant
                     // index stored in `val`.
@@ -431,7 +434,7 @@ impl<'ctx> LlvmCodegen<'ctx> {
                     self.builder
                         .build_call(printf, &[fmt.into(), loaded.into()], "")?;
                 }
-                ty => panic!("unexpected type in intrinsic: {:?}", ty),
+                _ => panic!("unexpected type in intrinsic: {:?}", ty),
             }
         }
 
@@ -509,11 +512,13 @@ impl<'ctx> LlvmCodegen<'ctx> {
     fn operand_ty(op: &Operand, fn_ctx: &FnCtx) -> Ty {
         match op {
             Operand::Copy(Place { local }) => fn_ctx.local_tys[local],
-            Operand::Const(Constant::Int(_)) => Ty::Int,
-            Operand::Const(Constant::Bool(_)) => Ty::Bool,
-            Operand::Const(Constant::Unit) => Ty::Unit,
+            Operand::Const(Constant::Int(_)) => Ty::INT,
+            Operand::Const(Constant::Bool(_)) => Ty::BOOL,
+            Operand::Const(Constant::Unit) => Ty::UNIT,
             // The variant index is stored as i64; use Int as the LLVM type for now.
-            Operand::Const(Constant::EnumVariant { enum_ref, .. }) => Ty::Enum(*enum_ref),
+            Operand::Const(Constant::EnumVariant { enum_ref, .. }) => {
+                fn_ctx.compile_ctx.enum_ty(*enum_ref)
+            }
         }
     }
 
@@ -635,12 +640,12 @@ impl<'ctx> LlvmCodegen<'ctx> {
 
     // type helpers
 
-    fn llvm_type(&self, ty: Ty) -> inkwell::types::BasicTypeEnum<'ctx> {
-        match ty {
-            Ty::Int => self.context.i64_type().into(),
-            Ty::Bool => self.context.bool_type().into(),
-            Ty::Unit => self.context.struct_type(&[], false).into(),
-            Ty::Enum(_) => self.context.i64_type().into(),
+    fn llvm_type(&self, ctx: &CompileCtx, ty: Ty) -> inkwell::types::BasicTypeEnum<'ctx> {
+        match ctx.ty_kind(ty) {
+            TyKind::Int => self.context.i64_type().into(),
+            TyKind::Bool => self.context.bool_type().into(),
+            TyKind::Unit => self.context.struct_type(&[], false).into(),
+            TyKind::Enum(_) => self.context.i64_type().into(),
             _ => panic!("no LLVM type for {:?}", ty),
         }
     }

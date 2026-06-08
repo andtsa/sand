@@ -125,7 +125,8 @@ impl<'fmt, 'run> Iterator for TypedExprFormatter<'fmt, 'run> {
                         self.stack.push(Token(";".into(), Newline(Same)));
                         self.stack.push(Exp(&val.expr));
                         self.stack.push(Token("=".into(), Space));
-                        self.stack.push(Token(ty.to_string(), Space));
+                        self.stack
+                            .push(Token(self.ctx.display_ty(*ty).to_string(), Space));
                         self.stack.push(Token(":".into(), Space));
                         // name carries Nothing so there is no space before ":"
                         self.stack

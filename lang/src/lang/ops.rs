@@ -39,10 +39,10 @@ impl Bop {
         use Bop::*;
         match self {
             Plus | Minus | Mult | Div | Pow => {
-                if left == Ty::Int && right == Ty::Int {
-                    Ok(Ty::Int)
+                if left == Ty::INT && right == Ty::INT {
+                    Ok(Ty::INT)
                 } else {
-                    Err(Ty::Int)
+                    Err(Ty::INT)
                 }
             }
             And | Or | Xor => {
@@ -55,15 +55,15 @@ impl Bop {
             Comp(op) => {
                 match op {
                     CompOp::Ge | CompOp::Le | CompOp::Gt | CompOp::Lt => {
-                        if left == Ty::Int && right == Ty::Int {
-                            Ok(Ty::Bool)
+                        if left == Ty::INT && right == Ty::INT {
+                            Ok(Ty::BOOL)
                         } else {
-                            Err(Ty::Int)
+                            Err(Ty::INT)
                         }
                     }
                     CompOp::Eq | CompOp::Ne => {
                         if left == right {
-                            Ok(Ty::Bool)
+                            Ok(Ty::BOOL)
                         } else {
                             Err(left) // could be either type, diagnostic is based on the first operand
                         }
@@ -81,19 +81,19 @@ impl Uop {
         use Uop::*;
         match self {
             Neg => {
-                if right == Ty::Int {
-                    Ok(Ty::Int)
+                if right == Ty::INT {
+                    Ok(Ty::INT)
                 } else {
-                    Err(Ty::Int)
+                    Err(Ty::INT)
                 }
             }
             Not => {
-                if right == Ty::Bool {
-                    Ok(Ty::Bool)
-                } else if right == Ty::Int {
-                    Ok(Ty::Int)
+                if right == Ty::BOOL {
+                    Ok(Ty::BOOL)
+                } else if right == Ty::INT {
+                    Ok(Ty::INT)
                 } else {
-                    Err(Ty::Bool)
+                    Err(Ty::BOOL)
                 }
             }
         }

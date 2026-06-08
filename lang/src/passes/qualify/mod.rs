@@ -5,20 +5,21 @@
 //! and returning a single instance of qhir
 
 use crate::compiler::context::CompileCtx;
+use crate::compiler::optics::UniqPrism;
 use crate::compiler::structure::FunRef;
 use crate::compiler::structure::FunSig;
 use crate::compiler::structure::Map;
+use crate::compiler::structure::ModuleInfo;
 use crate::compiler::structure::ModuleRef;
 use crate::compiler::structure::Range;
 use crate::compiler::structure::Set;
-use crate::internal_bug;
 use crate::ir_types::hhir::HirFnCall;
-use crate::ir_types::hhir::HirVar;
 use crate::ir_types::hhir::ProgramModule;
 use crate::ir_types::hhir::{self};
 use crate::ir_types::qhir::Program;
 use crate::ir_types::qhir::{self};
 use crate::lang::intrinsics::Intrinsic;
+use crate::lang::types::EnumRef;
 use crate::passes::qualify::error::QualifyError;
 
 pub mod error;
@@ -93,6 +94,134 @@ impl<'qual, 'run> QualfiyCtx<'qual, 'run> {
                 source_module: self.compile_ctx.module_info(&from_module),
                 range,
             })
+    }
+
+    /// Composed getter, second half: `(EnumRef, variant name)` ──▶
+    /// `variant_idx`.
+    ///
+    /// Factored out of [`Self::resolve_constructor`] /
+    /// [`Self::resolve_external_constructor`] so the only thing that differs
+    /// between a local and an external constructor lookup — *how the
+    /// `EnumRef` is found* — is the only thing duplicated.
+    fn resolve_variant_idx(
+        &self,
+        enum_ref: EnumRef,
+        display_name: &str,
+        variant: &str,
+        range: Range,
+        module_name: &ModuleRef,
+    ) -> Result<usize, QualifyError> {
+        self.compile_ctx
+            .lookup_variant(enum_ref, variant)
+            .ok_or_else(|| QualifyError::UnknownVariant {
+                type_name: display_name.to_string(),
+                variant: variant.to_string(),
+                range,
+                source_module: self.compile_ctx.module_info(module_name),
+            })
+    }
+
+    /// A **composed getter**: `(type_name, variant)` ──▶ `(EnumRef,
+    /// variant_idx)`.
+    ///
+    /// This is the two-step lookup `lookup_enum_by_name` then `lookup_variant`
+    /// that previously appeared, inline and slightly differently worded, in
+    /// three separate places (`Constructor` / `ExternalConstructor` expressions
+    /// and `Constructor` patterns). Bundling it into one getter is exactly
+    /// `to lookupEnumByName . to lookupVariant` composition in `lens` terms —
+    /// chaining two partial lookups into one:
+    ///
+    /// ```haskell
+    /// resolveEnumAndVariant
+    ///   :: (String -> Range -> ModuleInfo -> QualifyError)  -- "type not found" error
+    ///   -> String -> String -> Qualify (EnumRef, Int)
+    /// resolveEnumAndVariant notFound t v = do
+    ///   er <- lookupEnumByName t  `orThrow` notFound t
+    ///   ix <- lookupVariant er v  `orThrow` UnknownVariant t v
+    ///   pure (er, ix)
+    /// ```
+    ///
+    /// The only thing that differs between resolving a *constructor
+    /// expression* and a *constructor pattern* is which `QualifyError`
+    /// variant ("unknown constructor type" vs. "unknown pattern type") to
+    /// raise when the type name doesn't resolve — so that one decision is
+    /// taken as a parameter (`not_found`) rather than duplicating the whole
+    /// chain. This is the getter analogue of passing a `Prism` in to pick
+    /// which constructor to `review` on failure.
+    fn resolve_enum_and_variant(
+        &self,
+        type_name: &str,
+        variant: &str,
+        range: Range,
+        module_name: &ModuleRef,
+        not_found: impl FnOnce(String, Range, ModuleInfo) -> QualifyError,
+    ) -> Result<(EnumRef, usize), QualifyError> {
+        let enum_ref = self
+            .compile_ctx
+            .lookup_enum_by_name(type_name)
+            .ok_or_else(|| {
+                not_found(
+                    type_name.to_string(),
+                    range,
+                    self.compile_ctx.module_info(module_name),
+                )
+            })?;
+        let variant_idx =
+            self.resolve_variant_idx(enum_ref, type_name, variant, range, module_name)?;
+        Ok((enum_ref, variant_idx))
+    }
+
+    /// [`Self::resolve_enum_and_variant`] specialised to expression-position
+    /// constructors, which raise [`QualifyError::UnknownConstructorType`] on
+    /// an unresolvable type name.
+    fn resolve_constructor(
+        &self,
+        type_name: &str,
+        variant: &str,
+        range: Range,
+        module_name: &ModuleRef,
+    ) -> Result<(EnumRef, usize), QualifyError> {
+        self.resolve_enum_and_variant(
+            type_name,
+            variant,
+            range,
+            module_name,
+            |name, range, source_module| QualifyError::UnknownConstructorType {
+                name,
+                range,
+                source_module,
+            },
+        )
+    }
+
+    /// The external-module variant of [`Self::resolve_constructor`]: first
+    /// resolves `mod_name -> ModuleRef` (a getter in its own right,
+    /// [`Self::get_module_by_name`]), then looks the enum up *scoped to that
+    /// module* rather than globally — i.e. `lookup_enum_by_name` is replaced
+    /// by `to (resolve mod_name) . lookup_enum_in_module`. The display name
+    /// used in error messages is qualified as `module::type` to match the
+    /// surface syntax the user wrote.
+    fn resolve_external_constructor(
+        &self,
+        mod_name: &str,
+        type_name: &str,
+        variant: &str,
+        range: Range,
+        module_name: &ModuleRef,
+    ) -> Result<(EnumRef, usize), QualifyError> {
+        let mod_ref = self.get_module_by_name(mod_name, *module_name, range)?;
+        let display_name = format!("{mod_name}::{type_name}");
+        let enum_ref = self
+            .compile_ctx
+            .lookup_enum_in_module(mod_ref, type_name)
+            .ok_or_else(|| QualifyError::UnknownConstructorType {
+                name: display_name.clone(),
+                range,
+                source_module: self.compile_ctx.module_info(module_name),
+            })?;
+        let variant_idx =
+            self.resolve_variant_idx(enum_ref, &display_name, variant, range, module_name)?;
+        Ok((enum_ref, variant_idx))
     }
 }
 
@@ -189,14 +318,11 @@ fn qualify_function(
 }
 
 fn qualify_parameter(_q: &mut QualfiyCtx<'_, '_>, param: hhir::Parameter) -> qhir::Parameter {
-    let HirVar::Uniq(u) = param.name else {
-        internal_bug!(
-            "encountered unqualified variable after uniquify: {:?}",
-            param.name
-        );
-    };
     qhir::Parameter {
-        name: u,
+        name: UniqPrism::expect(
+            param.name,
+            "encountered unqualified variable after uniquify",
+        ),
         range: param.range,
         ty: param.ty,
         is_mutable: param.is_mutable,
@@ -246,30 +372,14 @@ fn qualify_expr(
             body: Box::new(qualify_expr(q, module_name, *body)?),
         },
         hhir::Expression::Var(v) => {
-            let HirVar::Uniq(u) = v else {
-                internal_bug!("unqualified variable after uniquify: {v:?}");
-            };
+            let u = UniqPrism::expect(v, "unqualified variable after uniquify");
             qhir::Expression::Var(u)
         }
         hhir::Expression::Constructor { type_name, variant } => {
-            let er = q
-                .compile_ctx
-                .lookup_enum_by_name(&type_name)
-                .ok_or_else(|| QualifyError::UnknownConstructorType {
-                    name: type_name.clone(),
-                    range: expr.range,
-                    source_module: q.compile_ctx.module_info(module_name),
-                })?;
-            let variant_idx = q.compile_ctx.lookup_variant(er, &variant).ok_or_else(|| {
-                QualifyError::UnknownVariant {
-                    type_name: type_name.clone(),
-                    variant: variant.clone(),
-                    range: expr.range,
-                    source_module: q.compile_ctx.module_info(module_name),
-                }
-            })?;
+            let (enum_ref, variant_idx) =
+                q.resolve_constructor(&type_name, &variant, expr.range, module_name)?;
             qhir::Expression::Constructor {
-                enum_ref: er,
+                enum_ref,
                 variant_idx,
             }
         }
@@ -278,25 +388,15 @@ fn qualify_expr(
             type_name,
             variant,
         } => {
-            let mod_ref = q.get_module_by_name(&mod_name, *module_name, expr.range)?;
-            let er = q
-                .compile_ctx
-                .lookup_enum_in_module(mod_ref, &type_name)
-                .ok_or_else(|| QualifyError::UnknownConstructorType {
-                    name: format!("{mod_name}::{type_name}"),
-                    range: expr.range,
-                    source_module: q.compile_ctx.module_info(module_name),
-                })?;
-            let variant_idx = q.compile_ctx.lookup_variant(er, &variant).ok_or_else(|| {
-                QualifyError::UnknownVariant {
-                    type_name: format!("{mod_name}::{type_name}"),
-                    variant: variant.clone(),
-                    range: expr.range,
-                    source_module: q.compile_ctx.module_info(module_name),
-                }
-            })?;
+            let (enum_ref, variant_idx) = q.resolve_external_constructor(
+                &mod_name,
+                &type_name,
+                &variant,
+                expr.range,
+                module_name,
+            )?;
             qhir::Expression::Constructor {
-                enum_ref: er,
+                enum_ref,
                 variant_idx,
             }
         }
@@ -380,24 +480,19 @@ fn qualify_pattern(
 ) -> Result<qhir::QPattern, QualifyError> {
     match pattern {
         hhir::HirPattern::Constructor { type_name, variant } => {
-            let er = q
-                .compile_ctx
-                .lookup_enum_by_name(&type_name)
-                .ok_or_else(|| QualifyError::UnknownPatternType {
-                    name: type_name.clone(),
+            let (enum_ref, variant_idx) = q.resolve_enum_and_variant(
+                &type_name,
+                &variant,
+                range,
+                module_name,
+                |name, range, source_module| QualifyError::UnknownPatternType {
+                    name,
                     range,
-                    source_module: q.compile_ctx.module_info(module_name),
-                })?;
-            let variant_idx = q.compile_ctx.lookup_variant(er, &variant).ok_or_else(|| {
-                QualifyError::UnknownVariant {
-                    type_name: type_name.clone(),
-                    variant: variant.clone(),
-                    range,
-                    source_module: q.compile_ctx.module_info(module_name),
-                }
-            })?;
+                    source_module,
+                },
+            )?;
             Ok(qhir::QPattern::Variant {
-                enum_ref: er,
+                enum_ref,
                 variant_idx,
             })
         }
@@ -413,9 +508,7 @@ fn qualify_statement(
 ) -> Result<qhir::Statement, QualifyError> {
     match stmt {
         hhir::Statement::Assignment { name, range, val } => {
-            let HirVar::Uniq(uv) = name else {
-                internal_bug!("unqualified variable in assignment after uniquify: {name:?}");
-            };
+            let uv = UniqPrism::expect(name, "unqualified variable in assignment after uniquify");
             Ok(qhir::Statement::Assignment {
                 name: uv,
                 range,
@@ -429,9 +522,7 @@ fn qualify_statement(
             is_mutable,
             val,
         } => {
-            let HirVar::Uniq(uv) = name else {
-                internal_bug!("unqualified variable in declaration after uniquify: {name:?}");
-            };
+            let uv = UniqPrism::expect(name, "unqualified variable in declaration after uniquify");
             Ok(qhir::Statement::Declaration {
                 name: uv,
                 ty,

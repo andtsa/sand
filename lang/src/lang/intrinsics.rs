@@ -35,50 +35,50 @@ fn intrinsics() -> Map<Intrinsic, (FnName, IntrinsicSig)> {
         (
             Intrinsic::Print,
             IntrinsicSig {
-                args: vec![Ty::Top],
-                ret_ty: Ty::Unit,
+                args: vec![Ty::TOP],
+                ret_ty: Ty::UNIT,
             },
         ),
         (
             Intrinsic::Println,
             IntrinsicSig {
-                args: vec![Ty::Top],
-                ret_ty: Ty::Unit,
+                args: vec![Ty::TOP],
+                ret_ty: Ty::UNIT,
             },
         ),
         (
             Intrinsic::Abs,
             IntrinsicSig {
-                args: vec![Ty::Int],
-                ret_ty: Ty::Int,
+                args: vec![Ty::INT],
+                ret_ty: Ty::INT,
             },
         ),
         (
             Intrinsic::Min,
             IntrinsicSig {
-                args: vec![Ty::Int, Ty::Int],
-                ret_ty: Ty::Int,
+                args: vec![Ty::INT, Ty::INT],
+                ret_ty: Ty::INT,
             },
         ),
         (
             Intrinsic::Max,
             IntrinsicSig {
-                args: vec![Ty::Int, Ty::Int],
-                ret_ty: Ty::Int,
+                args: vec![Ty::INT, Ty::INT],
+                ret_ty: Ty::INT,
             },
         ),
         (
             Intrinsic::ReadInt,
             IntrinsicSig {
                 args: vec![],
-                ret_ty: Ty::Int,
+                ret_ty: Ty::INT,
             },
         ),
         (
             Intrinsic::Exit,
             IntrinsicSig {
-                args: vec![Ty::Int],
-                ret_ty: Ty::Unit,
+                args: vec![Ty::INT],
+                ret_ty: Ty::UNIT,
             },
         ),
     ]

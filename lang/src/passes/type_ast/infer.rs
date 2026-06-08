@@ -7,6 +7,7 @@ use crate::ir_types::typed_hir;
 use crate::ir_types::typed_hir::TypedFunction;
 use crate::lang::intrinsics::INTRINSICS;
 use crate::lang::types::Ty;
+use crate::lang::types::TyKind;
 use crate::passes::type_ast::TypeEnv;
 use crate::passes::type_ast::check::check;
 use crate::passes::type_ast::check::type_check_match_arms;
@@ -115,17 +116,17 @@ pub(super) fn infer(
         qhir::Expression::Int(x) => Ok(typed_hir::Expr {
             expr: typed_hir::Expression::Int(*x),
             range: expr.range,
-            ty: Ty::Int,
+            ty: Ty::INT,
         }),
         qhir::Expression::Bool(x) => Ok(typed_hir::Expr {
             expr: typed_hir::Expression::Bool(*x),
             range: expr.range,
-            ty: Ty::Bool,
+            ty: Ty::BOOL,
         }),
         qhir::Expression::Unit => Ok(typed_hir::Expr {
             expr: typed_hir::Expression::Unit,
             range: expr.range,
-            ty: Ty::Unit,
+            ty: Ty::UNIT,
         }),
         qhir::Expression::Var(x) => {
             let (ty, _) = env
@@ -150,7 +151,7 @@ pub(super) fn infer(
                 variant_idx: *variant_idx,
             },
             range: expr.range,
-            ty: Ty::Enum(*enum_ref),
+            ty: ctx.enum_ty(*enum_ref),
         }),
 
         qhir::Expression::Tag { variant } => Err(AstTypeError::TagWithoutContext {
@@ -179,7 +180,7 @@ pub(super) fn infer(
                 .accepts_types(left_expr.ty, right_expr.ty)
                 .map_err(|expected_ty| AstTypeError::TypeError {
                     message: format!(
-                        "operator '{:?}' does not accept types {:?} and {:?}",
+                        "operator '{:?}' does not accept types {} and {}",
                         op, left_expr.ty, right_expr.ty
                     ),
                     expected: expected_ty,
@@ -204,7 +205,7 @@ pub(super) fn infer(
                 op.accepts_type(right_expr.ty)
                     .map_err(|expected_ty| AstTypeError::TypeError {
                         message: format!(
-                            "operator '{:?}' does not accept type {:?}",
+                            "operator '{:?}' does not accept type {}",
                             op, right_expr.ty
                         ),
                         expected: expected_ty,
@@ -223,10 +224,10 @@ pub(super) fn infer(
         }
         qhir::Expression::If { cond, t, f } => {
             let cond_expr = infer(ctx, env, cond)?;
-            if cond_expr.ty != Ty::Bool {
+            if cond_expr.ty != Ty::BOOL {
                 return Err(AstTypeError::TypeError {
-                    message: format!("condition of 'if' must be Bool, found {:?}", cond_expr.ty),
-                    expected: Ty::Bool,
+                    message: format!("condition of 'if' must be Bool, found {}", cond_expr.ty),
+                    expected: Ty::BOOL,
                     found: cond_expr.ty,
                     range: cond.range,
                 });
@@ -240,7 +241,7 @@ pub(super) fn infer(
                     if t_expr.ty != f_expr.ty {
                         return Err(AstTypeError::TypeError {
                             message: format!(
-                                "branches of 'if' expression must have the same type, found {:?} and {:?}",
+                                "branches of 'if' expression must have the same type, found {} and {}",
                                 t_expr.ty, f_expr.ty
                             ),
                             expected: t_expr.ty,
@@ -252,13 +253,13 @@ pub(super) fn infer(
                     (f_expr, ty)
                 }
                 None => {
-                    if t_expr.ty != Ty::Unit {
+                    if t_expr.ty != Ty::UNIT {
                         return Err(AstTypeError::TypeError {
                             message: format!(
-                                "'if' without 'else' must have type Unit, but then-branch has type {:?}",
+                                "'if' without 'else' must have type Unit, but then-branch has type {}",
                                 t_expr.ty
                             ),
-                            expected: Ty::Unit,
+                            expected: Ty::UNIT,
                             found: t_expr.ty,
                             range: t.range,
                         });
@@ -266,9 +267,9 @@ pub(super) fn infer(
                     let f_expr = typed_hir::Expr {
                         expr: typed_hir::Expression::Unit,
                         range: expr.range,
-                        ty: Ty::Unit,
+                        ty: Ty::UNIT,
                     };
-                    (f_expr, Ty::Unit)
+                    (f_expr, Ty::UNIT)
                 }
             };
 
@@ -284,13 +285,10 @@ pub(super) fn infer(
         }
         qhir::Expression::While { cond, body } => {
             let cond_expr = infer(ctx, env, cond)?;
-            if cond_expr.ty != Ty::Bool {
+            if cond_expr.ty != Ty::BOOL {
                 return Err(AstTypeError::TypeError {
-                    message: format!(
-                        "condition of 'while' must be Bool, found {:?}",
-                        cond_expr.ty
-                    ),
-                    expected: Ty::Bool,
+                    message: format!("condition of 'while' must be Bool, found {}", cond_expr.ty),
+                    expected: Ty::BOOL,
                     found: cond_expr.ty,
                     range: cond.range,
                 });
@@ -304,7 +302,7 @@ pub(super) fn infer(
                     body: Box::new(body_expr),
                 },
                 range: expr.range,
-                ty: Ty::Unit,
+                ty: Ty::UNIT,
             })
         }
         qhir::Expression::Call { fn_name, args } => {
@@ -340,7 +338,7 @@ pub(super) fn infer(
                 .map(|(i, (found, expected))| {
                     Err::<(), AstTypeError>(AstTypeError::FunctionCallTypeError {
                         message: format!(
-                            "argument {} of function '{}' expects type {:?} but found {:?}",
+                            "argument {} of function '{}' expects type {} but found {}",
                             i + 1,
                             ctx.original_fun_name(*fn_name),
                             expected,
@@ -394,7 +392,7 @@ pub(super) fn infer(
                 .map(|(i, (found, expected))| {
                     Err::<(), AstTypeError>(AstTypeError::FunctionCallTypeError {
                         message: format!(
-                            "argument {} of intrinsic '{}' expects type {:?} but found {:?}",
+                            "argument {} of intrinsic '{}' expects type {} but found {}",
                             i + 1,
                             fn_name,
                             expected,
@@ -433,7 +431,7 @@ pub(super) fn infer(
                 let ret_ty = t_expr.ty;
                 (Some(Box::new(t_expr)), ret_ty)
             } else {
-                (None, Ty::Unit)
+                (None, Ty::UNIT)
             };
 
             Ok(typed_hir::Expr {
@@ -447,17 +445,17 @@ pub(super) fn infer(
         }
         qhir::Expression::Match { scrutinee, arms } => {
             let scrut_expr = infer(ctx, env, scrutinee)?;
-            let enum_ref = match scrut_expr.ty {
-                Ty::Enum(er) => er,
-                ty => {
+            let enum_ref = match ctx.ty_kind(scrut_expr.ty) {
+                TyKind::Enum(er) => *er,
+                _ => {
                     return Err(AstTypeError::MatchNonEnumScrutinee {
-                        ty,
+                        ty: scrut_expr.ty,
                         range: scrutinee.range,
                     });
                 }
             };
             let typed_arms = type_check_match_arms(ctx, env, arms, enum_ref, None, expr.range)?;
-            let result_ty = typed_arms.first().map(|a| a.body.ty).unwrap_or(Ty::Unit);
+            let result_ty = typed_arms.first().map(|a| a.body.ty).unwrap_or(Ty::UNIT);
             Ok(typed_hir::Expr {
                 expr: typed_hir::Expression::Match {
                     scrutinee: Box::new(scrut_expr),

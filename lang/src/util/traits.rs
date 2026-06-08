@@ -2,7 +2,6 @@ use std::fmt;
 
 use crate::ir_types::hhir::*;
 use crate::lang::ops::*;
-use crate::lang::types::*;
 
 impl fmt::Display for Expr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -146,19 +145,6 @@ impl fmt::Display for Uop {
         match self {
             Uop::Neg => write!(f, "-"),
             Uop::Not => write!(f, "!"),
-        }
-    }
-}
-
-impl fmt::Display for Ty {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Ty::Int => write!(f, "Int"),
-            Ty::Bool => write!(f, "Bool"),
-            Ty::Unit => write!(f, "Unit"),
-            Ty::Top => write!(f, "Top"),
-            Ty::Bottom => write!(f, "Bottom"),
-            Ty::Enum(er) => write!(f, "Enum({:?})", er),
         }
     }
 }

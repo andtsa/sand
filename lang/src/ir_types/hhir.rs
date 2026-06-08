@@ -74,6 +74,109 @@ pub struct Expr {
     pub range: Range,
 }
 
+impl Expr {
+    /// A **traversal** over the immediate sub-expressions of an `Expr`.
+    ///
+    /// Applies the fallible transformation `f` to every direct child `Expr`
+    /// and reconstructs the parent node around the results, threading the
+    /// original `range` through unchanged. Terminal nodes that contain no
+    /// sub-expressions (`Var`, `Int`, `Bool`, `Unit`, `Constructor`,
+    /// `ExternalConstructor`, `Tag`) are returned untouched. `Block` is
+    /// deliberately *excluded*: its children are `Statement`s rather than
+    /// bare `Expr`s and visiting it requires scope bookkeeping that only the
+    /// caller (e.g. `uniquify`) knows how to do — so callers must match on
+    /// `Block` themselves before falling back to this traversal.
+    ///
+    /// This is the Rust analogue of a `Traversal'` from the Haskell `lens`
+    /// library, specialised to the `Either e` / `Result<_, E>` applicative
+    /// (Rust has no higher-kinded types, so we cannot be polymorphic over
+    /// the effect functor the way `lens` is):
+    ///
+    /// ```haskell
+    /// subexprs :: Traversal' Expr Expr
+    /// subexprs f (If c t mf) = If <$> f c <*> f t <*> traverse f mf
+    /// subexprs f (BinOp l op r) = (\l' r' -> BinOp l' op r') <$> f l <*> f r
+    /// subexprs _ leaf@(Var _) = pure leaf
+    /// ...
+    /// ```
+    ///
+    /// Using this traversal, a recursive rewrite pass collapses to:
+    ///
+    /// ```ignore
+    /// fn rewrite(e: &Expr) -> Result<Expr, E> {
+    ///     match &e.expr {
+    ///         Expression::Var(_) | Expression::Block { .. } => /* handle specially */,
+    ///         _ => e.traverse_subexprs(rewrite),
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// i.e. the traversal *is* the boilerplate "recurse into every child and
+    /// rebuild the node" logic, leaving only the structurally-interesting
+    /// cases to be written out by hand. It borrows `self` (mirroring the
+    /// existing borrow-and-rebuild style of the passes) and calls `f` once
+    /// per immediate child, cloning only the non-recursive payload of each
+    /// node — exactly as much cloning as the hand-written version did.
+    pub fn traverse_subexprs<E>(
+        &self,
+        mut f: impl FnMut(&Self) -> Result<Self, E>,
+    ) -> Result<Self, E> {
+        let expr = match &self.expr {
+            Expression::If { cond, t, f: fb } => Expression::If {
+                cond: Box::new(f(cond)?),
+                t: Box::new(f(t)?),
+                f: fb.as_deref().map(&mut f).transpose()?.map(Box::new),
+            },
+            Expression::While { cond, body } => Expression::While {
+                cond: Box::new(f(cond)?),
+                body: Box::new(f(body)?),
+            },
+            Expression::BinOp { left, op, right } => Expression::BinOp {
+                left: Box::new(f(left)?),
+                op: *op,
+                right: Box::new(f(right)?),
+            },
+            Expression::UnOp { op, right } => Expression::UnOp {
+                op: *op,
+                right: Box::new(f(right)?),
+            },
+            Expression::Call { fn_name, args } => Expression::Call {
+                fn_name: fn_name.clone(),
+                args: args.iter().map(&mut f).collect::<Result<_, _>>()?,
+            },
+            Expression::Match { scrutinee, arms } => Expression::Match {
+                scrutinee: Box::new(f(scrutinee)?),
+                arms: arms
+                    .iter()
+                    .map(|arm| {
+                        Ok(HirMatchArm {
+                            pattern: arm.pattern.clone(),
+                            body: f(&arm.body)?,
+                            range: arm.range,
+                        })
+                    })
+                    .collect::<Result<_, _>>()?,
+            },
+            // Terminal nodes: no sub-expressions to traverse into, just
+            // clone the (cheap) payload through unchanged.
+            leaf @ (Expression::Var(_)
+            | Expression::Int(_)
+            | Expression::Bool(_)
+            | Expression::Unit
+            | Expression::Constructor { .. }
+            | Expression::ExternalConstructor { .. }
+            | Expression::Tag { .. }) => (*leaf).clone(),
+            // `Block` mixes `Statement` children and scoping concerns —
+            // callers must handle it before delegating here.
+            block @ Expression::Block { .. } => (*block).clone(),
+        };
+        Ok(Expr {
+            expr,
+            range: self.range,
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Expression {
     If {

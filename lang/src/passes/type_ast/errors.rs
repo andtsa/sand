@@ -20,7 +20,7 @@ pub enum AstTypeError {
     ImmutableAssignment { name: String, range: Range },
     #[error("undefined function '{name}' at {range}")]
     UndefinedFunction { name: String, range: Range },
-    #[error("type error at {range}: {message} (expected {expected:?}, found {found:?})")]
+    #[error("type error at {range}: {message} (expected {expected}, found {found})")]
     TypeError {
         message: String,
         expected: Ty,
@@ -46,7 +46,7 @@ pub enum AstTypeError {
         enum_name: String,
         range: Range,
     },
-    #[error("match scrutinee has type {ty:?} but match requires an enum type at {range}")]
+    #[error("match scrutinee has type {ty} but match requires an enum type at {range}")]
     MatchNonEnumScrutinee { ty: Ty, range: Range },
     #[error(
         "match on enum '{enum_name}' is not exhaustive at {range}; uncovered variants: {uncovered:?}"

@@ -378,7 +378,7 @@ fn build_type<'run>(ctx: &mut CompileCtx<'run>, pair: Pair<Rule>) -> Result<Ty, 
             // captured.
             let tags: Vec<String> = inner.into_inner().map(|p| p.as_str().to_string()).collect();
             let er = ctx.register_or_get_anon_enum(tags, range);
-            Ok(Ty::Enum(er))
+            Ok(ctx.enum_ty(er))
         }
         Some(inner) if inner.as_rule() == Rule::qualified_type => {
             // qualified_type = { identifier ~ "::" ~ identifier }
@@ -399,7 +399,7 @@ fn build_type<'run>(ctx: &mut CompileCtx<'run>, pair: Pair<Rule>) -> Result<Ty, 
                     range,
                 })?;
             ctx.lookup_enum_in_module(mod_ref, type_name)
-                .map(Ty::Enum)
+                .map(|er| ctx.enum_ty(er))
                 .ok_or_else(|| AstError::UnknownType {
                     name: format!("{mod_name}::{type_name}"),
                     range,
@@ -411,15 +411,16 @@ fn build_type<'run>(ctx: &mut CompileCtx<'run>, pair: Pair<Rule>) -> Result<Ty, 
                 .map(|p| p.as_str().to_string())
                 .unwrap_or_else(|| pair.as_str().to_string());
             match name.as_str() {
-                "Int" => Ok(Ty::Int),
-                "Bool" => Ok(Ty::Bool),
-                "Unit" => Ok(Ty::Unit),
-                other => ctx.lookup_enum_by_name(other).map(Ty::Enum).ok_or_else(|| {
-                    AstError::UnknownType {
+                "Int" => Ok(Ty::INT),
+                "Bool" => Ok(Ty::BOOL),
+                "Unit" => Ok(Ty::UNIT),
+                other => ctx
+                    .lookup_enum_by_name(other)
+                    .map(|er| ctx.enum_ty(er))
+                    .ok_or_else(|| AstError::UnknownType {
                         name: other.to_string(),
                         range,
-                    }
-                }),
+                    }),
             }
         }
     }

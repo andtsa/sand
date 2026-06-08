@@ -20,24 +20,15 @@ struct UniqCtx<'uniq, 'run> {
     /// is the current scope.
     var_scopes: Vec<Map<String, UniqVar>>,
 
-    // /// Function and variable names live in different namespaces in order to
-    // /// allow function name shadowing without problems
-    // fun_scopes: Map<String, String>,
     compile_ctx: &'uniq mut CompileCtx<'run>,
 }
 
 impl<'uniq, 'run> UniqCtx<'uniq, 'run> {
     /// Create a new Context, initialize its counter to zero, and push two empty
-    /// BTreeMaps as the variable and function scopes.
+    /// Maps as the variable and function scopes.
     /// # Returns
     /// An initialized empty Context.
     fn new(ctx: &'uniq mut CompileCtx<'run>) -> Self {
-        // let mut global = Map::new();
-
-        // for &name in RESERVED_FUNCTION_NAMES.iter() {
-        //     global.insert(name.to_string(), name.to_string());
-        // }
-
         Self {
             compile_ctx: ctx,
             var_scopes: vec![Map::new()],
@@ -101,32 +92,6 @@ impl<'uniq, 'run> UniqCtx<'uniq, 'run> {
             HirVar::Unqualified(s) => s.to_string(),
         }
     }
-
-    // /// Binds a given function to a newly generated unique name and stores it
-    // /// in the current function scope.
-    // /// # Arguments
-    // /// * 'name' - The original identifier to bind.
-    // /// # Returns
-    // /// The newly generated unique identifier as a string.
-    // pub fn bind_fun(&mut self, name: &str) -> String {
-    //     let new_name = if name == "main" ||
-    // RESERVED_FUNCTION_NAMES.contains(&name) {         name.to_string()
-    //     } else {
-    //         self.rename(name)
-    //     };
-    //     self.fun_scopes.insert(name.to_string(), new_name.clone());
-    //     new_name
-    // }
-
-    // /// Looks up the unique name associated with a function in the global scope
-    // /// # Arguments
-    // /// * 'name' - The original identifier to look up.
-    // /// # Returns
-    // /// The currently active unique name for that identifier, or None if not
-    // /// defined.
-    // pub fn lookup_fun_opt(&self, name: &str) -> Option<String> {
-    //     self.fun_scopes.get(name).cloned()
-    // }
 }
 
 /// Offers the uniquify pass publicly via Program::uniquify
@@ -215,41 +180,9 @@ fn uniquify_function(f: &Function, u: &mut UniqCtx) -> Result<Function, Uniquify
 /// # Returns
 /// A new 'Expr' with all identifiers renamed according to scope rules.
 fn uniquify_expr(e: &Expr, u: &mut UniqCtx) -> Result<Expr, UniquifyError> {
-    let expr = match &e.expr {
-        Expression::If { cond, t, f } => Expression::If {
-            cond: Box::new(uniquify_expr(cond, u)?),
-            t: Box::new(uniquify_expr(t, u)?),
-            f: f.as_deref()
-                .map(|e| uniquify_expr(e, u))
-                .transpose()?
-                .map(Box::new),
-        },
-
-        Expression::While { cond, body } => Expression::While {
-            cond: Box::new(uniquify_expr(cond, u)?),
-            body: Box::new(uniquify_expr(body, u)?),
-        },
-
-        Expression::BinOp { left, op, right } => Expression::BinOp {
-            left: Box::new(uniquify_expr(left, u)?),
-            op: *op,
-            right: Box::new(uniquify_expr(right, u)?),
-        },
-
-        Expression::UnOp { op, right } => Expression::UnOp {
-            op: *op,
-            right: Box::new(uniquify_expr(right, u)?),
-        },
-
-        Expression::Call { fn_name, args } => {
-            let args_res: Result<Vec<Expr>, UniquifyError> =
-                args.iter().map(|a| uniquify_expr(a, u)).collect();
-            Expression::Call {
-                fn_name: fn_name.clone(),
-                args: args_res?,
-            }
-        }
-
+    match &e.expr {
+        // `Var` is a leaf that nonetheless needs rewriting: look up its
+        // current unique binding in the scope stack (or fail if unbound).
         Expression::Var(name) => {
             let mapped = match u.lookup_var_opt(name) {
                 Some(n) => n,
@@ -260,43 +193,15 @@ fn uniquify_expr(e: &Expr, u: &mut UniqCtx) -> Result<Expr, UniquifyError> {
                     });
                 }
             };
-            Expression::Var(HirVar::Uniq(mapped))
-        }
-        Expression::Int(i) => Expression::Int(*i),
-        Expression::Bool(b) => Expression::Bool(*b),
-        Expression::Unit => Expression::Unit,
-        Expression::Constructor { type_name, variant } => Expression::Constructor {
-            type_name: type_name.clone(),
-            variant: variant.clone(),
-        },
-        Expression::ExternalConstructor {
-            mod_name,
-            type_name,
-            variant,
-        } => Expression::ExternalConstructor {
-            mod_name: mod_name.clone(),
-            type_name: type_name.clone(),
-            variant: variant.clone(),
-        },
-        Expression::Tag { variant } => Expression::Tag {
-            variant: variant.clone(),
-        },
-
-        Expression::Match { scrutinee, arms } => {
-            let scrutinee = Box::new(uniquify_expr(scrutinee, u)?);
-            let arms = arms
-                .iter()
-                .map(|arm| {
-                    Ok(HirMatchArm {
-                        pattern: arm.pattern.clone(),
-                        body: uniquify_expr(&arm.body, u)?,
-                        range: arm.range,
-                    })
-                })
-                .collect::<Result<Vec<_>, UniquifyError>>()?;
-            Expression::Match { scrutinee, arms }
+            Ok(Expr {
+                expr: Expression::Var(HirVar::Uniq(mapped)),
+                range: e.range,
+            })
         }
 
+        // `Block` introduces a new lexical scope and contains `Statement`
+        // children rather than bare `Expr`s, so it sits outside what
+        // `traverse_subexprs` can express — handle its scoping explicitly.
         Expression::Block { statements, expr } => {
             u.enter_scope();
 
@@ -311,18 +216,23 @@ fn uniquify_expr(e: &Expr, u: &mut UniqCtx) -> Result<Expr, UniquifyError> {
 
             u.exit_scope();
 
-            Expression::Block {
-                statements: stmts,
-                expr: inner_expr,
-            }
+            Ok(Expr {
+                expr: Expression::Block {
+                    statements: stmts,
+                    expr: inner_expr,
+                },
+                range: e.range,
+            })
         }
-    };
 
-    Ok(Expr {
-        expr,
-
-        range: e.range,
-    })
+        // Every other node — `If`, `While`, `BinOp`, `UnOp`, `Call`,
+        // `Match`, and the constructor/literal leaves — is handled
+        // uniformly by the `subexprs` traversal: recurse into each child
+        // with `uniquify_expr` and let it rebuild the node around the
+        // results. This is `traverseOf subexprs (uniquifyExpr u)` in lens
+        // terms, and replaces what used to be ten near-identical match arms.
+        _ => e.traverse_subexprs(|sub| uniquify_expr(sub, u)),
+    }
 }
 
 /// Recursively traverses and uniquifies a statement AST.

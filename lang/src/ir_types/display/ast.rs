@@ -28,7 +28,13 @@ impl TypedFunction {
         let params: Vec<String> = self
             .parameters
             .iter()
-            .map(|p| format!("{}: {}", ctx.uniq_variable_name(&p.name), p.ty))
+            .map(|p| {
+                format!(
+                    "{}: {}",
+                    ctx.uniq_variable_name(&p.name),
+                    ctx.display_ty(p.ty)
+                )
+            })
             .collect();
 
         let _ = writeln!(
@@ -36,7 +42,7 @@ impl TypedFunction {
             "fn {}({}) -> {}",
             ctx.original_fun_name(self.name),
             params.join(", "),
-            self.ret_type,
+            ctx.display_ty(self.ret_type),
         );
 
         dump_expr(&mut out, &self.body, ctx, 1);
@@ -53,7 +59,7 @@ fn indent(out: &mut String, level: usize) {
 
 fn dump_expr(out: &mut String, expr: &Expr, ctx: &CompileCtx, level: usize) {
     indent(out, level);
-    let _ = write!(out, "[{}] ", expr.ty);
+    let _ = write!(out, "[{}] ", ctx.display_ty(expr.ty));
 
     match &expr.expr {
         Expression::If { cond, t, f } => {

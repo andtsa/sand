@@ -98,7 +98,7 @@ fn format_function(f: &mut String, prog: &TypedProgram, ctx: &CompileCtx, fr: &F
         "def {}({}): {} := ",
         ctx.original_fun_name(*fr),
         args.join(", "),
-        fun.ret_type
+        ctx.display_ty(fun.ret_type)
     );
 
     let mut indent_level: usize = 0;
@@ -156,5 +156,9 @@ fn format_function(f: &mut String, prog: &TypedProgram, ctx: &CompileCtx, fr: &F
 }
 
 fn format_parameter(ctx: &CompileCtx, param: &Parameter) -> String {
-    format!("{}: {}", ctx.uniq_variable_name(&param.name), param.ty)
+    format!(
+        "{}: {}",
+        ctx.uniq_variable_name(&param.name),
+        ctx.display_ty(param.ty)
+    )
 }

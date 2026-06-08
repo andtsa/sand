@@ -6,6 +6,7 @@ use crate::ir_types::qhir;
 use crate::ir_types::typed_hir;
 use crate::lang::types::EnumRef;
 use crate::lang::types::Ty;
+use crate::lang::types::TyKind;
 use crate::passes::type_ast::TypeEnv;
 pub use crate::passes::type_ast::errors::AstTypeError;
 use crate::passes::type_ast::infer::infer;
@@ -139,8 +140,8 @@ pub(super) fn check(
     match &expr.expr {
         // Resolve a bare #Tag against the expected enum type.
         qhir::Expression::Tag { variant } => {
-            let er = match expected {
-                Ty::Enum(er) => er,
+            let er = match ctx.ty_kind(expected) {
+                TyKind::Enum(er) => *er,
                 _ => {
                     return Err(AstTypeError::TagInNonEnumContext {
                         variant: variant.clone(),
@@ -172,10 +173,10 @@ pub(super) fn check(
             f: Some(f),
         } => {
             let cond_expr = infer(ctx, env, cond)?;
-            if cond_expr.ty != Ty::Bool {
+            if cond_expr.ty != Ty::BOOL {
                 return Err(AstTypeError::TypeError {
-                    message: format!("condition of 'if' must be Bool, found {:?}", cond_expr.ty),
-                    expected: Ty::Bool,
+                    message: format!("condition of 'if' must be Bool, found {}", cond_expr.ty),
+                    expected: Ty::BOOL,
                     found: cond_expr.ty,
                     range: cond.range,
                 });
@@ -219,11 +220,11 @@ pub(super) fn check(
         // propagate check mode into all arms of a match expression
         qhir::Expression::Match { scrutinee, arms } => {
             let scrut_expr = infer(ctx, env, scrutinee)?;
-            let enum_ref = match scrut_expr.ty {
-                Ty::Enum(er) => er,
-                ty => {
+            let enum_ref = match ctx.ty_kind(scrut_expr.ty) {
+                TyKind::Enum(er) => *er,
+                _ => {
                     return Err(AstTypeError::MatchNonEnumScrutinee {
-                        ty,
+                        ty: scrut_expr.ty,
                         range: scrutinee.range,
                     });
                 }
@@ -245,7 +246,7 @@ pub(super) fn check(
             let e = infer(ctx, env, expr)?;
             if e.ty.type_neq(&expected) {
                 return Err(AstTypeError::TypeError {
-                    message: format!("expected type {:?} but found {:?}", expected, e.ty),
+                    message: format!("expected type {} but found {}", expected, e.ty),
                     expected,
                     found: e.ty,
                     range: expr.range,

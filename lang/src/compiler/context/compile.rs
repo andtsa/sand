@@ -27,6 +27,7 @@ use crate::internal_bug;
 use crate::ir_types::hhir::HirVar;
 use crate::lang::types::EnumRef;
 use crate::lang::types::Ty;
+use crate::lang::types::TyKind;
 use crate::passes::parse::Rule;
 
 /// this should not be used and is on purpose mistyped to be easily detectable.
@@ -42,6 +43,14 @@ pub struct CompileCtx<'run> {
     global_functions: Vec<OriginalFun>,
     function_signatures: Map<FunRef, FunSig>,
     pub entrypoint: Option<FunRef>,
+
+    // types
+    /// Interned [`TyKind`] registry; indexed by [`Ty`].
+    ty_kinds: Vec<TyKind>,
+    /// Reverse lookup for structural interning (also used to resolve
+    /// `EnumRef -> Ty` once the corresponding `TyKind::Enum` has been
+    /// interned at enum-registration time).
+    ty_interner: Map<TyKind, Ty>,
 
     // enums
     enum_defs: Vec<EnumDef>,
@@ -88,13 +97,15 @@ pub struct CtxEmptyError {}
 
 impl<'run> CompileCtx<'run> {
     pub fn initial() -> Self {
-        Self {
+        let mut ctx = Self {
             original_variables: Default::default(),
             variable_usages: Default::default(),
             global_variables: Default::default(),
             global_functions: Default::default(),
             function_signatures: Default::default(),
             entrypoint: None,
+            ty_kinds: Default::default(),
+            ty_interner: Default::default(),
             enum_defs: Default::default(),
             enum_names: Default::default(),
             anon_tag_types: Default::default(),
@@ -107,7 +118,48 @@ impl<'run> CompileCtx<'run> {
             // default_file: None,
             diagnostics: Vec::new(),
             phantom: Default::default(),
+        };
+
+        // pre-intern the primitive `TyKind`s at fixed indices, matching
+        // `Ty::INT .. Ty::BOTTOM` so they can be constructed and compared
+        // without access to the context (e.g. in `lang::ops`, `lang::intrinsics`).
+        debug_assert_eq!(ctx.intern_ty(TyKind::Int), Ty::INT);
+        debug_assert_eq!(ctx.intern_ty(TyKind::Bool), Ty::BOOL);
+        debug_assert_eq!(ctx.intern_ty(TyKind::Unit), Ty::UNIT);
+        debug_assert_eq!(ctx.intern_ty(TyKind::Top), Ty::TOP);
+        debug_assert_eq!(ctx.intern_ty(TyKind::Bottom), Ty::BOTTOM);
+
+        ctx
+    }
+
+    /// structurally intern a [`TyKind`], returning the [`Ty`] index that
+    /// refers to it. Interning is deduplicating: the same `TyKind` always
+    /// yields the same `Ty`.
+    fn intern_ty(&mut self, kind: TyKind) -> Ty {
+        if let Some(&ty) = self.ty_interner.get(&kind) {
+            return ty;
         }
+        let ty = Ty(self.ty_kinds.len());
+        self.ty_kinds.push(kind.clone());
+        self.ty_interner.insert(kind, ty);
+        ty
+    }
+
+    /// resolve a [`Ty`] index to its underlying [`TyKind`].
+    pub fn ty_kind(&self, ty: Ty) -> &TyKind {
+        &self.ty_kinds[ty.0]
+    }
+
+    /// the [`Ty`] referring to the enum type `er`.
+    ///
+    /// every `EnumRef` is interned as a `Ty` at registration time (see
+    /// [`Self::register_enum`] / [`Self::register_or_get_anon_enum`]), so
+    /// this lookup is a pure read and always succeeds.
+    pub fn enum_ty(&self, er: EnumRef) -> Ty {
+        *self
+            .ty_interner
+            .get(&TyKind::Enum(er))
+            .unwrap_or_else(|| internal_bug!("enum {er:?} was not interned as a Ty"))
     }
 
     // ========================== Variables ==============================
@@ -252,6 +304,7 @@ impl<'run> CompileCtx<'run> {
             is_anonymous: false,
         });
         self.enum_names.insert(name.to_string(), er);
+        self.intern_ty(TyKind::Enum(er));
         Ok(er)
     }
 
@@ -325,6 +378,7 @@ impl<'run> CompileCtx<'run> {
         // NOTE: we do NOT insert into `enum_names`, anonymous enums are only
         // looked up via `anon_tag_types`
         self.anon_tag_types.insert(tags, er);
+        self.intern_ty(TyKind::Enum(er));
         er
     }
 
@@ -432,9 +486,9 @@ pub struct TyDisplay<'a> {
 
 impl std::fmt::Display for TyDisplay<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.ty {
-            Ty::Enum(er) => write!(f, "{}", self.ctx.get_enum(er).name),
-            other => write!(f, "{}", other),
+        match self.ctx.ty_kind(self.ty) {
+            TyKind::Enum(er) => write!(f, "{}", self.ctx.get_enum(*er).name),
+            _ => write!(f, "{}", self.ty),
         }
     }
 }

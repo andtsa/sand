@@ -41,7 +41,7 @@ pub fn construct_cfg(
             expr: Expr {
                 expr: Expression::Unit,
                 range: Default::default(),
-                ty: Ty::Unit,
+                ty: Ty::UNIT,
             },
             depends_on: HashSet::new(),
             mutates: HashSet::new(),
@@ -53,7 +53,7 @@ pub fn construct_cfg(
             expr: Expr {
                 expr: Expression::Unit,
                 range: Default::default(),
-                ty: Ty::Unit,
+                ty: Ty::UNIT,
             },
             depends_on: HashSet::new(),
             mutates: HashSet::new(),

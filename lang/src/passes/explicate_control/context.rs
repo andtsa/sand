@@ -187,7 +187,7 @@ impl FnCx {
                 self.lower_statements(statements, cont)
             }
 
-            _ if expr.ty == Ty::Unit => {
+            _ if expr.ty == Ty::UNIT => {
                 let ret = self.new_block(Vec::new(), Terminator::Return { value: None });
                 self.lower_effect(expr, ret)
             }
@@ -397,7 +397,7 @@ impl FnCx {
                             enum_ref,
                             variant_idx,
                         } => {
-                            let cmp_tmp = self.fresh_temp("match_cmp", Ty::Bool, arm.range);
+                            let cmp_tmp = self.fresh_temp("match_cmp", Ty::BOOL, arm.range);
                             let check_bb = self.new_block(
                                 vec![self.assign_stmt(
                                     cmp_tmp,
@@ -557,7 +557,7 @@ impl FnCx {
                 let l_tmp = self.fresh_temp("pred_binop_left", left.ty, left.range);
                 let r_tmp = self.fresh_temp("pred_binop_right", right.ty, right.range);
 
-                let cmp_tmp = self.fresh_temp("pred_binop_comp", Ty::Bool, expr.range);
+                let cmp_tmp = self.fresh_temp("pred_binop_comp", Ty::BOOL, expr.range);
 
                 let branch_bb = self.new_block(
                     Vec::new(),
