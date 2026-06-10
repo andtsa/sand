@@ -252,6 +252,24 @@ impl<'ctx> LlvmCodegen<'ctx> {
                 }
                 _ => self.emit_intrinsic_value(*fn_name, args, fn_ctx),
             },
+
+            RValue::Aggregate(..) => {
+                // payload-carrying enum variants and tuples are not yet
+                // supported by the LLVM backend (interpreter-only for this
+                // increment — see ENUM_PAYLOADS_TUPLES.todo.md §4).
+                panic!(
+                    "LLVM codegen does not yet support aggregate values (payload enums / tuples): {rv:?}"
+                )
+            }
+
+            RValue::Field { .. } => {
+                // field projection (destructuring patterns) is, like
+                // `Aggregate`, interpreter-only for this increment — see
+                // DESTRUCTURING_PATTERNS.todo.md.
+                panic!(
+                    "LLVM codegen does not yet support field projection (destructuring patterns): {rv:?}"
+                )
+            }
         }
     }
 
@@ -274,12 +292,6 @@ impl<'ctx> LlvmCodegen<'ctx> {
             Constant::Int(i) => self.context.i64_type().const_int(*i as u64, true).into(),
             Constant::Bool(b) => self.context.bool_type().const_int(*b as u64, false).into(),
             Constant::Unit => self.context.struct_type(&[], false).const_zero().into(),
-            // enum variants are represented as a single i64 holding the variant index
-            Constant::EnumVariant { variant_idx, .. } => self
-                .context
-                .i64_type()
-                .const_int(*variant_idx as u64, false)
-                .into(),
         }
     }
 
@@ -515,10 +527,6 @@ impl<'ctx> LlvmCodegen<'ctx> {
             Operand::Const(Constant::Int(_)) => Ty::INT,
             Operand::Const(Constant::Bool(_)) => Ty::BOOL,
             Operand::Const(Constant::Unit) => Ty::UNIT,
-            // The variant index is stored as i64; use Int as the LLVM type for now.
-            Operand::Const(Constant::EnumVariant { enum_ref, .. }) => {
-                fn_ctx.compile_ctx.enum_ty(*enum_ref)
-            }
         }
     }
 
@@ -552,7 +560,7 @@ impl<'ctx> LlvmCodegen<'ctx> {
                 let str_global_name = format!("__enum_{}_variant_{}_name", er.0, i);
                 // build_global_string_ptr caches by content, not by name, so use
                 // add_global + set_initializer directly to guarantee our own name.
-                let display = format!("{prefix}{name}");
+                let display = format!("{prefix}{}", name.name);
                 let s = self.context.const_string(display.as_bytes(), true);
                 let g = self.module.add_global(s.get_type(), None, &str_global_name);
                 g.set_initializer(&s);

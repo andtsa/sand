@@ -10,7 +10,6 @@
 //! MIR structural invariants (block counts, terminators, locals) live in
 //! `robustness_tests/mir_structure`.
 
-use lang::interpreter::mir::MirValue;
 use lang::ir_types::typed_hir::Expression;
 
 use crate::common::run_hir;
@@ -20,18 +19,7 @@ use crate::common::run_mir;
 /// result.
 fn run_both(src: &str) -> Expression {
     let hir = run_hir(src);
-    let mir = match run_mir(src) {
-        MirValue::Int(i) => Expression::Int(i),
-        MirValue::Bool(b) => Expression::Bool(b),
-        MirValue::Unit => Expression::Unit,
-        MirValue::EnumVariant {
-            enum_ref,
-            variant_idx,
-        } => Expression::Constructor {
-            enum_ref,
-            variant_idx,
-        },
-    };
+    let mir = crate::common::mir_value_to_expr(run_mir(src));
     assert_eq!(hir, mir, "HIR and MIR interpreters disagree for:\n  {src}");
     hir
 }
@@ -417,5 +405,165 @@ fn interpret_block_with_only_statements_returns_unit() {
     assert_eq!(
         run_both("def main(): Unit := { let x: Int = 1; }"),
         Expression::Unit
+    );
+}
+
+// ── tuples and enum payloads ─────────────────────────────────────────────────
+
+#[test]
+fn interpret_tuple_literal() {
+    let result = run_both("def main(): (Int, Bool) := (1, true)");
+    match result {
+        Expression::Tuple(elems) => {
+            assert_eq!(elems.len(), 2);
+            assert_eq!(elems[0].expr, Expression::Int(1));
+            assert_eq!(elems[1].expr, Expression::Bool(true));
+        }
+        other => panic!("expected Tuple, got {:?}", other),
+    }
+}
+
+#[test]
+fn interpret_nested_tuple_literal() {
+    let result = run_both("def main(): ((Int, Int), Bool) := ((1, 2), false)");
+    match result {
+        Expression::Tuple(elems) => {
+            assert_eq!(elems.len(), 2);
+            match &elems[0].expr {
+                Expression::Tuple(inner) => {
+                    assert_eq!(inner[0].expr, Expression::Int(1));
+                    assert_eq!(inner[1].expr, Expression::Int(2));
+                }
+                other => panic!("expected nested Tuple, got {:?}", other),
+            }
+            assert_eq!(elems[1].expr, Expression::Bool(false));
+        }
+        other => panic!("expected Tuple, got {:?}", other),
+    }
+}
+
+#[test]
+fn interpret_tuple_equality() {
+    assert_eq!(
+        run_both("def main(): Bool := (1, 2) == (1, 2)"),
+        Expression::Bool(true)
+    );
+    assert_eq!(
+        run_both("def main(): Bool := (1, 2) == (1, 3)"),
+        Expression::Bool(false)
+    );
+    assert_eq!(
+        run_both("def main(): Bool := (1, 2) != (1, 3)"),
+        Expression::Bool(true)
+    );
+}
+
+#[test]
+fn interpret_tuple_field_in_arithmetic() {
+    assert_eq!(
+        run_both(
+            "def main(): Int := {
+                let pair: (Int, Int) = (3, 4);
+                7
+             }"
+        ),
+        Expression::Int(7)
+    );
+}
+
+#[test]
+fn interpret_enum_payload_constructor() {
+    let result = run_both(
+        "type Shape = Circle(Int) | Point
+         def main(): Shape := Shape#Circle(5)",
+    );
+    match result {
+        Expression::Constructor {
+            payload: Some(p), ..
+        } => {
+            assert_eq!(p.expr, Expression::Int(5));
+        }
+        other => panic!("expected payload-carrying Constructor, got {:?}", other),
+    }
+}
+
+#[test]
+fn interpret_enum_nullary_variant_has_no_payload() {
+    let result = run_both(
+        "type Shape = Circle(Int) | Point
+         def main(): Shape := Shape#Point",
+    );
+    match result {
+        Expression::Constructor { payload: None, .. } => {}
+        other => panic!("expected payload-less Constructor, got {:?}", other),
+    }
+}
+
+#[test]
+fn interpret_enum_payload_equality() {
+    assert_eq!(
+        run_both(
+            "type Shape = Circle(Int) | Point
+             def main(): Bool := Shape#Circle(5) == Shape#Circle(5)"
+        ),
+        Expression::Bool(true)
+    );
+    assert_eq!(
+        run_both(
+            "type Shape = Circle(Int) | Point
+             def main(): Bool := Shape#Circle(5) == Shape#Circle(6)"
+        ),
+        Expression::Bool(false)
+    );
+    assert_eq!(
+        run_both(
+            "type Shape = Circle(Int) | Point
+             def main(): Bool := Shape#Circle(5) != Shape#Point"
+        ),
+        Expression::Bool(true)
+    );
+}
+
+#[test]
+fn interpret_enum_payload_with_tuple() {
+    let result = run_both(
+        "type Pair = Wrap((Int, Int))
+         def main(): Pair := Pair#Wrap((1, 2))",
+    );
+    match result {
+        Expression::Constructor {
+            payload: Some(p), ..
+        } => match p.expr {
+            Expression::Tuple(ref elems) => {
+                assert_eq!(elems[0].expr, Expression::Int(1));
+                assert_eq!(elems[1].expr, Expression::Int(2));
+            }
+            ref other => panic!("expected Tuple payload, got {:?}", other),
+        },
+        other => panic!("expected payload-carrying Constructor, got {:?}", other),
+    }
+}
+
+#[test]
+fn interpret_match_dispatches_on_payload_variant_tag() {
+    assert_eq!(
+        run_both(
+            "type Shape = Circle(Int) | Point
+             def main(): Int := match Shape#Circle(5) {
+                 Shape#Circle(_) => 1,
+                 Shape#Point => 2,
+             }"
+        ),
+        Expression::Int(1)
+    );
+    assert_eq!(
+        run_both(
+            "type Shape = Circle(Int) | Point
+             def main(): Int := match Shape#Point {
+                 Shape#Circle(_) => 1,
+                 Shape#Point => 2,
+             }"
+        ),
+        Expression::Int(2)
     );
 }

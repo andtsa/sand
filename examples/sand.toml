@@ -1,5 +1,5 @@
 [project]
 name = "examples_RSA"
 sources = [
-    "file:///Users/andtsa/proj/sand/examples/RSA.sand"
+    "file:///Users/andtsa/proj/sand/examples/lists.sand"
 ]

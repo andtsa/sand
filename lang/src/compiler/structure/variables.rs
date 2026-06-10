@@ -29,6 +29,9 @@ pub enum VarDeclType {
     Declaration,
     Parameter,
     IntrinsicParameter,
+    /// a variable bound by a destructuring pattern in a `match` arm,
+    /// e.g. the `r` in `Circle(r) => ...` or `a`/`b` in `(a, b) => ...`
+    PatternBinding,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -69,6 +72,7 @@ impl From<Rule> for VarDeclType {
         match value {
             Rule::declaration => Self::Declaration,
             Rule::parameter => Self::Parameter,
+            Rule::binding_pattern => Self::PatternBinding,
             _ => internal_bug!("illegal instatiation of VarDeclType"),
         }
     }

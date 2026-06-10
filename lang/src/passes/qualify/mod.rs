@@ -375,18 +375,28 @@ fn qualify_expr(
             let u = UniqPrism::expect(v, "unqualified variable after uniquify");
             qhir::Expression::Var(u)
         }
-        hhir::Expression::Constructor { type_name, variant } => {
+        hhir::Expression::Constructor {
+            type_name,
+            variant,
+            payload,
+        } => {
             let (enum_ref, variant_idx) =
                 q.resolve_constructor(&type_name, &variant, expr.range, module_name)?;
+            let q_payload = payload
+                .map(|p| qualify_expr(q, module_name, *p))
+                .transpose()?
+                .map(Box::new);
             qhir::Expression::Constructor {
                 enum_ref,
                 variant_idx,
+                payload: q_payload,
             }
         }
         hhir::Expression::ExternalConstructor {
             mod_name,
             type_name,
             variant,
+            payload,
         } => {
             let (enum_ref, variant_idx) = q.resolve_external_constructor(
                 &mod_name,
@@ -395,12 +405,23 @@ fn qualify_expr(
                 expr.range,
                 module_name,
             )?;
+            let q_payload = payload
+                .map(|p| qualify_expr(q, module_name, *p))
+                .transpose()?
+                .map(Box::new);
             qhir::Expression::Constructor {
                 enum_ref,
                 variant_idx,
+                payload: q_payload,
             }
         }
         hhir::Expression::Tag { variant } => qhir::Expression::Tag { variant },
+        hhir::Expression::Tuple(elems) => qhir::Expression::Tuple(
+            elems
+                .into_iter()
+                .map(|e| qualify_expr(q, module_name, e))
+                .collect::<Result<Vec<_>, QualifyError>>()?,
+        ),
         hhir::Expression::Match { scrutinee, arms } => {
             let q_scrutinee = qualify_expr(q, module_name, *scrutinee)?;
             let q_arms = arms
@@ -479,7 +500,11 @@ fn qualify_pattern(
     range: Range,
 ) -> Result<qhir::QPattern, QualifyError> {
     match pattern {
-        hhir::HirPattern::Constructor { type_name, variant } => {
+        hhir::HirPattern::Constructor {
+            type_name,
+            variant,
+            payload,
+        } => {
             let (enum_ref, variant_idx) = q.resolve_enum_and_variant(
                 &type_name,
                 &variant,
@@ -491,12 +516,36 @@ fn qualify_pattern(
                     source_module,
                 },
             )?;
+            let payload = payload
+                .map(|p| qualify_pattern(q, module_name, *p, range))
+                .transpose()?
+                .map(Box::new);
             Ok(qhir::QPattern::Variant {
                 enum_ref,
                 variant_idx,
+                payload,
             })
         }
-        hhir::HirPattern::Tag { variant } => Ok(qhir::QPattern::Tag { variant }),
+        hhir::HirPattern::Tag { variant, payload } => {
+            let payload = payload
+                .map(|p| qualify_pattern(q, module_name, *p, range))
+                .transpose()?
+                .map(Box::new);
+            Ok(qhir::QPattern::Tag { variant, payload })
+        }
+        hhir::HirPattern::Tuple(elems) => Ok(qhir::QPattern::Tuple(
+            elems
+                .into_iter()
+                .map(|p| qualify_pattern(q, module_name, p, range))
+                .collect::<Result<Vec<_>, QualifyError>>()?,
+        )),
+        hhir::HirPattern::Binding { var, range: brange } => {
+            let uv = UniqPrism::expect(var, "unqualified variable in pattern after uniquify");
+            Ok(qhir::QPattern::Binding {
+                var: uv,
+                range: brange,
+            })
+        }
         hhir::HirPattern::Wildcard => Ok(qhir::QPattern::Wildcard),
     }
 }

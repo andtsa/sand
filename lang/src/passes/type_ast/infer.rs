@@ -7,7 +7,6 @@ use crate::ir_types::typed_hir;
 use crate::ir_types::typed_hir::TypedFunction;
 use crate::lang::intrinsics::INTRINSICS;
 use crate::lang::types::Ty;
-use crate::lang::types::TyKind;
 use crate::passes::type_ast::TypeEnv;
 use crate::passes::type_ast::check::check;
 use crate::passes::type_ast::check::type_check_match_arms;
@@ -15,7 +14,7 @@ pub use crate::passes::type_ast::errors::AstTypeError;
 use crate::passes::type_ast::errors::TypeError;
 
 pub(super) fn infer_function(
-    ctx: &CompileCtx,
+    ctx: &mut CompileCtx,
     func: &qhir::Function,
 ) -> Result<(FunRef, TypedFunction), TypeError> {
     let env: TypeEnv = func
@@ -45,7 +44,7 @@ pub(super) fn infer_function(
 }
 
 pub(super) fn infer_statement(
-    ctx: &CompileCtx,
+    ctx: &mut CompileCtx,
     env: &mut TypeEnv,
     stmt: &qhir::Statement,
 ) -> Result<typed_hir::Statement, AstTypeError> {
@@ -108,7 +107,7 @@ pub(super) fn infer_statement(
 }
 
 pub(super) fn infer(
-    ctx: &CompileCtx,
+    ctx: &mut CompileCtx,
     env: &TypeEnv,
     expr: &qhir::Expr,
 ) -> Result<typed_hir::Expr, AstTypeError> {
@@ -145,19 +144,58 @@ pub(super) fn infer(
         qhir::Expression::Constructor {
             enum_ref,
             variant_idx,
-        } => Ok(typed_hir::Expr {
-            expr: typed_hir::Expression::Constructor {
-                enum_ref: *enum_ref,
-                variant_idx: *variant_idx,
-            },
-            range: expr.range,
-            ty: ctx.enum_ty(*enum_ref),
-        }),
+            payload,
+        } => {
+            let declared_payload = ctx.get_enum(*enum_ref).variants[*variant_idx].payload;
+            let typed_payload = match (declared_payload, payload) {
+                (None, None) => None,
+                (Some(declared_ty), Some(p)) => Some(Box::new(check(ctx, env, p, declared_ty)?)),
+                (None, Some(p)) => {
+                    return Err(AstTypeError::ConstructorPayloadMismatch {
+                        enum_name: ctx.get_enum(*enum_ref).name.clone(),
+                        variant: ctx.get_enum(*enum_ref).variants[*variant_idx].name.clone(),
+                        expected_payload: false,
+                        range: p.range,
+                    });
+                }
+                (Some(_), None) => {
+                    return Err(AstTypeError::ConstructorPayloadMismatch {
+                        enum_name: ctx.get_enum(*enum_ref).name.clone(),
+                        variant: ctx.get_enum(*enum_ref).variants[*variant_idx].name.clone(),
+                        expected_payload: true,
+                        range: expr.range,
+                    });
+                }
+            };
+            Ok(typed_hir::Expr {
+                expr: typed_hir::Expression::Constructor {
+                    enum_ref: *enum_ref,
+                    variant_idx: *variant_idx,
+                    payload: typed_payload,
+                },
+                range: expr.range,
+                ty: ctx.enum_ty(*enum_ref),
+            })
+        }
 
         qhir::Expression::Tag { variant } => Err(AstTypeError::TagWithoutContext {
             variant: variant.clone(),
             range: expr.range,
         }),
+
+        qhir::Expression::Tuple(elems) => {
+            let typed_elems = elems
+                .iter()
+                .map(|e| infer(ctx, env, e))
+                .collect::<Result<Vec<_>, _>>()?;
+            let elem_tys: Vec<Ty> = typed_elems.iter().map(|e| e.ty).collect();
+            let ty = ctx.intern_tuple(elem_tys);
+            Ok(typed_hir::Expr {
+                expr: typed_hir::Expression::Tuple(typed_elems),
+                range: expr.range,
+                ty,
+            })
+        }
 
         qhir::Expression::BinOp { left, op, right } => {
             // When one side is a bare Tag, infer the other side first, then
@@ -445,16 +483,8 @@ pub(super) fn infer(
         }
         qhir::Expression::Match { scrutinee, arms } => {
             let scrut_expr = infer(ctx, env, scrutinee)?;
-            let enum_ref = match ctx.ty_kind(scrut_expr.ty) {
-                TyKind::Enum(er) => *er,
-                _ => {
-                    return Err(AstTypeError::MatchNonEnumScrutinee {
-                        ty: scrut_expr.ty,
-                        range: scrutinee.range,
-                    });
-                }
-            };
-            let typed_arms = type_check_match_arms(ctx, env, arms, enum_ref, None, expr.range)?;
+            let typed_arms =
+                type_check_match_arms(ctx, env, arms, scrut_expr.ty, None, expr.range)?;
             let result_ty = typed_arms.first().map(|a| a.body.ty).unwrap_or(Ty::UNIT);
             Ok(typed_hir::Expr {
                 expr: typed_hir::Expression::Match {

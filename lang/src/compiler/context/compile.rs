@@ -10,6 +10,7 @@ use thiserror::Error;
 use crate::compiler::diagnostics::SandDiagnostic;
 use crate::compiler::structure::CodeModule;
 use crate::compiler::structure::EnumDef;
+use crate::compiler::structure::EnumVariant;
 use crate::compiler::structure::FileRef;
 use crate::compiler::structure::FunRef;
 use crate::compiler::structure::FunSig;
@@ -150,6 +151,18 @@ impl<'run> CompileCtx<'run> {
         &self.ty_kinds[ty.0]
     }
 
+    /// intern a tuple type from its element handles. arity must be >= 2 —
+    /// callers are responsible for routing arity-0 to `Ty::UNIT` and arity-1
+    /// to plain grouping (the element type itself) before calling this.
+    pub fn intern_tuple(&mut self, elems: Vec<Ty>) -> Ty {
+        debug_assert!(
+            elems.len() >= 2,
+            "tuple types must have arity >= 2, got {}",
+            elems.len()
+        );
+        self.intern_ty(TyKind::Tuple(elems))
+    }
+
     /// the [`Ty`] referring to the enum type `er`.
     ///
     /// every `EnumRef` is interned as a `Ty` at registration time (see
@@ -168,7 +181,10 @@ impl<'run> CompileCtx<'run> {
         pair: &Pair<'_, Rule>,
         rule: Rule,
     ) -> Result<OriginalVarRef, ContextError> {
-        if !matches!(rule, Rule::declaration | Rule::parameter) {
+        if !matches!(
+            rule,
+            Rule::declaration | Rule::parameter | Rule::binding_pattern
+        ) {
             return Err(ContextError::IllegalVariableRegistration { rule });
         }
 
@@ -280,10 +296,17 @@ impl<'run> CompileCtx<'run> {
 
     // ============================ Enums =====================================
 
+    /// Phase 1 of enum registration: allocate the `EnumRef` and record the
+    /// variant *names*, with every payload initially `None`. This must run
+    /// for every enum in the program before phase 2
+    /// ([`Self::set_variant_payload`]) resolves payload type annotations —
+    /// payloads may reference other enums (including forward / recursive
+    /// references), so every `EnumRef` must already exist before any
+    /// `type_` gets resolved.
     pub fn register_enum(
         &mut self,
         name: &str,
-        variants: Vec<String>,
+        variant_names: Vec<String>,
         range: Range,
         module: ModuleRef,
     ) -> Result<EnumRef, ContextError> {
@@ -297,7 +320,13 @@ impl<'run> CompileCtx<'run> {
         let er = EnumRef(self.enum_defs.len());
         self.enum_defs.push(EnumDef {
             name: name.to_string(),
-            variants,
+            variants: variant_names
+                .into_iter()
+                .map(|name| EnumVariant {
+                    name,
+                    payload: None,
+                })
+                .collect(),
             range,
             src_module: module,
             index: er,
@@ -306,6 +335,13 @@ impl<'run> CompileCtx<'run> {
         self.enum_names.insert(name.to_string(), er);
         self.intern_ty(TyKind::Enum(er));
         Ok(er)
+    }
+
+    /// Phase 2 of enum registration: attach a resolved payload type to a
+    /// variant that was registered (with `payload: None`) by
+    /// [`Self::register_enum`].
+    pub fn set_variant_payload(&mut self, er: EnumRef, variant_idx: usize, payload: Ty) {
+        self.enum_defs[er.0].variants[variant_idx].payload = Some(payload);
     }
 
     pub fn get_enum(&self, er: EnumRef) -> &EnumDef {
@@ -326,7 +362,7 @@ impl<'run> CompileCtx<'run> {
         self.enum_defs[er.0]
             .variants
             .iter()
-            .position(|v| v == variant)
+            .position(|v| v.name == variant)
     }
 
     pub fn lookup_enum_in_module(&self, module: ModuleRef, name: &str) -> Option<EnumRef> {
@@ -369,7 +405,13 @@ impl<'run> CompileCtx<'run> {
         let er = EnumRef(self.enum_defs.len());
         self.enum_defs.push(EnumDef {
             name: display_name,
-            variants: tags.clone(),
+            variants: tags
+                .iter()
+                .map(|name| EnumVariant {
+                    name: name.clone(),
+                    payload: None,
+                })
+                .collect(),
             range,
             src_module,
             index: er,
@@ -387,7 +429,7 @@ impl<'run> CompileCtx<'run> {
         if variants.len() <= variant {
             internal_bug!("enum display indexed with oob variant: {enum_ref:?}[{variant}]");
         }
-        variants[variant].clone()
+        variants[variant].name.clone()
     }
 
     // ============================ Modules ===================================
@@ -488,6 +530,16 @@ impl std::fmt::Display for TyDisplay<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.ctx.ty_kind(self.ty) {
             TyKind::Enum(er) => write!(f, "{}", self.ctx.get_enum(*er).name),
+            TyKind::Tuple(elems) => {
+                write!(f, "(")?;
+                for (i, elem) in elems.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", self.ctx.display_ty(*elem))?;
+                }
+                write!(f, ")")
+            }
             _ => write!(f, "{}", self.ty),
         }
     }

@@ -124,25 +124,57 @@ fn dump_expr(out: &mut String, expr: &Expr, ctx: &CompileCtx, level: usize) {
         Expression::Constructor {
             enum_ref,
             variant_idx,
+            payload,
         } => {
             let _ = writeln!(out, "ctor {}", ctx.enum_display(*enum_ref, *variant_idx));
+            if let Some(p) = payload {
+                dump_expr(out, p, ctx, level + 1);
+            }
+        }
+        Expression::Tuple(elems) => {
+            let _ = writeln!(out, "tuple");
+            for e in elems {
+                dump_expr(out, e, ctx, level + 1);
+            }
         }
         Expression::Match { scrutinee, arms } => {
             let _ = writeln!(out, "match");
             dump_expr(out, scrutinee, ctx, level + 1);
             for arm in arms {
-                let pattern_str = match &arm.pattern {
-                    MatchPattern::Variant {
-                        enum_ref,
-                        variant_idx,
-                    } => ctx.enum_display(*enum_ref, *variant_idx),
-                    MatchPattern::Wildcard => "_".to_string(),
-                };
+                let pattern_str = dump_match_pattern(&arm.pattern, ctx);
                 indent(out, level + 1);
                 let _ = writeln!(out, "arm {} =>", pattern_str);
                 dump_expr(out, &arm.body, ctx, level + 2);
             }
         }
+    }
+}
+
+/// recursively render a `MatchPattern` as source-like syntax, e.g.
+/// `Shape#Circle(r)`, `(a, b)`, `Wrap((x, y))`, `_`.
+fn dump_match_pattern(pattern: &MatchPattern, ctx: &CompileCtx) -> String {
+    match pattern {
+        MatchPattern::Variant {
+            enum_ref,
+            variant_idx,
+            payload,
+        } => {
+            let tag = ctx.enum_display(*enum_ref, *variant_idx);
+            match payload {
+                Some((_, p)) => format!("{tag}({})", dump_match_pattern(p, ctx)),
+                None => tag,
+            }
+        }
+        MatchPattern::Tuple { elems, .. } => format!(
+            "({})",
+            elems
+                .iter()
+                .map(|p| dump_match_pattern(p, ctx))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        MatchPattern::Binding { var, .. } => ctx.uniq_variable_name(var),
+        MatchPattern::Wildcard => "_".to_string(),
     }
 }
 

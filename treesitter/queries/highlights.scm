@@ -58,7 +58,8 @@
 ; ========= Enum type declarations =========
 (type_alias
   name: (identifier) @type.definition
-  variant: (identifier) @constructor)
+  variant: (enum_variant
+    name: (identifier) @constructor))
 
 ; ========= Constructors =========
 ; Light#Red
@@ -86,8 +87,11 @@
 (tag_pattern
   tag: (identifier) @constructor)
 
-; _  (wildcard)
-(wildcard_pattern) @variable.special
+; ========= Tuple patterns =========
+(tuple_pattern) @punctuation.special
+
+; ========= Binding patterns =========
+(binding_pattern) @variable.definition
 
 ; ========= Keywords =========
 [

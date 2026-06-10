@@ -1,10 +1,11 @@
+//@TEST:{0}[]
 
-        def main(): Int := {
-            let e: Int = {
-                let y:Int = a;
-                let x:Int = a+b;
-                x
-            };
-            let b:Int = a+b;
-            b
-        }
+def main(a: Int, mut b: Int): Int := {
+    let e: Int = {
+        let y:Int = a;
+        let x:Int = a+b;
+        x
+    };
+    let b:Int = a+b;
+    0
+}

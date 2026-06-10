@@ -1,0 +1,32 @@
+
+type List = Empty | Cons((Int, List));
+
+def len(l: List): Int := match l {
+    List#Empty => 0,
+    List#Cons((_, ll)) => 1 + len(ll),
+}
+
+def x(): #a | #b := {
+    if 1 > 2 then {
+        #a
+    } else {
+        #b
+    }
+}
+
+def test(): Int := {
+    let l = List#Cons((5, List#Cons((4, List#Empty))));
+    let length = len(l);
+    println(length);
+
+
+//    print(l);
+
+    length
+}
+
+def main(): Int := {
+    test();
+
+    0
+}

@@ -61,34 +61,92 @@ impl fmt::Display for Expression {
                 }
                 write!(f, " }}")
             }
-            Expression::Constructor { type_name, variant } => {
-                write!(f, "{type_name}#{variant}")
+            Expression::Constructor {
+                type_name,
+                variant,
+                payload,
+            } => {
+                write!(f, "{type_name}#{variant}")?;
+                if let Some(p) = payload {
+                    write!(f, "({})", p.expr)?;
+                }
+                Ok(())
             }
             Expression::ExternalConstructor {
                 mod_name,
                 type_name,
                 variant,
+                payload,
             } => {
-                write!(f, "{mod_name}::{type_name}#{variant}")
+                write!(f, "{mod_name}::{type_name}#{variant}")?;
+                if let Some(p) = payload {
+                    write!(f, "({})", p.expr)?;
+                }
+                Ok(())
             }
             Expression::Tag { variant } => {
                 write!(f, "#{variant}")
             }
             Expression::Match { scrutinee, arms } => {
+                fn fmt_hir_pattern(
+                    f: &mut std::fmt::Formatter<'_>,
+                    pattern: &crate::ir_types::hhir::HirPattern,
+                ) -> std::fmt::Result {
+                    use crate::ir_types::hhir::HirPattern;
+                    match pattern {
+                        HirPattern::Constructor {
+                            type_name,
+                            variant,
+                            payload,
+                        } => {
+                            write!(f, "{type_name}::{variant}")?;
+                            if let Some(p) = payload {
+                                write!(f, "(")?;
+                                fmt_hir_pattern(f, p)?;
+                                write!(f, ")")?;
+                            }
+                            Ok(())
+                        }
+                        HirPattern::Tag { variant, payload } => {
+                            write!(f, "#{variant}")?;
+                            if let Some(p) = payload {
+                                write!(f, "(")?;
+                                fmt_hir_pattern(f, p)?;
+                                write!(f, ")")?;
+                            }
+                            Ok(())
+                        }
+                        HirPattern::Tuple(elems) => {
+                            write!(f, "(")?;
+                            for (i, e) in elems.iter().enumerate() {
+                                if i > 0 {
+                                    write!(f, ", ")?;
+                                }
+                                fmt_hir_pattern(f, e)?;
+                            }
+                            write!(f, ")")
+                        }
+                        HirPattern::Binding { var, .. } => write!(f, "{var:?}"),
+                        HirPattern::Wildcard => write!(f, "_"),
+                    }
+                }
+
                 write!(f, "match {} {{ ", scrutinee.expr)?;
                 for arm in arms {
-                    match &arm.pattern {
-                        crate::ir_types::hhir::HirPattern::Constructor { type_name, variant } => {
-                            write!(f, "{type_name}::{variant}")?
-                        }
-                        crate::ir_types::hhir::HirPattern::Tag { variant } => {
-                            write!(f, "#{variant}")?;
-                        }
-                        crate::ir_types::hhir::HirPattern::Wildcard => write!(f, "_")?,
-                    }
+                    fmt_hir_pattern(f, &arm.pattern)?;
                     write!(f, " => {}, ", arm.body.expr)?;
                 }
                 write!(f, "}}")
+            }
+            Expression::Tuple(elems) => {
+                write!(f, "(")?;
+                for (i, e) in elems.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", e.expr)?;
+                }
+                write!(f, ")")
             }
         }
     }

@@ -116,13 +116,8 @@ impl FnCx {
             th::Expression::Int(i) => Some(Operand::Const(Constant::Int(*i))),
             th::Expression::Bool(b) => Some(Operand::Const(Constant::Bool(*b))),
             th::Expression::Unit => Some(Operand::Const(Constant::Unit)),
-            th::Expression::Constructor {
-                enum_ref,
-                variant_idx,
-            } => Some(Operand::Const(Constant::EnumVariant {
-                enum_ref: *enum_ref,
-                variant_idx: *variant_idx,
-            })),
+            // constructors — including nullary ones — are no longer constants:
+            // they are `Aggregate([Const::Int(variant_idx), ...])` in MIR.
             _ => None,
         }
     }
@@ -168,6 +163,98 @@ impl FnCx {
             vec![self.assign_stmt(dst, RValue::Use(Operand::Const(Constant::Unit)), range)],
             Terminator::Goto { target },
         )
+    }
+
+    /// recursively emit statements that bind the variables of `pattern`,
+    /// given that the value to match against is available as `source` (an
+    /// already-materialized `Operand`, e.g. `Copy(scrut_place)`).
+    ///
+    /// `Wildcard`s and direct `Binding`s need no intermediate storage —
+    /// they either discard the value (no statement emitted; sound because
+    /// decision D3 performs no partial-move tracking, so a discarded
+    /// sub-value simply remains owned by whatever already holds `source`)
+    /// or are assigned straight from `source`. Compound sub-patterns
+    /// (`Tuple`, or a `Variant`'s payload) delegate to
+    /// [`Self::lower_projected_pattern`], which materializes the projected
+    /// value into a fresh temp before recursing — see its doc comment for
+    /// why that's necessary.
+    pub(super) fn lower_pattern_bindings(
+        &mut self,
+        pattern: &th::MatchPattern,
+        source: Operand,
+        range: Range,
+        statements: &mut Vec<Statement>,
+    ) {
+        match pattern {
+            th::MatchPattern::Wildcard => {}
+            th::MatchPattern::Binding {
+                var,
+                ty,
+                range: brange,
+            } => {
+                let local = self.get_or_create_local(*var, *ty, *brange);
+                statements.push(self.assign_stmt(local, RValue::Use(source), *brange));
+            }
+            th::MatchPattern::Tuple { elems, .. } => {
+                for (i, sub) in elems.iter().enumerate() {
+                    self.lower_projected_pattern(sub, source.clone(), i, range, statements);
+                }
+            }
+            th::MatchPattern::Variant { payload, .. } => {
+                if let Some((_, sub)) = payload {
+                    // payload is always field 1 (field 0 is the discriminant)
+                    self.lower_projected_pattern(sub, source, 1, range, statements);
+                }
+            }
+        }
+    }
+
+    /// bind `pattern` against the result of projecting `projection` out of
+    /// `base`. simple patterns (`Binding`, `Wildcard`) consume the
+    /// `RValue::Field` directly — `Binding` is assigned straight from it,
+    /// `Wildcard` discards it (no statement). compound patterns (`Tuple` —
+    /// the only nested form decision D1 allows; `Variant`/`Tag` sub-patterns
+    /// are rejected at typecheck via `RefutableNestedPattern`) must first
+    /// materialize the projection into a fresh temp, because `RValue::Field`
+    /// isn't an `Operand` — further projection needs `Copy(Place)`/`Const`,
+    /// so the intermediate value needs a `Place` to be copied from. the
+    /// temp's type comes from the pattern's own carried `ty` (`Tuple.ty`),
+    /// which always equals the type of the value it's matched against.
+    pub(super) fn lower_projected_pattern(
+        &mut self,
+        pattern: &th::MatchPattern,
+        base: Operand,
+        index: usize,
+        range: Range,
+        statements: &mut Vec<Statement>,
+    ) {
+        let field = RValue::Field { base, index };
+        match pattern {
+            th::MatchPattern::Wildcard => {
+                // discard — D3, no partial-move tracking, no statement needed
+            }
+            th::MatchPattern::Binding {
+                var,
+                ty,
+                range: brange,
+            } => {
+                let local = self.get_or_create_local(*var, *ty, *brange);
+                statements.push(self.assign_stmt(local, field, *brange));
+            }
+            th::MatchPattern::Tuple { ty, elems } => {
+                let tmp = self.fresh_temp("pattern_extract", *ty, range);
+                statements.push(self.assign_stmt(tmp, field, range));
+                let base = Operand::Copy(Self::place(tmp));
+                for (i, sub) in elems.iter().enumerate() {
+                    self.lower_projected_pattern(sub, base.clone(), i, range, statements);
+                }
+            }
+            th::MatchPattern::Variant { .. } => internal_bug!(
+                "nested Variant/Tag pattern reached MIR lowering \
+                 (decision D1 / RefutableNestedPattern should have rejected \
+                 this at typecheck)"
+            ),
+        }
     }
 
     pub(super) fn lower_tail(&mut self, expr: &th::Expr) -> BlockId {
@@ -265,7 +352,6 @@ impl FnCx {
             th::Expression::Int(_)
             | th::Expression::Bool(_)
             | th::Expression::Unit
-            | th::Expression::Constructor { .. }
             | th::Expression::Var(_) => {
                 let op = self
                     .simple_operand(expr)
@@ -275,6 +361,64 @@ impl FnCx {
                     vec![self.assign_stmt(dst, RValue::Use(op), expr.range)],
                     Terminator::Goto { target: cont },
                 )
+            }
+
+            th::Expression::Constructor {
+                variant_idx,
+                payload,
+                ..
+            } => {
+                // All enum values — including nullary variants — are Aggregates
+                // in MIR. field 0 is always the discriminant (variant index as
+                // Int); field 1 (if present) is the payload.
+                let disc = Operand::Const(Constant::Int(*variant_idx as i64));
+                match payload {
+                    None => self.new_block(
+                        vec![self.assign_stmt(dst, RValue::Aggregate(vec![disc]), expr.range)],
+                        Terminator::Goto { target: cont },
+                    ),
+                    Some(p) => {
+                        let p_tmp = self.fresh_temp("ctor_payload", p.ty, p.range);
+                        let final_bb = self.new_block(
+                            vec![self.assign_stmt(
+                                dst,
+                                RValue::Aggregate(vec![disc, Operand::Copy(Self::place(p_tmp))]),
+                                expr.range,
+                            )],
+                            Terminator::Goto { target: cont },
+                        );
+                        self.lower_assign(p, p_tmp, final_bb)
+                    }
+                }
+            }
+
+            th::Expression::Tuple(elems) => {
+                let elem_temps = elems
+                    .iter()
+                    .map(|e| self.fresh_temp("tuple_elem", e.ty, e.range))
+                    .collect::<Vec<_>>();
+
+                let final_bb = self.new_block(
+                    vec![
+                        self.assign_stmt(
+                            dst,
+                            RValue::Aggregate(
+                                elem_temps
+                                    .iter()
+                                    .map(|id| Operand::Copy(Self::place(*id)))
+                                    .collect(),
+                            ),
+                            expr.range,
+                        ),
+                    ],
+                    Terminator::Goto { target: cont },
+                );
+
+                elems
+                    .iter()
+                    .zip(elem_temps)
+                    .rev()
+                    .fold(final_bb, |k, (e, tmp)| self.lower_assign(e, tmp, k))
             }
 
             th::Expression::UnOp { op, right } => {
@@ -375,11 +519,33 @@ impl FnCx {
             th::Expression::Match { scrutinee, arms } => {
                 // evaluate scrutinee into a fresh temp.
                 let scrut_tmp = self.fresh_temp("match_scrutinee", scrutinee.ty, scrutinee.range);
+                let scrut_operand = Operand::Copy(Self::place(scrut_tmp));
 
-                // lower each arm body (all continue to `cont` after assigning `dst`).
+                // for each arm: first emit an "extraction block" that binds the
+                // pattern's variables (registering their locals as a side
+                // effect — *before* lowering the body, since the body may
+                // reference them by `Var`/`var_operand`, which requires the
+                // local to already exist in `local_map`), then the body block,
+                // and chain extraction -> body. arms whose pattern binds
+                // nothing (`Wildcard`, or a `Variant`/`Tuple` with only
+                // wildcards/no payload) skip the extraction block entirely.
                 let arm_bbs: Vec<BlockId> = arms
                     .iter()
-                    .map(|arm| self.lower_assign(&arm.body, dst, cont))
+                    .map(|arm| {
+                        let mut bind_stmts = Vec::new();
+                        self.lower_pattern_bindings(
+                            &arm.pattern,
+                            scrut_operand.clone(),
+                            arm.range,
+                            &mut bind_stmts,
+                        );
+                        let body_bb = self.lower_assign(&arm.body, dst, cont);
+                        if bind_stmts.is_empty() {
+                            body_bb
+                        } else {
+                            self.new_block(bind_stmts, Terminator::Goto { target: body_bb })
+                        }
+                    })
                     .collect();
 
                 // build the dispatch chain backwards.
@@ -389,28 +555,45 @@ impl FnCx {
 
                 for (arm, arm_bb) in arms.iter().zip(arm_bbs.iter()).rev() {
                     match &arm.pattern {
-                        th::MatchPattern::Wildcard => {
-                            // wildcard: unconditional fall-through to this arm
+                        th::MatchPattern::Wildcard
+                        | th::MatchPattern::Binding { .. }
+                        | th::MatchPattern::Tuple { .. } => {
+                            // irrefutable (D1: every legal tuple-scrutinee
+                            // pattern matches unconditionally; `irrefutable_seen`
+                            // guarantees nothing meaningful follows an enum-side
+                            // wildcard/binding either) -> unconditional
+                            // fall-through to this arm
                             fallthrough_bb = *arm_bb;
                         }
-                        th::MatchPattern::Variant {
-                            enum_ref,
-                            variant_idx,
-                        } => {
+                        th::MatchPattern::Variant { variant_idx, .. } => {
+                            // Extract the discriminant (field 0) then compare
+                            // it as a plain integer against the target variant
+                            // index. This makes tag dispatch explicit in the
+                            // MIR — no special `EnumVariant` constant needed.
+                            let disc_tmp = self.fresh_temp("match_disc", Ty::INT, arm.range);
                             let cmp_tmp = self.fresh_temp("match_cmp", Ty::BOOL, arm.range);
                             let check_bb = self.new_block(
-                                vec![self.assign_stmt(
-                                    cmp_tmp,
-                                    RValue::BinaryOp {
-                                        op: Bop::Comp(CompOp::Eq),
-                                        left: Operand::Copy(Self::place(scrut_tmp)),
-                                        right: Operand::Const(Constant::EnumVariant {
-                                            enum_ref: *enum_ref,
-                                            variant_idx: *variant_idx,
-                                        }),
-                                    },
-                                    arm.range,
-                                )],
+                                vec![
+                                    self.assign_stmt(
+                                        disc_tmp,
+                                        RValue::Field {
+                                            base: Operand::Copy(Self::place(scrut_tmp)),
+                                            index: 0,
+                                        },
+                                        arm.range,
+                                    ),
+                                    self.assign_stmt(
+                                        cmp_tmp,
+                                        RValue::BinaryOp {
+                                            op: Bop::Comp(CompOp::Eq),
+                                            left: Operand::Copy(Self::place(disc_tmp)),
+                                            right: Operand::Const(Constant::Int(
+                                                *variant_idx as i64,
+                                            )),
+                                        },
+                                        arm.range,
+                                    ),
+                                ],
                                 Terminator::Branch {
                                     cond: Operand::Copy(Self::place(cmp_tmp)),
                                     then_bb: *arm_bb,

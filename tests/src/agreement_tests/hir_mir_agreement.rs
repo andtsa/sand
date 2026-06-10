@@ -7,9 +7,9 @@
 use lang::compile_hir;
 use lang::compiler::context::CompileCtx;
 use lang::compiler::structure::Map;
-use lang::interpreter::mir::MirValue;
 use lang::ir_types::mir::MirProgram;
-use lang::ir_types::typed_hir::Expression;
+
+use crate::common::mir_value_to_expr;
 
 /// Helper: Run both the typed-HIR and MIR interpreters and assert they agree.
 fn assert_hir_mir_agree(src: &str) {
@@ -28,18 +28,7 @@ fn assert_hir_mir_agree(src: &str) {
         .unwrap_or_else(|e| panic!("MIR interpret failed:\n  {e}"));
 
     // convert MirValue → Expression for comparison
-    let mir_as_expr = match mir_result {
-        MirValue::Int(i) => Expression::Int(i),
-        MirValue::Bool(b) => Expression::Bool(b),
-        MirValue::Unit => Expression::Unit,
-        MirValue::EnumVariant {
-            enum_ref,
-            variant_idx,
-        } => Expression::Constructor {
-            enum_ref,
-            variant_idx,
-        },
-    };
+    let mir_as_expr = mir_value_to_expr(mir_result);
 
     assert_eq!(
         hir_result, mir_as_expr,

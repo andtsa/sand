@@ -55,10 +55,17 @@ pub fn collect_dependencies(expr: &Expression, dependencies: &mut HashSet<UniqVa
                 collect_dependencies(&e.expr, dependencies);
             }
         }
-        Expression::Int(_)
-        | Expression::Bool(_)
-        | Expression::Unit
-        | Expression::Constructor { .. } => {}
+        Expression::Int(_) | Expression::Bool(_) | Expression::Unit => {}
+        Expression::Constructor { payload, .. } => {
+            if let Some(p) = payload {
+                collect_dependencies(&p.expr, dependencies);
+            }
+        }
+        Expression::Tuple(elems) => {
+            for e in elems {
+                collect_dependencies(&e.expr, dependencies);
+            }
+        }
         Expression::Match { scrutinee, arms } => {
             collect_dependencies(&scrutinee.expr, dependencies);
             for arm in arms {

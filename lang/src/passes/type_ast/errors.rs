@@ -46,7 +46,7 @@ pub enum AstTypeError {
         enum_name: String,
         range: Range,
     },
-    #[error("match scrutinee has type {ty} but match requires an enum type at {range}")]
+    #[error("match scrutinee has type {ty} but match requires an enum or tuple type at {range}")]
     MatchNonEnumScrutinee { ty: Ty, range: Range },
     #[error(
         "match on enum '{enum_name}' is not exhaustive at {range}; uncovered variants: {uncovered:?}"
@@ -66,6 +66,52 @@ pub enum AstTypeError {
     MatchWrongEnumType {
         expected_enum: String,
         found_enum: String,
+        range: Range,
+    },
+    #[error(
+        "constructor '{enum_name}#{variant}' at {range}: payload mismatch — variant {} a payload, but the call {}",
+        if *expected_payload { "expects" } else { "does not expect" },
+        if *expected_payload { "has none" } else { "supplies one" }
+    )]
+    ConstructorPayloadMismatch {
+        enum_name: String,
+        variant: String,
+        /// `true` if the variant is declared with a payload (so the call is
+        /// missing one); `false` if the variant is nullary (so the call's
+        /// payload is unexpected).
+        expected_payload: bool,
+        range: Range,
+    },
+    #[error(
+        "pattern '{enum_name}#{variant}' at {range}: payload mismatch — variant {} a payload, but the pattern {}",
+        if *expected_payload { "carries" } else { "does not carry" },
+        if *expected_payload { "doesn't destructure it" } else { "tries to destructure one" }
+    )]
+    PatternPayloadMismatch {
+        enum_name: String,
+        variant: String,
+        /// `true` if the variant is declared with a payload (so the pattern
+        /// should — but doesn't — destructure it); `false` if the variant is
+        /// nullary (so the pattern's sub-pattern is unexpected).
+        expected_payload: bool,
+        range: Range,
+    },
+    #[error(
+        "tuple pattern at {range} has {found} element(s) but the scrutinee type has {expected}"
+    )]
+    PatternArityMismatch {
+        expected: usize,
+        found: usize,
+        range: Range,
+    },
+    #[error("pattern type error at {range}: {message}")]
+    PatternTypeMismatch { message: String, range: Range },
+    #[error(
+        "pattern '{enum_name}#{variant}' at {range} matches a specific enum variant in a nested (payload/tuple) position — only bindings, wildcards, and tuple-destructuring are supported there; matching specific variants of nested enums is not yet supported"
+    )]
+    RefutableNestedPattern {
+        enum_name: String,
+        variant: String,
         range: Range,
     },
 }

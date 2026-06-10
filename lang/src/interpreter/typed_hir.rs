@@ -129,35 +129,107 @@ impl TypedProgram {
             Expression::Constructor {
                 enum_ref,
                 variant_idx,
-            } => Ok(Expression::Constructor {
-                enum_ref: *enum_ref,
-                variant_idx: *variant_idx,
-            }),
+                payload,
+            } => {
+                let payload_val = match payload {
+                    Some(p) => Some(Box::new(Expr {
+                        expr: self.eval_expr(&p.expr, env, ctx, output)?,
+                        ty: p.ty,
+                        range: p.range,
+                    })),
+                    None => None,
+                };
+                Ok(Expression::Constructor {
+                    enum_ref: *enum_ref,
+                    variant_idx: *variant_idx,
+                    payload: payload_val,
+                })
+            }
+
+            Expression::Tuple(elems) => {
+                let vals = elems
+                    .iter()
+                    .map(|e| {
+                        Ok(Expr {
+                            expr: self.eval_expr(&e.expr, env, ctx, output)?,
+                            ty: e.ty,
+                            range: e.range,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, InterpError>>()?;
+                Ok(Expression::Tuple(vals))
+            }
 
             Expression::Match { scrutinee, arms } => {
                 let scrut_val = self.eval_expr(&scrutinee.expr, env, ctx, output)?;
                 for arm in arms {
-                    let matches = match &arm.pattern {
-                        crate::ir_types::typed_hir::MatchPattern::Wildcard => true,
-                        crate::ir_types::typed_hir::MatchPattern::Variant {
-                            enum_ref,
-                            variant_idx,
-                        } => {
-                            scrut_val
-                                == Expression::Constructor {
-                                    enum_ref: *enum_ref,
-                                    variant_idx: *variant_idx,
-                                }
-                        }
-                    };
-                    if matches {
-                        return self.eval_expr(&arm.body.expr, env, ctx, output);
+                    // try-and-fall-back: clone `env`, attempt to match *and*
+                    // bind in one recursive pass; only `Variant` sub-checks
+                    // can fail (every other pattern form is irrefutable, see
+                    // decision D1 in DESTRUCTURING_PATTERNS.todo.md), so a
+                    // failed attempt simply discards its (partially-bound)
+                    // env clone and moves on to the next arm.
+                    let mut arm_env = env.clone();
+                    if bind_pattern(&arm.pattern, &scrut_val, &mut arm_env) {
+                        return self.eval_expr(&arm.body.expr, &mut arm_env, ctx, output);
                     }
                 }
                 // exhaustiveness is guaranteed by the type checker
                 unreachable!("non-exhaustive match reached at runtime")
             }
         }
+    }
+}
+
+/// recursively match `pattern` against an already-evaluated scrutinee `value`,
+/// extending `env` with any bindings the pattern introduces along the way.
+/// returns whether the pattern matched.
+///
+/// only `Variant` patterns can fail to match (by tag mismatch) — every other
+/// pattern form (`Wildcard`, `Binding`, `Tuple`) is irrefutable by
+/// construction (decision D1 in `DESTRUCTURING_PATTERNS.todo.md`: only
+/// bindings, wildcards, and recursive tuple-destructuring are allowed in
+/// sub-pattern position, so once the top-level tag matches every sub-pattern
+/// is guaranteed to match too).
+fn bind_pattern(pattern: &MatchPattern, value: &Expression, env: &mut Env) -> bool {
+    match pattern {
+        MatchPattern::Wildcard => true,
+        MatchPattern::Binding { var, .. } => {
+            env.insert(*var, value.clone());
+            true
+        }
+        MatchPattern::Variant {
+            enum_ref,
+            variant_idx,
+            payload,
+        } => match value {
+            Expression::Constructor {
+                enum_ref: er,
+                variant_idx: vi,
+                payload: val_payload,
+            } if er == enum_ref && vi == variant_idx => match (payload, val_payload) {
+                (None, _) => true,
+                (Some((_, sub_pat)), Some(sub_val)) => bind_pattern(sub_pat, &sub_val.expr, env),
+                (Some(_), None) => unreachable!(
+                    "ill-typed match: pattern destructures a payload but the value carries none \
+                     (the type checker should have rejected this)"
+                ),
+            },
+            _ => false,
+        },
+        MatchPattern::Tuple {
+            elems: sub_patterns,
+            ..
+        } => match value {
+            Expression::Tuple(elems) => sub_patterns
+                .iter()
+                .zip(elems.iter())
+                .all(|(p, e)| bind_pattern(p, &e.expr, env)),
+            _ => unreachable!(
+                "ill-typed match: tuple pattern against a non-tuple value \
+                 (the type checker should have rejected this)"
+            ),
+        },
     }
 }
 
@@ -236,25 +308,63 @@ fn eval_binop(
             Expression::Constructor {
                 enum_ref: er_l,
                 variant_idx: vi_l,
+                payload: ref pl_l,
             },
             Expression::Constructor {
                 enum_ref: er_r,
                 variant_idx: vi_r,
+                payload: ref pl_r,
+            },
+            Bop::Comp(cop @ (CompOp::Eq | CompOp::Ne)),
+        ) => {
+            if er_l != er_r {
+                return Err(InterpError::BinOpTypeError(format!(
+                    "{} cannot be compared with {}",
+                    ctx.enum_display(er_l, vi_l),
+                    ctx.enum_display(er_r, vi_r)
+                )));
+            }
+            let eq = vi_l == vi_r && pl_l == pl_r;
+            match cop {
+                CompOp::Eq => Ok(Expression::Bool(eq)),
+                CompOp::Ne => Ok(Expression::Bool(!eq)),
+                _ => unreachable!(),
+            }
+        }
+        (
+            Expression::Constructor {
+                enum_ref: er_l,
+                variant_idx: vi_l,
+                ..
+            },
+            Expression::Constructor {
+                enum_ref: er_r,
+                variant_idx: vi_r,
+                ..
             },
             Bop::Comp(cop),
-        ) => match cop {
-            _ if er_l != er_r => Err(InterpError::BinOpTypeError(format!(
-                "{} cannot be compared with {}",
-                ctx.enum_display(er_l, vi_l),
-                ctx.enum_display(er_r, vi_r)
-            ))),
-            CompOp::Eq => Ok(Expression::Bool(vi_l == vi_r)),
-            CompOp::Ne => Ok(Expression::Bool(vi_l != vi_r)),
-            CompOp::Ge => Ok(Expression::Bool(vi_l >= vi_r)),
-            CompOp::Le => Ok(Expression::Bool(vi_l <= vi_r)),
-            CompOp::Gt => Ok(Expression::Bool(vi_l > vi_r)),
-            CompOp::Lt => Ok(Expression::Bool(vi_l < vi_r)),
-        },
+        ) => {
+            if er_l != er_r {
+                return Err(InterpError::BinOpTypeError(format!(
+                    "{} cannot be compared with {}",
+                    ctx.enum_display(er_l, vi_l),
+                    ctx.enum_display(er_r, vi_r)
+                )));
+            }
+            match cop {
+                CompOp::Ge => Ok(Expression::Bool(vi_l >= vi_r)),
+                CompOp::Le => Ok(Expression::Bool(vi_l <= vi_r)),
+                CompOp::Gt => Ok(Expression::Bool(vi_l > vi_r)),
+                CompOp::Lt => Ok(Expression::Bool(vi_l < vi_r)),
+                _ => unreachable!(),
+            }
+        }
+        (Expression::Tuple(l), Expression::Tuple(r), Bop::Comp(CompOp::Eq)) => {
+            Ok(Expression::Bool(l == r))
+        }
+        (Expression::Tuple(l), Expression::Tuple(r), Bop::Comp(CompOp::Ne)) => {
+            Ok(Expression::Bool(l != r))
+        }
         (el, er, o) => Err(InterpError::BinOpTypeError(format!(
             "{} {o} {}",
             el.fmt_inline(ctx),

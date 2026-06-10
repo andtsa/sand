@@ -347,3 +347,42 @@ this code is adapted (effectively 1-1) from the explicate control assignment of 
 
 45 directories, 174 files
 ```
+
+
+
+# progress & goals
+
+## known issues:
+
+## immediate todo's
+
+- [ ] fix the logic in `examples/lists.sand` so the test is correct
+- [ ] write more example test files in `examples/` using the `@TEST` annotation, making all kinds of complex real-world style functional programs and algorithms
+- [ ] implement the necessary parts of the `lang/src/passes/llvm_codegen.rs` pass so enums and tuples can be correctly compiled to binaries
+- [ ] run all tests, and make sure all the passes are correct using the end-to-end test style of fully compiled `examples/` programs
+- [ ] improve the capabilities of pattern matching:
+    - [ ] exctract the exhaustiveness matching logic such that it may be cleanly expanded to handle more cases
+    - [ ] allow `Int`s and `Bool`s in pattern position
+    - [ ] allow nested enum constructors in pattern position (roughly following rust's syntax, rules, and capabilities for it)
+    - [ ] allow patterns in the identifier position of a `let` statement: e.g. `let (a, mut b) = (1, true)`, à la rust
+- [ ] improve/modify type inference such that proper enums (not ad-hoc tags) may be instantiated or used in pattern position without specifying the parent type, IF the parent type may be inferred, e.g.:
+```sand
+type List = Empty | Cons((Int, List));
+def prepend(elem: Int, list: List): List := match list {
+    #Empty => #Cons((elem, #Empty)), // the pattern position must be of type List, as per the match scrutinee `list`, thus you shouldn't need to specify explicitl `List#Empty =>`. likewise for the return value, since the function's return value is known, the constructor's parent enum can be inferred.
+    tail => #Cons((elem, tail)), 
+}
+```
+- [ ] replace the `usize` placeholder pointer types with proper `Interned<'tcx, &A>` references
+    - [ ] for `Ty`/`TyKind`
+    - [ ] for `EnumRef`
+    - [ ] for `UniqVar`
+    - [ ] for `FunRef`
+    - etc.
+
+## next steps
+
+- [ ] immutable reference types `&x`
+- [ ] mutable reference types `&mut x`
+- [ ] dereferencing operation `*x`
+- [ ] lifetimes & lifetime scopes, expand ownership checks to reference types

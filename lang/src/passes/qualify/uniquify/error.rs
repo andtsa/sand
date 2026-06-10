@@ -32,6 +32,14 @@ pub enum UniquifyError {
         first_instance: Range,
         second_instance: Range,
     },
+    /// the same name is bound more than once within a single match-arm
+    /// pattern, e.g. `(x, x) => ...` or `Pair(x, x) => ...`
+    /// (mirrors Rust's E0416 "identifier bound more than once in same pattern")
+    DuplicateBindingInPattern {
+        name: String,
+        first_instance: Range,
+        second_instance: Range,
+    },
 }
 
 impl std::fmt::Display for UniquifyError {
@@ -70,6 +78,14 @@ impl std::fmt::Display for UniquifyError {
             } => write!(
                 f,
                 "duplicate variable '{name}' at {first_instance} and {second_instance}",
+            ),
+            DuplicateBindingInPattern {
+                name,
+                first_instance,
+                second_instance,
+            } => write!(
+                f,
+                "identifier '{name}' bound more than once in the same pattern, at {first_instance} and {second_instance}",
             ),
         }
     }

@@ -7,4 +7,5 @@ edition = "2024"
 lang = { path = "../lang" }
 anyhow.workspace = true
 url.workspace = true
+uuid = { version = "1", features = ["v4"] }
 tracing.workspace = true

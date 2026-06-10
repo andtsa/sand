@@ -80,8 +80,9 @@ impl Expr {
     /// Applies the fallible transformation `f` to every direct child `Expr`
     /// and reconstructs the parent node around the results, threading the
     /// original `range` through unchanged. Terminal nodes that contain no
-    /// sub-expressions (`Var`, `Int`, `Bool`, `Unit`, `Constructor`,
-    /// `ExternalConstructor`, `Tag`) are returned untouched. `Block` is
+    /// sub-expressions (`Var`, `Int`, `Bool`, `Unit`, `Tag`) are returned
+    /// untouched; `Constructor`/`ExternalConstructor` recurse into their
+    /// optional payload and `Tuple` into its elements. `Block` is
     /// deliberately *excluded*: its children are `Statement`s rather than
     /// bare `Expr`s and visiting it requires scope bookkeeping that only the
     /// caller (e.g. `uniquify`) knows how to do — so callers must match on
@@ -157,14 +158,35 @@ impl Expr {
                     })
                     .collect::<Result<_, _>>()?,
             },
+            Expression::Constructor {
+                type_name,
+                variant,
+                payload,
+            } => Expression::Constructor {
+                type_name: type_name.clone(),
+                variant: variant.clone(),
+                payload: payload.as_deref().map(&mut f).transpose()?.map(Box::new),
+            },
+            Expression::ExternalConstructor {
+                mod_name,
+                type_name,
+                variant,
+                payload,
+            } => Expression::ExternalConstructor {
+                mod_name: mod_name.clone(),
+                type_name: type_name.clone(),
+                variant: variant.clone(),
+                payload: payload.as_deref().map(&mut f).transpose()?.map(Box::new),
+            },
+            Expression::Tuple(elems) => {
+                Expression::Tuple(elems.iter().map(&mut f).collect::<Result<_, _>>()?)
+            }
             // Terminal nodes: no sub-expressions to traverse into, just
             // clone the (cheap) payload through unchanged.
             leaf @ (Expression::Var(_)
             | Expression::Int(_)
             | Expression::Bool(_)
             | Expression::Unit
-            | Expression::Constructor { .. }
-            | Expression::ExternalConstructor { .. }
             | Expression::Tag { .. }) => (*leaf).clone(),
             // `Block` mixes `Statement` children and scoping concerns —
             // callers must handle it before delegating here.
@@ -212,11 +234,13 @@ pub enum Expression {
     Constructor {
         type_name: String,
         variant: String,
+        payload: Option<Box<Expr>>,
     },
     ExternalConstructor {
         mod_name: String,
         type_name: String,
         variant: String,
+        payload: Option<Box<Expr>>,
     },
     Tag {
         variant: String,
@@ -225,6 +249,7 @@ pub enum Expression {
         scrutinee: Box<Expr>,
         arms: Vec<HirMatchArm>,
     },
+    Tuple(Vec<Expr>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -236,8 +261,25 @@ pub struct HirMatchArm {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum HirPattern {
-    Constructor { type_name: String, variant: String },
-    Tag { variant: String },
+    Constructor {
+        type_name: String,
+        variant: String,
+        payload: Option<Box<HirPattern>>,
+    },
+    Tag {
+        variant: String,
+        payload: Option<Box<HirPattern>>,
+    },
+    Tuple(Vec<HirPattern>),
+    /// a variable binding that destructures part of the scrutinee, e.g. the
+    /// `r` in `Circle(r)` or `a`/`b` in `(a, b)`. carries its own `Range`
+    /// since it is a declaration site (needed for "declared at..."
+    /// diagnostics, mirroring `OriginalVarRef`/`UniqVar` declarations
+    /// elsewhere).
+    Binding {
+        var: HirVar,
+        range: Range,
+    },
     Wildcard,
 }
 

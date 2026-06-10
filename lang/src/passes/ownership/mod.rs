@@ -95,10 +95,14 @@ impl<'ctx> OwnershipChecker<'ctx> {
         env: &mut OwnershipEnv,
     ) -> Result<(), OwnershipCheckError> {
         match &expr.expr {
-            th::Expression::Int(_)
-            | th::Expression::Bool(_)
-            | th::Expression::Unit
-            | th::Expression::Constructor { .. } => Ok(()),
+            th::Expression::Int(_) | th::Expression::Bool(_) | th::Expression::Unit => Ok(()),
+
+            th::Expression::Constructor { payload, .. } => match payload {
+                Some(p) => self.check_expr(p, env),
+                None => Ok(()),
+            },
+
+            th::Expression::Tuple(elems) => self.check_exprs(elems, env),
 
             th::Expression::Var(v) => {
                 if expr.ty.is_copy() {
@@ -193,11 +197,24 @@ impl<'ctx> OwnershipChecker<'ctx> {
                 // the scrutinee is consumed
                 self.check_expr(scrutinee, env)?;
 
+                // snapshot pre-arm variables so pattern bindings (which are
+                // scoped to their arm) can be removed again afterwards —
+                // mirrors `Block`'s `pre_block_vars`/`restrict_to` handling.
+                let pre_arm_vars = env.var_keys();
+
                 let arm_envs = arms
                     .iter()
                     .map(|arm| {
                         let mut arm_env = env.clone();
+                        // per decision D3 (no partial-move tracking): the
+                        // scrutinee is already fully consumed above, so each
+                        // sub-value bound by the pattern starts life as a
+                        // fresh, independently-`Owned` binding — no different
+                        // from a `let` declaration. this requires zero changes
+                        // to `OwnershipEnv`'s data model.
+                        Self::declare_pattern_bindings(&arm.pattern, &mut arm_env);
                         self.check_expr(&arm.body, &mut arm_env)?;
+                        arm_env.restrict_to(&pre_arm_vars);
                         Ok(arm_env)
                     })
                     .collect::<Result<Vec<_>, OwnershipCheckError>>()?;
@@ -208,6 +225,25 @@ impl<'ctx> OwnershipChecker<'ctx> {
                         .fold(first.clone(), |acc, e| OwnershipEnv::merge(&acc, e));
                 }
                 Ok(())
+            }
+        }
+    }
+
+    /// recursively declare every variable bound by `pattern` as freshly
+    /// `Owned` in `env` (decision D3 — see `Match` arm handling above).
+    fn declare_pattern_bindings(pattern: &th::MatchPattern, env: &mut OwnershipEnv) {
+        match pattern {
+            th::MatchPattern::Wildcard => {}
+            th::MatchPattern::Binding { var, .. } => env.declare(*var),
+            th::MatchPattern::Tuple { elems, .. } => {
+                for sub in elems {
+                    Self::declare_pattern_bindings(sub, env);
+                }
+            }
+            th::MatchPattern::Variant { payload, .. } => {
+                if let Some((_, sub)) = payload {
+                    Self::declare_pattern_bindings(sub, env);
+                }
             }
         }
     }

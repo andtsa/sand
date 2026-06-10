@@ -146,9 +146,18 @@ pub fn build_program<'run>(
     // Collect all top-level children so we can do two passes.
     let children: Vec<Pair<Rule>> = pair.into_inner().collect();
 
-    // first pass: register enum type declarations
+    // first pass: register enum type declarations (phase 1 — names only).
     // we also track the current module as module declarations are encountered,
-    // so that enum defs are attributed to the correct module
+    // so that enum defs are attributed to the correct module.
+    //
+    // phase 1 deliberately allocates every `EnumRef` and variant name (with
+    // `payload: None`) before any payload type annotation is resolved: a
+    // payload may reference another enum — including forward or recursive
+    // references (`type Tree = Leaf | Node((Tree, Tree))`) — so every
+    // `EnumRef` must exist before `build_type` runs on any payload. We stash
+    // the raw payload `type_` pairs (cloned — they borrow from `src`) here
+    // and resolve them in phase 1.5 below, once every enum skeleton exists.
+    let mut pending_payloads: Vec<(EnumRef, usize, Pair<Rule>)> = Vec::new();
     {
         let mut cur_mod = default_module;
         for child in &children {
@@ -169,12 +178,41 @@ pub fn build_program<'run>(
                     let mut inner = child.clone().into_inner();
                     let name_pair = inner.next().missing("enum name", range)?;
                     let enum_name = name_pair.as_str().to_string();
-                    let variants: Vec<String> = inner.map(|p| p.as_str().to_string()).collect();
-                    ctx.register_enum(&enum_name, variants, range, cur_mod)?;
+
+                    // enum_variant = { identifier ~ ("(" ~ type_ ~ ")")? }
+                    let mut variant_names = Vec::new();
+                    let mut variant_payloads = Vec::new();
+                    for variant_pair in inner {
+                        assert_eq!(variant_pair.as_rule(), Rule::enum_variant);
+                        let v_range = Range::from(&variant_pair);
+                        let mut v_inner = variant_pair.into_inner();
+                        let v_name = v_inner
+                            .next()
+                            .missing("variant name", v_range)?
+                            .as_str()
+                            .to_string();
+                        let payload_pair = v_inner.next();
+                        variant_names.push(v_name);
+                        variant_payloads.push(payload_pair);
+                    }
+
+                    let er = ctx.register_enum(&enum_name, variant_names, range, cur_mod)?;
+                    for (idx, payload_pair) in variant_payloads.into_iter().enumerate() {
+                        if let Some(p) = payload_pair {
+                            pending_payloads.push((er, idx, p));
+                        }
+                    }
                 }
                 _ => {}
             }
         }
+    }
+
+    // phase 1.5: resolve every variant's payload type annotation now that all
+    // `EnumRef`s exist (so forward/recursive payload types resolve correctly).
+    for (er, idx, payload_pair) in pending_payloads {
+        let payload_ty = build_type(ctx, payload_pair)?;
+        ctx.set_variant_payload(er, idx, payload_ty);
     }
 
     // second pass: build functions
@@ -372,6 +410,14 @@ fn build_type<'run>(ctx: &mut CompileCtx<'run>, pair: Pair<Rule>) -> Result<Ty, 
     // plain identifier / built-in keyword.
     let inner_opt = pair.clone().into_inner().next();
     match inner_opt {
+        Some(inner) if inner.as_rule() == Rule::tuple_type => {
+            // tuple_type = { "(" ~ type_ ~ ("," ~ type_)+ ~ ")" }
+            let elem_tys = inner
+                .into_inner()
+                .map(|p| build_type(ctx, p))
+                .collect::<Result<Vec<Ty>, _>>()?;
+            Ok(ctx.intern_tuple(elem_tys))
+        }
         Some(inner) if inner.as_rule() == Rule::tag_type => {
             // tag_type = { "#" ~ identifier ~ ("|" ~ "#" ~ identifier)* }
             // The "#" and "|" literals are anonymous; only `identifier` children are
@@ -885,7 +931,7 @@ fn build_primary<'run>(
         Rule::function_call | Rule::external_function_call => build_call(ctx, inner, src),
         Rule::external_constructor_expr => {
             // external_constructor_expr = { identifier ~ "::" ~ identifier ~ "#" ~
-            // identifier }
+            // identifier ~ ("(" ~ expression ~ ")")? }
             let inner_range = Range::from(&inner);
             let mut parts = inner.into_inner();
             let mod_name = parts
@@ -903,17 +949,24 @@ fn build_primary<'run>(
                 .missing("variant in external constructor", inner_range)?
                 .as_str()
                 .to_string();
+            let payload = parts
+                .next()
+                .map(|p| build_expr(ctx, p, src))
+                .transpose()?
+                .map(Box::new);
             Ok(Expr {
                 expr: Expression::ExternalConstructor {
                     mod_name,
                     type_name,
                     variant,
+                    payload,
                 },
                 range: inner_range,
             })
         }
         Rule::constructor_expr => {
-            // constructor_expr = { identifier ~ "#" ~ identifier }
+            // constructor_expr = { identifier ~ "#" ~ identifier ~ ("(" ~ expression ~
+            // ")")? }
             let inner_range = Range::from(&inner);
             let mut parts = inner.into_inner();
             let type_name = parts
@@ -926,8 +979,29 @@ fn build_primary<'run>(
                 .missing("constructor variant", inner_range)?
                 .as_str()
                 .to_string();
+            let payload = parts
+                .next()
+                .map(|p| build_expr(ctx, p, src))
+                .transpose()?
+                .map(Box::new);
             Ok(Expr {
-                expr: Expression::Constructor { type_name, variant },
+                expr: Expression::Constructor {
+                    type_name,
+                    variant,
+                    payload,
+                },
+                range: inner_range,
+            })
+        }
+        Rule::tuple_expr => {
+            // tuple_expr = { "(" ~ expression ~ ("," ~ expression)+ ~ ")" }, arity >= 2
+            let inner_range = Range::from(&inner);
+            let elems = inner
+                .into_inner()
+                .map(|p| build_expr(ctx, p, src))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(Expr {
+                expr: Expression::Tuple(elems),
                 range: inner_range,
             })
         }
@@ -1057,7 +1131,7 @@ fn build_match<'run>(
         let pattern_pair = arm_inner.next().missing("match arm pattern", arm_range)?;
         let body_pair = arm_inner.next().missing("match arm body", arm_range)?;
 
-        let pattern = build_pattern(pattern_pair)?;
+        let pattern = build_pattern(ctx, pattern_pair)?;
         let body = build_expr(ctx, body_pair, src)?;
         arms.push(HirMatchArm {
             pattern,
@@ -1075,13 +1149,17 @@ fn build_match<'run>(
     })
 }
 
-fn build_pattern(pair: Pair<Rule>) -> Result<HirPattern, AstError> {
+fn build_pattern<'run>(
+    ctx: &mut CompileCtx<'run>,
+    pair: Pair<Rule>,
+) -> Result<HirPattern, AstError> {
     assert_eq!(pair.as_rule(), Rule::pattern);
     let range = Range::from(&pair);
     let inner = pair.into_inner().next().missing("pattern body", range)?;
     match inner.as_rule() {
         Rule::constructor_pattern => {
-            // constructor_pattern = { identifier ~ "#" ~ identifier }
+            // constructor_pattern = { identifier ~ "#" ~ identifier ~ ("(" ~ pattern ~
+            // ")")? }
             let mut parts = inner.into_inner();
             let type_name = parts
                 .next()
@@ -1093,21 +1171,56 @@ fn build_pattern(pair: Pair<Rule>) -> Result<HirPattern, AstError> {
                 .missing("constructor variant name", range)?
                 .as_str()
                 .to_string();
-            Ok(HirPattern::Constructor { type_name, variant })
+            let payload = parts
+                .next()
+                .map(|p| build_pattern(ctx, p))
+                .transpose()?
+                .map(Box::new);
+            Ok(HirPattern::Constructor {
+                type_name,
+                variant,
+                payload,
+            })
         }
         Rule::tag_pattern => {
-            // tag_pattern = { "#" ~ identifier }
-            let variant = inner
-                .into_inner()
+            // tag_pattern = { "#" ~ identifier ~ ("(" ~ pattern ~ ")")? }
+            let mut parts = inner.into_inner();
+            let variant = parts
                 .next()
                 .missing("tag pattern variant", range)?
                 .as_str()
                 .to_string();
-            Ok(HirPattern::Tag { variant })
+            let payload = parts
+                .next()
+                .map(|p| build_pattern(ctx, p))
+                .transpose()?
+                .map(Box::new);
+            Ok(HirPattern::Tag { variant, payload })
+        }
+        Rule::tuple_pattern => {
+            // tuple_pattern = { "(" ~ pattern ~ ("," ~ pattern)+ ~ ")" }
+            let elems = inner
+                .into_inner()
+                .map(|p| build_pattern(ctx, p))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(HirPattern::Tuple(elems))
+        }
+        Rule::binding_pattern => {
+            // binding_pattern = { identifier }
+            let binding_range = Range::from(&inner);
+            let name_pair = inner
+                .into_inner()
+                .next()
+                .unwrap_or_else(|| unreachable!("binding_pattern always wraps an identifier"));
+            let var = HirVar::Decl(ctx.new_original_variable(&name_pair, Rule::binding_pattern)?);
+            Ok(HirPattern::Binding {
+                var,
+                range: binding_range,
+            })
         }
         Rule::wildcard_pattern => Ok(HirPattern::Wildcard),
         other => Err(AstError::UnexpectedRule {
-            expected: "constructor_pattern | tag_pattern | wildcard_pattern",
+            expected: "constructor_pattern | tag_pattern | tuple_pattern | wildcard_pattern | binding_pattern",
             got: other,
             range,
         }),

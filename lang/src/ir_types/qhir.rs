@@ -105,6 +105,7 @@ pub enum Expression {
     Constructor {
         enum_ref: EnumRef,
         variant_idx: usize,
+        payload: Option<Box<Expr>>,
     },
     Tag {
         variant: String,
@@ -113,6 +114,7 @@ pub enum Expression {
         scrutinee: Box<Expr>,
         arms: Vec<QMatchArm>,
     },
+    Tuple(Vec<Expr>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -132,9 +134,17 @@ pub enum QPattern {
     Variant {
         enum_ref: EnumRef,
         variant_idx: usize,
+        payload: Option<Box<QPattern>>,
     },
     /// Bare tag `#tag`, resolved by the type checker
-    Tag { variant: String },
+    Tag {
+        variant: String,
+        payload: Option<Box<QPattern>>,
+    },
+    /// Tuple destructuring `(p1, p2, ...)`
+    Tuple(Vec<QPattern>),
+    /// a variable binding (already uniquified — `var` is a `UniqVar`)
+    Binding { var: UniqVar, range: Range },
     /// Wildcard `_`
     Wildcard,
 }

@@ -285,6 +285,111 @@ pub fn type_error_to_diagnostic(
                 },
             );
         }
+        ConstructorPayloadMismatch {
+            enum_name,
+            variant,
+            expected_payload,
+            range,
+        } => {
+            let message = if *expected_payload {
+                format!(
+                    "constructor '{enum_name}#{variant}' expects a payload, but none was supplied"
+                )
+            } else {
+                format!(
+                    "constructor '{enum_name}#{variant}' does not take a payload, but one was supplied"
+                )
+            };
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    message,
+                    range: *range,
+                    related: vec![],
+                    file: Some(file),
+                    ..Default::default()
+                },
+            );
+        }
+        PatternPayloadMismatch {
+            enum_name,
+            variant,
+            expected_payload,
+            range,
+        } => {
+            let message = if *expected_payload {
+                format!(
+                    "pattern '{enum_name}#{variant}' should destructure its payload but doesn't (e.g. write '{enum_name}#{variant}(x)' or '{enum_name}#{variant}(_)')"
+                )
+            } else {
+                format!(
+                    "variant '{enum_name}#{variant}' does not carry a payload, but the pattern tries to destructure one"
+                )
+            };
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    message,
+                    range: *range,
+                    related: vec![],
+                    file: Some(file),
+                    ..Default::default()
+                },
+            );
+        }
+        PatternArityMismatch {
+            expected,
+            found,
+            range,
+        } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    message: format!(
+                        "tuple pattern has {found} element(s) but the matched type has {expected}"
+                    ),
+                    range: *range,
+                    related: vec![],
+                    file: Some(file),
+                    ..Default::default()
+                },
+            );
+        }
+        PatternTypeMismatch { message, range } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    message: message.clone(),
+                    range: *range,
+                    related: vec![],
+                    file: Some(file),
+                    ..Default::default()
+                },
+            );
+        }
+        RefutableNestedPattern {
+            enum_name,
+            variant,
+            range,
+        } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    message: format!(
+                        "matching on a specific variant ('{enum_name}#{variant}') is not supported in a nested pattern position; only bindings ('x'), wildcards ('_'), and tuple-destructuring ('(a, b)') may appear inside a payload or tuple pattern"
+                    ),
+                    range: *range,
+                    related: vec![],
+                    file: Some(file),
+                    ..Default::default()
+                },
+            );
+        }
     }
     diagnostics
 }

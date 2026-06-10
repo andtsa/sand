@@ -159,6 +159,34 @@ pub fn uniquify_error_to_diagnostics(
                 },
             );
         }
+        DuplicateBindingInPattern {
+            name,
+            first_instance,
+            second_instance,
+        } => {
+            let message = format!(
+                "identifier '{}' bound more than once in the same pattern",
+                name
+            );
+
+            let related = SdRelatedInfo {
+                file,
+                range: *first_instance,
+                message: "first bound here".into(),
+            };
+
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    message,
+                    range: *second_instance,
+                    related: vec![related],
+                    file: Some(file),
+                    ..Default::default()
+                },
+            );
+        }
     }
 
     diagnostics

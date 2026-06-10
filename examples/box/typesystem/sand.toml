@@ -1,5 +1,2 @@
 [project]
-name = "box_typesystem"
-sources = [
-    "main.sand"
-]
+sources = ["other.sand"]

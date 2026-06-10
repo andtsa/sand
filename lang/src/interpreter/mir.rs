@@ -9,6 +9,8 @@ use crate::lang::ops::Bop;
 use crate::lang::ops::CompOp;
 use crate::lang::ops::Uop;
 use crate::lang::types::EnumRef;
+use crate::lang::types::Ty;
+use crate::lang::types::TyKind;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum MirValue {
@@ -18,7 +20,9 @@ pub enum MirValue {
     EnumVariant {
         enum_ref: EnumRef,
         variant_idx: usize,
+        payload: Option<Box<MirValue>>,
     },
+    Tuple(Vec<MirValue>),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -69,7 +73,7 @@ impl MirProgram {
             let block = &func.blocks[current.0];
 
             for stmt in &block.statements {
-                execute_statement(stmt, &mut locals, self, ctx)?;
+                execute_statement(stmt, &mut locals, &func.locals, self, ctx)?;
             }
 
             match &block.terminator {
@@ -102,17 +106,21 @@ impl MirProgram {
 fn execute_statement(
     stmt: &Statement,
     locals: &mut [Option<MirValue>],
+    local_decls: &[LocalDecl],
     prog: &MirProgram,
     ctx: &CompileCtx,
 ) -> Result<(), MirInterpError> {
     match stmt {
         Statement::Assign { dst, value, .. } => {
-            let v = eval_rvalue(value, locals, prog, ctx)?;
+            let dst_ty = local_decls[dst.local.0].ty;
+            let v = eval_rvalue(value, dst_ty, locals, prog, ctx)?;
             locals[dst.local.0] = Some(v);
             Ok(())
         }
         Statement::Eval { value, .. } => {
-            eval_rvalue(value, locals, prog, ctx)?;
+            // Eval is only for side-effecting calls — Aggregate/Field never
+            // appear here, so the result_ty is irrelevant; use UNIT as dummy.
+            eval_rvalue(value, Ty::UNIT, locals, prog, ctx)?;
             Ok(())
         }
     }
@@ -120,6 +128,7 @@ fn execute_statement(
 
 fn eval_rvalue(
     rv: &RValue,
+    result_ty: Ty,
     locals: &mut [Option<MirValue>],
     prog: &MirProgram,
     ctx: &CompileCtx,
@@ -153,6 +162,65 @@ fn eval_rvalue(
                 .collect::<Result<Vec<_>, _>>()?;
             eval_intrinsic(*fn_name, arg_vals, ctx)
         }
+
+        RValue::Aggregate(fields) => {
+            let vals: Vec<MirValue> = fields
+                .iter()
+                .map(|f| eval_operand(f, locals))
+                .collect::<Result<_, _>>()?;
+
+            // Recover semantic type from the destination local's type (passed
+            // in as `result_ty`) to reconstruct a rich `MirValue` for display.
+            match ctx.ty_kind(result_ty) {
+                TyKind::Enum(enum_ref) => {
+                    // field 0 = discriminant (Int), field 1 = payload (if any)
+                    let MirValue::Int(disc) = vals[0] else {
+                        internal_bug!("enum aggregate: field 0 is not Int (discriminant)")
+                    };
+                    let variant_idx = disc as usize;
+                    let payload = vals.into_iter().nth(1).map(Box::new);
+                    Ok(MirValue::EnumVariant {
+                        enum_ref: *enum_ref,
+                        variant_idx,
+                        payload,
+                    })
+                }
+                TyKind::Tuple(_) => Ok(MirValue::Tuple(vals)),
+                _ => internal_bug!(
+                    "Aggregate rvalue with non-aggregate destination type {:?}",
+                    result_ty
+                ),
+            }
+        }
+
+        RValue::Field { base, index } => {
+            let v = eval_operand(base, locals)?;
+            match (v, *index) {
+                // enum: field 0 is the discriminant, field 1 is the payload
+                (MirValue::EnumVariant { variant_idx, .. }, 0) => {
+                    Ok(MirValue::Int(variant_idx as i64))
+                }
+                (
+                    MirValue::EnumVariant {
+                        payload: Some(p), ..
+                    },
+                    1,
+                ) => Ok(*p),
+                (MirValue::EnumVariant { payload: None, .. }, 1) => {
+                    internal_bug!("payload field (index 1) accessed on a nullary enum variant")
+                }
+                // tuple: field i is element i
+                (MirValue::Tuple(elems), i) if i < elems.len() => {
+                    Ok(elems.into_iter().nth(i).unwrap())
+                }
+                (v, i) => internal_bug!(
+                    "Field[{}] applied to incompatible value {:?} \
+                     (type checker / lowering should have prevented this)",
+                    i,
+                    v
+                ),
+            }
+        }
     }
 }
 
@@ -162,13 +230,6 @@ fn eval_operand(op: &Operand, locals: &[Option<MirValue>]) -> Result<MirValue, M
             Constant::Int(i) => MirValue::Int(*i),
             Constant::Bool(b) => MirValue::Bool(*b),
             Constant::Unit => MirValue::Unit,
-            Constant::EnumVariant {
-                enum_ref,
-                variant_idx,
-            } => MirValue::EnumVariant {
-                enum_ref: *enum_ref,
-                variant_idx: *variant_idx,
-            },
         }),
         Operand::Copy(place) => locals[place.local.0]
             .clone()
@@ -212,27 +273,41 @@ fn eval_binop(op: Bop, l: MirValue, r: MirValue) -> Result<MirValue, MirInterpEr
         (Bop::Comp(CompOp::Eq), MirValue::Bool(a), MirValue::Bool(b)) => Ok(MirValue::Bool(a == b)),
         (Bop::Comp(CompOp::Ne), MirValue::Bool(a), MirValue::Bool(b)) => Ok(MirValue::Bool(a != b)),
         (
-            Bop::Comp(CompOp::Eq),
+            Bop::Comp(cop @ (CompOp::Eq | CompOp::Ne)),
             MirValue::EnumVariant {
-                enum_ref: er1,
-                variant_idx: vi1,
+                enum_ref: er_l,
+                variant_idx: vi_l,
+                payload: pl_l,
             },
             MirValue::EnumVariant {
-                enum_ref: er2,
-                variant_idx: vi2,
+                enum_ref: er_r,
+                variant_idx: vi_r,
+                payload: pl_r,
             },
-        ) => Ok(MirValue::Bool(er1 == er2 && vi1 == vi2)),
-        (
-            Bop::Comp(CompOp::Ne),
-            MirValue::EnumVariant {
-                enum_ref: er1,
-                variant_idx: vi1,
-            },
-            MirValue::EnumVariant {
-                enum_ref: er2,
-                variant_idx: vi2,
-            },
-        ) => Ok(MirValue::Bool(er1 != er2 || vi1 != vi2)),
+        ) => {
+            // Tag equality is always required. Payloads are compared only
+            // when *both* sides actually carry one. This is sound because a
+            // variant's "payload-carrying-ness" is fixed by its declaration:
+            // real values of a payload variant are always `Some`, so `None`
+            // only ever appears for nullary variants (where both sides agree).
+            let eq = er_l == er_r
+                && vi_l == vi_r
+                && match (&pl_l, &pl_r) {
+                    (Some(a), Some(b)) => a == b,
+                    _ => true,
+                };
+            Ok(MirValue::Bool(match cop {
+                CompOp::Eq => eq,
+                CompOp::Ne => !eq,
+                _ => unreachable!(),
+            }))
+        }
+        (Bop::Comp(CompOp::Eq), l @ MirValue::Tuple(_), r @ MirValue::Tuple(_)) => {
+            Ok(MirValue::Bool(l == r))
+        }
+        (Bop::Comp(CompOp::Ne), l @ MirValue::Tuple(_), r @ MirValue::Tuple(_)) => {
+            Ok(MirValue::Bool(l != r))
+        }
         (op, l, r) => internal_bug!("type error in MIR binop: {:?} {:?} {:?}", l, op, r),
     }
 }
@@ -321,14 +396,27 @@ fn fmt_value(v: &MirValue, ctx: &CompileCtx) -> String {
         MirValue::EnumVariant {
             enum_ref,
             variant_idx,
+            payload,
         } => {
             let def = ctx.get_enum(*enum_ref);
-            let name = &def.variants[*variant_idx];
-            if def.is_anonymous {
+            let name = &def.variants[*variant_idx].name;
+            let tag = if def.is_anonymous {
                 format!("#{name}")
             } else {
                 name.clone()
+            };
+            match payload {
+                Some(p) => format!("{tag}({})", fmt_value(p, ctx)),
+                None => tag,
             }
+        }
+        MirValue::Tuple(elems) => {
+            let inner = elems
+                .iter()
+                .map(|e| fmt_value(e, ctx))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("({inner})")
         }
     }
 }

@@ -450,3 +450,219 @@ fn match_single_adhoc_tag_exhaustive() {
     );
     assert_eq!(val, MirValue::Int(99));
 }
+
+// ── destructuring patterns ───────────────────────────────────────────────────
+//
+// covers the destructuring-patterns feature: binding a payload-carrying
+// variant's payload (`Circle(r)`), tuple destructuring (`(a, b)`), nested
+// destructuring (`Wrap((x, y))`), wildcard/binding sub-patterns, and the new
+// error cases (duplicate bindings, arity mismatches, refutable nested
+// patterns, undestructured payloads). see `DESTRUCTURING_PATTERNS.todo.md`.
+
+/// destructuring a payload-carrying variant binds the payload to a variable
+/// usable in the arm body.
+#[test]
+fn match_destructures_variant_payload_into_binding() {
+    let val = run_mir(
+        "type Shape = Circle(Int) | Point
+         def main(): Int :=
+             match Shape#Circle(5) {
+                 Shape#Circle(r) => r,
+                 Shape#Point => 0,
+             }",
+    );
+    assert_eq!(val, MirValue::Int(5));
+}
+
+/// the bound payload variable can be used in arithmetic in the arm body.
+#[test]
+fn match_destructured_payload_used_in_arithmetic() {
+    let val = run_mir(
+        "type Shape = Circle(Int) | Point
+         def main(): Int :=
+             match Shape#Circle(5) {
+                 Shape#Circle(r) => r * 2,
+                 Shape#Point => 0,
+             }",
+    );
+    assert_eq!(val, MirValue::Int(10));
+}
+
+/// a wildcard sub-pattern discards the payload while still requiring the
+/// tag to match — equivalent to "match this variant, ignore its payload".
+#[test]
+fn match_variant_payload_wildcard() {
+    let val = run_mir(
+        "type Shape = Circle(Int) | Point
+         def main(): Int :=
+             match Shape#Circle(5) {
+                 Shape#Circle(_) => 1,
+                 Shape#Point => 2,
+             }",
+    );
+    assert_eq!(val, MirValue::Int(1));
+}
+
+/// a top-level tuple pattern destructures a tuple scrutinee, binding each
+/// element.
+#[test]
+fn match_destructures_tuple_into_bindings() {
+    let val = run_mir(
+        "def main(): Int :=
+             match (3, 4) {
+                 (a, b) => a + b,
+             }",
+    );
+    assert_eq!(val, MirValue::Int(7));
+}
+
+/// tuple patterns may mix bindings and wildcards.
+#[test]
+fn match_tuple_pattern_with_wildcard_element() {
+    let val = run_mir(
+        "def main(): Int :=
+             match (3, 4) {
+                 (a, _) => a,
+             }",
+    );
+    assert_eq!(val, MirValue::Int(3));
+}
+
+/// nested destructuring: a variant payload that is itself a tuple can be
+/// destructured in one pattern, e.g. `Wrap((x, y))`.
+#[test]
+fn match_nested_destructure_variant_payload_tuple() {
+    let val = run_mir(
+        "type Pair = Wrap((Int, Int))
+         def main(): Int :=
+             match Pair#Wrap((3, 4)) {
+                 Pair#Wrap((x, y)) => x + y,
+             }",
+    );
+    assert_eq!(val, MirValue::Int(7));
+}
+
+/// nested destructuring also works with mixed bindings/wildcards at
+/// different levels.
+#[test]
+fn match_nested_destructure_partial_bindings() {
+    let val = run_mir(
+        "type Pair = Wrap((Int, Int))
+         def main(): Int :=
+             match Pair#Wrap((3, 4)) {
+                 Pair#Wrap((x, _)) => x,
+             }",
+    );
+    assert_eq!(val, MirValue::Int(3));
+}
+
+/// a plain binding pattern at the top level of a match against a tuple
+/// scrutinee binds the whole scrutinee (irrefutable, single arm suffices).
+#[test]
+fn match_tuple_scrutinee_binding_pattern() {
+    let val = run_mir(
+        "def main(): Int :=
+             match (3, 4) {
+                 p => 9,
+             }",
+    );
+    assert_eq!(val, MirValue::Int(9));
+}
+
+/// destructuring picks the right arm out of multiple variants and binds
+/// correctly in each.
+#[test]
+fn match_destructure_dispatches_and_binds_correct_arm() {
+    let val = run_mir(
+        "type Shape = Circle(Int) | Square(Int) | Point
+         def main(): Int :=
+             match Shape#Square(7) {
+                 Shape#Circle(r) => r,
+                 Shape#Square(s) => s * s,
+                 Shape#Point => 0,
+             }",
+    );
+    assert_eq!(val, MirValue::Int(49));
+}
+
+// ── destructuring error cases
+// ──────────────────────────────────────────────
+
+/// duplicate bindings in the same pattern (`(x, x)`) are a uniquify error
+/// (decision D2 — mirrors Rust's E0416).
+#[test]
+fn match_duplicate_binding_in_pattern_is_error() {
+    qualify_fails(
+        "def main(): Int :=
+             match (3, 4) {
+                 (x, x) => x,
+             }",
+    );
+}
+
+/// a tuple pattern with the wrong arity is a type error.
+#[test]
+fn match_tuple_pattern_arity_mismatch_is_error() {
+    typecheck_fails(
+        "def main(): Int :=
+             match (3, 4) {
+                 (a, b, c) => a,
+             }",
+    );
+}
+
+/// a pattern that doesn't destructure a payload-carrying variant's payload
+/// is a type error — the payload must be bound or wildcarded.
+#[test]
+fn match_undestructured_payload_is_error() {
+    typecheck_fails(
+        "type Shape = Circle(Int) | Point
+         def main(): Int :=
+             match Shape#Circle(5) {
+                 Shape#Circle => 1,
+                 Shape#Point => 2,
+             }",
+    );
+}
+
+/// a pattern that destructures a nullary variant (no declared payload) is a
+/// type error.
+#[test]
+fn match_destructure_nullary_variant_is_error() {
+    typecheck_fails(
+        "type Shape = Circle(Int) | Point
+         def main(): Int :=
+             match Shape#Point(5) {
+                 Shape#Circle(r) => r,
+                 Shape#Point(x) => x,
+             }",
+    );
+}
+
+/// per decision D1, refutable sub-patterns (nested enum-variant patterns)
+/// are rejected — only bindings, wildcards, and tuple-destructuring are
+/// allowed in nested position.
+#[test]
+fn match_refutable_nested_pattern_is_error() {
+    typecheck_fails(
+        "type Inner = A | B
+         type Outer = Wrap(Inner)
+         def main(): Int :=
+             match Outer#Wrap(Inner#A) {
+                 Outer#Wrap(Inner#A) => 1,
+                 Outer#Wrap(Inner#B) => 2,
+             }",
+    );
+}
+
+/// a tuple pattern matched against a non-tuple type is a type error.
+#[test]
+fn match_tuple_pattern_against_non_tuple_is_error() {
+    typecheck_fails(
+        "type Shape = Circle(Int) | Point
+         def main(): Int :=
+             match Shape#Circle(5) {
+                 (a, b) => a,
+             }",
+    );
+}

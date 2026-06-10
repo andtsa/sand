@@ -160,7 +160,9 @@ pub fn compile(args: CompileArgs, dry_run: bool) -> Result<(), CompileCliError> 
         )?;
 
         let fs = FileSystem { dry_run };
-        fs.delete_file(&object_file)?;
+        if let Err(e) = fs.delete_file(&object_file) {
+            eprintln!("failed to delete object file: {}", e);
+        }
     }
 
     Ok(())

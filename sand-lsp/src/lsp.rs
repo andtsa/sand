@@ -18,6 +18,14 @@ pub struct Backend {
     pub last_published_uris: RwLock<Vec<Url>>,
 }
 
+/// an instance of the lsp project,
+/// tracking its state & diagnostics
+pub struct Instance {
+    pub project: RwLock<Option<Project>>,
+    pub last_result: RwLock<Option<CheckResult>>,
+    pub last_published_uris: RwLock<Vec<Url>>,
+}
+
 impl Backend {
     pub fn with_client(client: Client) -> Self {
         Self {

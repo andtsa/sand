@@ -10,6 +10,9 @@ module.exports = grammar({
 
   conflicts: $ => [
     [$.constructor_expr, $.primary],
+    [$.function_call, $.primary],
+    [$.constructor_expr],
+    [$.external_constructor_expr],
   ],
 
   rules: {
@@ -26,12 +29,17 @@ module.exports = grammar({
     ),
 
     // ========= Enum type declarations =========
+    enum_variant: $ => seq(
+      field('name', $.identifier),
+      optional(seq('(', field('payload_type', $._type), ')'))
+    ),
+
     type_alias: $ => seq(
       'type',
       field('name', $.identifier),
       '=',
-      field('variant', $.identifier),
-      repeat(seq('|', field('variant', $.identifier))),
+      field('variant', $.enum_variant),
+      repeat(seq('|', field('variant', $.enum_variant))),
       optional(';')
     ),
 
@@ -61,6 +69,14 @@ module.exports = grammar({
       repeat(seq('|', '#', field('tag', $.identifier)))
     ),
 
+    // Tuple type: (Int, Bool) — arity >= 2
+    tuple_type: $ => seq(
+      '(',
+      $._type,
+      repeat1(seq(',', $._type)),
+      ')'
+    ),
+
     // All type forms unified under one inline rule
     _type: $ => choice(
       'Int',
@@ -68,6 +84,7 @@ module.exports = grammar({
       'Unit',
       $.qualified_type,
       $.tag_type,
+      $.tuple_type,
       $.identifier   // named enum type
     ),
 
@@ -168,19 +185,32 @@ module.exports = grammar({
     pattern: $ => choice(
       $.constructor_pattern,
       $.tag_pattern,
+      $.tuple_pattern,
+      $.binding_pattern,
       $.wildcard_pattern
     ),
 
     constructor_pattern: $ => seq(
       field('type_name', $.identifier),
       '#',
-      field('variant', $.identifier)
+      field('variant', $.identifier),
+      optional(seq('(', field('pattern', $.pattern), ')'))
     ),
 
     tag_pattern: $ => seq(
       '#',
-      field('tag', $.identifier)
+      field('tag', $.identifier),
+      optional(seq('(', field('pattern', $.pattern), ')'))
     ),
+
+    tuple_pattern: $ => seq(
+      '(',
+      field('pattern', $.pattern),
+      repeat1(seq(',', field('pattern', $.pattern))),
+      ')'
+    ),
+
+    binding_pattern: $ => $.identifier,
 
     wildcard_pattern: _ => '_',
 
@@ -193,13 +223,14 @@ module.exports = grammar({
     ),
 
     // ========= Constructors & calls =========
-    external_constructor_expr: $ => seq(
+    external_constructor_expr: $ => prec.left(10, seq(
       field('module', $.identifier),
       '::',
       field('type_name', $.identifier),
       '#',
-      field('variant', $.identifier)
-    ),
+      field('variant', $.identifier),
+      optional(seq('(', field('payload', $._expression), ')'))
+    )),
 
     // mod::fn(args)
     external_function_call: $ => seq(
@@ -214,11 +245,12 @@ module.exports = grammar({
       ')'
     ),
 
-    constructor_expr: $ => seq(
+    constructor_expr: $ => prec.left(10, seq(
       field('type_name', $.identifier),
       '#',
-      field('variant', $.identifier)
-    ),
+      field('variant', $.identifier),
+      optional(seq('(', field('payload', $._expression), ')'))
+    )),
 
     tag_expr: $ => seq(
       '#',
@@ -235,11 +267,21 @@ module.exports = grammar({
       ')'
     ),
 
+    // Tuple literal: (a, b, ...) — arity >= 2
+    tuple_expr: $ => seq(
+      '(',
+      $._expression,
+      repeat1(seq(',', $._expression)),
+      ')'
+    ),
+
     // ========= Primary =========
     // Order matters for conflict resolution:
     //   external_constructor_expr before external_function_call (same prefix)
     //   constructor_expr before function_call and bare identifier (same prefix)
+    //   tuple_expr before generic parenthesized expression
     primary: $ => choice(
+      $.tuple_expr,
       seq('(', $._expression, ')'),
       $.external_constructor_expr,
       $.external_function_call,

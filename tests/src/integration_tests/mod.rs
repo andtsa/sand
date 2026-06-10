@@ -7,5 +7,6 @@
 //! - Cross-file function calls and module linking
 //! - Error recovery and diagnostics in realistic scenarios
 
+pub mod compiled;
 pub mod examples;
 pub mod multi_file;

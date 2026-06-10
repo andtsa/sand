@@ -98,11 +98,13 @@ pub enum Expression {
     Constructor {
         enum_ref: EnumRef,
         variant_idx: usize,
+        payload: Option<Box<Expr>>,
     },
     Match {
         scrutinee: Box<Expr>,
         arms: Vec<TypedMatchArm>,
     },
+    Tuple(Vec<Expr>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -120,6 +122,27 @@ pub enum MatchPattern {
     Variant {
         enum_ref: EnumRef,
         variant_idx: usize,
+        /// `Some((payload_ty, sub_pattern))` when the pattern destructures
+        /// the variant's payload. `payload_ty` is the variant's *declared*
+        /// payload type — carried here (rather than re-derived from
+        /// `enum_ref`/`variant_idx` via `CompileCtx`) because MIR lowering
+        /// operates without `CompileCtx` access and needs it to type the
+        /// extraction temporary (mirrors why `Binding` carries its own `ty`).
+        payload: Option<(Ty, Box<MatchPattern>)>,
+    },
+    /// tuple destructuring `(p1, p2, ...)`. `ty` is the tuple's own type —
+    /// needed by MIR lowering for the same reason `Variant.payload` carries
+    /// its type (typing extraction temporaries for nested destructuring,
+    /// e.g. the inner tuple in `Wrap((x, y))`).
+    Tuple {
+        ty: Ty,
+        elems: Vec<MatchPattern>,
+    },
+    /// a variable binding that destructures part of the scrutinee
+    Binding {
+        var: UniqVar,
+        ty: Ty,
+        range: Range,
     },
     Wildcard,
 }

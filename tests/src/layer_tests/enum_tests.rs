@@ -31,6 +31,7 @@ fn qualified_constructor_first_variant() {
             MirValue::EnumVariant {
                 enum_ref,
                 variant_idx,
+                ..
             } => {
                 assert_eq!(variant_idx, 0, "Red should be variant index 0");
                 enum_ref
@@ -47,6 +48,7 @@ fn qualified_constructor_first_variant() {
         MirValue::EnumVariant {
             enum_ref,
             variant_idx,
+            ..
         } => {
             assert_eq!(variant_idx, 1, "Yellow should be variant index 1");
             assert_eq!(enum_ref, er, "Both come from the same enum type");

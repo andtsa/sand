@@ -98,7 +98,22 @@ fn fmt_expr_val(val: &Expression, ctx: &CompileCtx) -> String {
         Expression::Constructor {
             enum_ref,
             variant_idx,
-        } => ctx.enum_display(*enum_ref, *variant_idx),
+            payload,
+        } => {
+            let tag = ctx.enum_display(*enum_ref, *variant_idx);
+            match payload {
+                Some(p) => format!("{tag}({})", fmt_expr_val(&p.expr, ctx)),
+                None => tag,
+            }
+        }
+        Expression::Tuple(elems) => format!(
+            "({})",
+            elems
+                .iter()
+                .map(|e| fmt_expr_val(&e.expr, ctx))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
         _ => "<value>".to_string(),
     }
 }
@@ -130,11 +145,11 @@ fn find_in_expr(expr: &Expr, pos: Pos) -> Option<&Expr> {
             .iter()
             .find_map(|s| find_in_stmt(s, pos))
             .or_else(|| expr.as_deref().and_then(|e| find_in_expr(e, pos))),
-        Expression::Var(_)
-        | Expression::Int(_)
-        | Expression::Bool(_)
-        | Expression::Unit
-        | Expression::Constructor { .. } => None,
+        Expression::Var(_) | Expression::Int(_) | Expression::Bool(_) | Expression::Unit => None,
+        Expression::Constructor { payload, .. } => {
+            payload.as_deref().and_then(|p| find_in_expr(p, pos))
+        }
+        Expression::Tuple(elems) => elems.iter().find_map(|e| find_in_expr(e, pos)),
         Expression::Match { scrutinee, arms } => find_in_expr(scrutinee, pos)
             .or_else(|| arms.iter().find_map(|arm| find_in_expr(&arm.body, pos))),
     };

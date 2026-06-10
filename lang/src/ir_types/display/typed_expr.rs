@@ -5,6 +5,36 @@
 use crate::compiler::context::CompileCtx;
 use crate::ir_types::typed_hir::*;
 
+/// recursively render a `MatchPattern` as source-like syntax, e.g.
+/// `Shape#Circle(r)`, `(a, b)`, `Wrap((x, y))`, `_` — mirrors the
+/// `Tag(payload)` / `(e1, e2, ...)` conventions used for `Constructor`/`Tuple`
+/// expression display elsewhere in this formatter.
+fn fmt_match_pattern(pattern: &MatchPattern, ctx: &CompileCtx) -> String {
+    match pattern {
+        MatchPattern::Variant {
+            enum_ref,
+            variant_idx,
+            payload,
+        } => {
+            let tag = ctx.enum_display(*enum_ref, *variant_idx);
+            match payload {
+                Some((_, p)) => format!("{tag}({})", fmt_match_pattern(p, ctx)),
+                None => tag,
+            }
+        }
+        MatchPattern::Tuple { elems, .. } => format!(
+            "({})",
+            elems
+                .iter()
+                .map(|p| fmt_match_pattern(p, ctx))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        MatchPattern::Binding { var, .. } => ctx.uniq_variable_name(var),
+        MatchPattern::Wildcard => "_".to_string(),
+    }
+}
+
 impl Expression {
     pub fn format<'fmt, 'run>(
         &'fmt self,
@@ -247,8 +277,30 @@ impl<'fmt, 'run> Iterator for TypedExprFormatter<'fmt, 'run> {
                     Constructor {
                         enum_ref,
                         variant_idx,
+                        payload,
                     } => {
-                        return Some((self.ctx.enum_display(*enum_ref, *variant_idx), Nothing));
+                        let tag = self.ctx.enum_display(*enum_ref, *variant_idx);
+                        match payload {
+                            Some(p) => {
+                                self.stack.push(Token(")".into(), Nothing));
+                                self.stack.push(Exp(&p.expr));
+                                self.stack.push(Token("(".into(), Nothing));
+                                return Some((tag, Nothing));
+                            }
+                            None => return Some((tag, Nothing)),
+                        }
+                    }
+
+                    Tuple(elems) => {
+                        // emission order: ( e1, e2, ... )
+                        self.stack.push(Token(")".into(), Nothing));
+                        for (i, e) in elems.iter().enumerate().rev() {
+                            self.stack.push(Exp(&e.expr));
+                            if i > 0 {
+                                self.stack.push(Token(",".into(), Space));
+                            }
+                        }
+                        return Some(("(".into(), Nothing));
                     }
 
                     Match { scrutinee, arms } => {
@@ -257,15 +309,7 @@ impl<'fmt, 'run> Iterator for TypedExprFormatter<'fmt, 'run> {
                         self.stack.push(Sep(Newline(Decrease)));
                         // push arms in reverse order
                         for arm in arms.iter().rev() {
-                            let pattern_str = match &arm.pattern {
-                                crate::ir_types::typed_hir::MatchPattern::Variant {
-                                    enum_ref,
-                                    variant_idx,
-                                } => self.ctx.enum_display(*enum_ref, *variant_idx),
-                                crate::ir_types::typed_hir::MatchPattern::Wildcard => {
-                                    "_".to_string()
-                                }
-                            };
+                            let pattern_str = fmt_match_pattern(&arm.pattern, self.ctx);
                             self.stack.push(Token(",".into(), Newline(Same)));
                             self.stack.push(Exp(&arm.body.expr));
                             self.stack.push(Token("=>".into(), Whitespace));

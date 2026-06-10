@@ -121,8 +121,17 @@ fn collect_locals(cx: &mut FnCx, expr: &th::Expr) {
         th::Expression::Var(_)
         | th::Expression::Int(_)
         | th::Expression::Bool(_)
-        | th::Expression::Unit
-        | th::Expression::Constructor { .. } => {}
+        | th::Expression::Unit => {}
+        th::Expression::Constructor { payload, .. } => {
+            if let Some(p) = payload {
+                collect_locals(cx, p);
+            }
+        }
+        th::Expression::Tuple(elems) => {
+            for e in elems {
+                collect_locals(cx, e);
+            }
+        }
         th::Expression::Match { scrutinee, arms } => {
             collect_locals(cx, scrutinee);
             for arm in arms {

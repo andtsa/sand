@@ -18,6 +18,9 @@
 (assignment
   name: (identifier) @definition)
 
+; Pattern bindings (in match arms and destructuring)
+(binding_pattern) @definition
+
 ; Type alias names are type-level definitions
 (type_alias
   name: (identifier) @definition.type)

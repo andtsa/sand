@@ -10,12 +10,16 @@ qualified_type = { identifier ~ "::" ~ identifier }
 // Ad-hoc tag union type: `#ok | #err` — structural, anonymous
 tag_type = { "#" ~ identifier ~ ("|" ~ "#" ~ identifier)* }
 
+// Tuple type: `(Int, Bool)` — arity >= 2 (one element is just grouping, handled by build_type)
+tuple_type = { "(" ~ type_ ~ ("," ~ type_)+ ~ ")" }
+
 type_ = {
     "Int"
   | "Bool"
   | "Unit" // equivalent to rust (), python None
   | qualified_type  // cross-module enum type: mod::TypeName
   | tag_type        // ad-hoc tag union: #ok | #err
+  | tuple_type      // product type: (A, B, ...)
   | identifier      // named enum type
 }
 
@@ -50,18 +54,27 @@ ge       = { ">=" | "≥" }
 le       = { "<=" | "≤" }
 
 // enum type declarations
-type_alias = { "type" ~ identifier ~ "=" ~ identifier ~ ("|" ~ identifier)* ~ ";"? }
+// a variant is a bare tag (`Red`, nullary) or a tag with a payload type (`Ok(Int)`)
+enum_variant = { identifier ~ ("(" ~ type_ ~ ")")? }
+type_alias   = { "type" ~ identifier ~ "=" ~ enum_variant ~ ("|" ~ enum_variant)* ~ ";"? }
 
 // enum constructors: Light#Red (local), mod::Light#Red (cross-module), or #Red (bare tag, needs check mode)
-external_constructor_expr = { identifier ~ "::" ~ identifier ~ "#" ~ identifier }
-constructor_expr          = { identifier ~ "#" ~ identifier }
+// an optional parenthesised argument supplies the variant's payload: `Result#Ok(5)`
+external_constructor_expr = { identifier ~ "::" ~ identifier ~ "#" ~ identifier ~ ("(" ~ expression ~ ")")? }
+constructor_expr          = { identifier ~ "#" ~ identifier ~ ("(" ~ expression ~ ")")? }
 tag_expr                  = { "#" ~ identifier }
 
 // pattern matching
+// patterns are recursive: a payload-carrying variant or a tuple may itself
+// contain (irrefutable) sub-patterns that bind/destructure the payload.
+// only bindings, wildcards, and recursive tuple-destructuring are allowed in
+// sub-pattern position — see DESTRUCTURING_PATTERNS.todo.md decision D1.
 wildcard_pattern    = { "_" }
-tag_pattern         = { "#" ~ identifier }
-constructor_pattern = { identifier ~ "#" ~ identifier }
-pattern             = { constructor_pattern | tag_pattern | wildcard_pattern }
+binding_pattern     = { identifier }
+tuple_pattern       = { "(" ~ pattern ~ ("," ~ pattern)+ ~ ")" }
+tag_pattern         = { "#" ~ identifier ~ ("(" ~ pattern ~ ")")? }
+constructor_pattern = { identifier ~ "#" ~ identifier ~ ("(" ~ pattern ~ ")")? }
+pattern             = { constructor_pattern | tag_pattern | tuple_pattern | wildcard_pattern | binding_pattern }
 match_arm           = { pattern ~ "=>" ~ expression ~ ","? }
 match_expr          = { "match" ~ expression ~ "{" ~ match_arm+ ~ "}" }
 
@@ -77,9 +90,13 @@ whileloop = {
 function_call          = { identifier ~ "(" ~ (expression ~ ("," ~ expression)*)? ~ ")" }
 external_function_call = { identifier ~ "::" ~ identifier ~ "(" ~ (expression ~ ("," ~ expression)*)? ~ ")" }
 
+// tuple literal: `(a, b, ...)` — arity >= 2 (one element is just grouping)
+tuple_expr = { "(" ~ expression ~ ("," ~ expression)+ ~ ")" }
+
 // precedence chaining
 primary = {
-    ("(" ~ expression ~ ")")
+    tuple_expr
+  | ("(" ~ expression ~ ")")
   | ifstatement
   | whileloop
   | match_expr

@@ -1,3 +1,4 @@
+//@TEST:{5}[]
 
     def is_greater_than_three(n: Int): Bool :=
     {
@@ -11,9 +12,9 @@
 
     def main(): Int :=
     {
-        let i: Int = 1;
-        let cond: Bool = true;
-        while cond do {
+        let mut i: Int = 1;
+        let mut cond: Bool = false;
+        while !cond do {
             cond = is_greater_than_three(i);
             i = i + 1;
         };

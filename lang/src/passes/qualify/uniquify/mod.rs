@@ -225,13 +225,107 @@ fn uniquify_expr(e: &Expr, u: &mut UniqCtx) -> Result<Expr, UniquifyError> {
             })
         }
 
+        // `Match` patterns can introduce bindings (`Circle(r)`, `(a, b)`)
+        // that are scoped to their arm's body — exactly like `Block`
+        // introduces scoped locals. Each arm therefore gets its own scope:
+        // walk the pattern first (minting `Decl -> Uniq` bindings via
+        // `bind_var`, and rejecting names bound twice within one pattern —
+        // see `UniquifyError::DuplicateBindingInPattern`), then uniquify the
+        // body in that scope, then pop it before moving to the next arm.
+        Expression::Match { scrutinee, arms } => {
+            let scrutinee = Box::new(uniquify_expr(scrutinee, u)?);
+
+            let mut new_arms = Vec::with_capacity(arms.len());
+            for arm in arms {
+                u.enter_scope();
+                let mut seen: Map<String, crate::compiler::structure::Range> = Map::new();
+                let pattern = uniquify_pattern(&arm.pattern, u, &mut seen)?;
+                let body = uniquify_expr(&arm.body, u)?;
+                u.exit_scope();
+                new_arms.push(HirMatchArm {
+                    pattern,
+                    body,
+                    range: arm.range,
+                });
+            }
+
+            Ok(Expr {
+                expr: Expression::Match {
+                    scrutinee,
+                    arms: new_arms,
+                },
+                range: e.range,
+            })
+        }
+
         // Every other node — `If`, `While`, `BinOp`, `UnOp`, `Call`,
-        // `Match`, and the constructor/literal leaves — is handled
-        // uniformly by the `subexprs` traversal: recurse into each child
-        // with `uniquify_expr` and let it rebuild the node around the
-        // results. This is `traverseOf subexprs (uniquifyExpr u)` in lens
-        // terms, and replaces what used to be ten near-identical match arms.
+        // and the constructor/literal leaves — is handled uniformly by the
+        // `subexprs` traversal: recurse into each child with `uniquify_expr`
+        // and let it rebuild the node around the results. This is
+        // `traverseOf subexprs (uniquifyExpr u)` in lens terms, and replaces
+        // what used to be many near-identical match arms.
         _ => e.traverse_subexprs(|sub| uniquify_expr(sub, u)),
+    }
+}
+
+/// Recursively walks a match-arm pattern, minting fresh `Uniq` bindings for
+/// every `Binding` leaf (scoped to the arm — the caller must have already
+/// pushed a fresh scope) and rejecting names that are bound more than once
+/// within the *same* pattern (`(x, x)`, `Pair(x, x)`) — see
+/// `UniquifyError::DuplicateBindingInPattern`. All other nodes are recursed
+/// into structurally and otherwise passed through unchanged (their
+/// `type_name`/`variant` string fields are resolved later, in `qualify`).
+fn uniquify_pattern(
+    pattern: &HirPattern,
+    u: &mut UniqCtx,
+    seen: &mut Map<String, crate::compiler::structure::Range>,
+) -> Result<HirPattern, UniquifyError> {
+    match pattern {
+        HirPattern::Constructor {
+            type_name,
+            variant,
+            payload,
+        } => Ok(HirPattern::Constructor {
+            type_name: type_name.clone(),
+            variant: variant.clone(),
+            payload: payload
+                .as_deref()
+                .map(|p| uniquify_pattern(p, u, seen))
+                .transpose()?
+                .map(Box::new),
+        }),
+        HirPattern::Tag { variant, payload } => Ok(HirPattern::Tag {
+            variant: variant.clone(),
+            payload: payload
+                .as_deref()
+                .map(|p| uniquify_pattern(p, u, seen))
+                .transpose()?
+                .map(Box::new),
+        }),
+        HirPattern::Tuple(elems) => Ok(HirPattern::Tuple(
+            elems
+                .iter()
+                .map(|p| uniquify_pattern(p, u, seen))
+                .collect::<Result<Vec<_>, _>>()?,
+        )),
+        HirPattern::Binding { var, range } => {
+            let name = u.display_hir_var(var);
+            if name != "_"
+                && let Some(first_instance) = seen.insert(name.clone(), *range)
+            {
+                return Err(UniquifyError::DuplicateBindingInPattern {
+                    name,
+                    first_instance,
+                    second_instance: *range,
+                });
+            }
+            let uniq = u.bind_var(var);
+            Ok(HirPattern::Binding {
+                var: HirVar::Uniq(uniq),
+                range: *range,
+            })
+        }
+        HirPattern::Wildcard => Ok(HirPattern::Wildcard),
     }
 }
 

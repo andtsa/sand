@@ -14,6 +14,8 @@ def cmp_2(x: Int, y: Int): #gt | #lt := {
 
 type Test = One | Two | Three;
 
+type Result = Ok(Int) | Error(Int);
+
 def main(): Unit := {
     let x = 2;
     
