@@ -202,6 +202,7 @@ fn bind_pattern(pattern: &MatchPattern, value: &Expression, env: &mut Env) -> bo
             enum_ref,
             variant_idx,
             payload,
+            ..
         } => match value {
             Expression::Constructor {
                 enum_ref: er,
@@ -217,6 +218,8 @@ fn bind_pattern(pattern: &MatchPattern, value: &Expression, env: &mut Env) -> bo
             },
             _ => false,
         },
+        MatchPattern::IntLit(n) => matches!(value, Expression::Int(v) if v == n),
+        MatchPattern::BoolLit(b) => matches!(value, Expression::Bool(v) if v == b),
         MatchPattern::Tuple {
             elems: sub_patterns,
             ..
@@ -254,6 +257,45 @@ fn eval_stmt(
             let v = prog.eval_expr(&val.expr, env, ctx, output)?;
             env.insert(*name, v);
         }
+        Statement::LetTuple { elems, val, .. } => {
+            let tuple_val = prog.eval_expr(&val.expr, env, ctx, output)?;
+            match tuple_val {
+                Expression::Tuple(elem_vals) => {
+                    for ((name, ..), elem_val) in elems.iter().zip(elem_vals.into_iter()) {
+                        env.insert(*name, elem_val.expr);
+                    }
+                }
+                _ => unreachable!(
+                    "let-tuple: RHS evaluated to a non-tuple value \
+                     (the type checker should have rejected this)"
+                ),
+            }
+        }
+
+        Statement::LetPattern {
+            pattern,
+            val,
+            else_branch,
+            ..
+        } => {
+            // Evaluate the main value; try to match it against the pattern.
+            // If the match fails, evaluate the fallback — the type checker
+            // guarantees the fallback is a constructor of the same variant,
+            // so bind_pattern on the fallback always succeeds.
+            let main_val = prog.eval_expr(&val.expr, env, ctx, output)?;
+            let source = if bind_pattern(pattern, &main_val, env) {
+                // Pattern matched: bindings already inserted by bind_pattern.
+                return Ok(());
+            } else {
+                prog.eval_expr(&else_branch.expr, env, ctx, output)?
+            };
+            let ok = bind_pattern(pattern, &source, env);
+            debug_assert!(
+                ok,
+                "let-pattern else branch did not match the pattern (type checker should prevent this)"
+            );
+        }
+
         Statement::Expr(e) => {
             prog.eval_expr(&e.expr, env, ctx, output)?;
         }

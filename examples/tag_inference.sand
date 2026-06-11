@@ -1,0 +1,22 @@
+//@TEST:{0}[10,0,3]
+// Demonstrates bare-tag constructor inference:
+// #Cons(...) / #Empty are resolved against the expected enum type, so the
+// type qualifier ("List#") is never needed.
+type List = Empty | Cons((Int, List))
+
+def prepend(elem: Int, list: List): List :=
+    #Cons((elem, list))
+
+def sum(list: List): Int :=
+    match list {
+        #Cons((x, rest)) => x + sum(rest),
+        #Empty           => 0,
+    }
+
+def main(): Int := {
+    let l: List = prepend(3, prepend(3, prepend(4, #Empty)));
+    println(sum(l));                    // 10
+    println(sum(#Empty));               // 0
+    println(sum(prepend(1, prepend(2, #Empty))));   // 3
+    0
+}

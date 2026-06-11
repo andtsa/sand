@@ -207,6 +207,45 @@ fn build_cfg_expr(
 
                         current_node = rhs_entry;
                     }
+                    Statement::LetTuple { elems, val, .. } => {
+                        let rhs_entry = build_cfg_expr(
+                            graph,
+                            val,
+                            module,
+                            current_node,
+                            function_entries,
+                            function_exits,
+                            Some(mutations.clone().unwrap_or_default()),
+                        );
+                        for (name, ..) in elems {
+                            graph
+                                .node_weight_mut(rhs_entry)
+                                .unwrap()
+                                .mutates
+                                .insert(*name);
+                        }
+                        current_node = rhs_entry;
+                    }
+                    Statement::LetPattern { pattern, val, .. } => {
+                        let rhs_entry = build_cfg_expr(
+                            graph,
+                            val,
+                            module,
+                            current_node,
+                            function_entries,
+                            function_exits,
+                            Some(mutations.clone().unwrap_or_default()),
+                        );
+                        for name in crate::analysis::annotate::collect_let_pattern_bindings(pattern)
+                        {
+                            graph
+                                .node_weight_mut(rhs_entry)
+                                .unwrap()
+                                .mutates
+                                .insert(name);
+                        }
+                        current_node = rhs_entry;
+                    }
                     Statement::Expr(e) => {
                         current_node = build_cfg_expr(
                             graph,

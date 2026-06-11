@@ -1,0 +1,15 @@
+//@TEST:{0}[3,5,8,2]
+// let-tuple binding: `let (a, b) = expr`
+def minmax(x: Int, y: Int): (Int, Int) :=
+    if x < y then (x, y) else (y, x)
+
+def main(): Int := {
+    let (lo, hi) = minmax(5, 3);   // (3, 5)
+    println(lo);                    // 3
+    println(hi);                    // 5
+
+    let (s, d) = (lo + hi, hi - lo);
+    println(s);                     // 8
+    println(d);                     // 2
+    0
+}

@@ -11,6 +11,11 @@
 
 // ── happy-path type checking ──────────────────────────────────────────
 
+use lang::interpreter::mir::MirValue;
+use lang::ir_types::typed_hir::Expression;
+
+use crate::common::run_hir;
+use crate::common::run_mir;
 use crate::common::typecheck;
 use crate::common::typecheck_fails;
 
@@ -244,4 +249,336 @@ fn typecheck_fails_wrong_argument_count_too_many() {
 fn typecheck_fails_comparison_mixed_types() {
     // `<` only accepts Int operands.
     typecheck_fails("def main(): Bool := true < false");
+}
+
+// ── let-tuple binding ────────────────────────────────────────────────────
+
+/// `let (a, b) = (expr, expr)` typechecks when the RHS is a tuple of the
+/// matching arity.
+#[test]
+fn let_tuple_basic_typechecks() {
+    typecheck(
+        "def main(): Int := {
+            let (a, b) = (1, 2);
+            a + b
+        }",
+    );
+}
+
+/// The bound variables carry the correct types from the tuple elements.
+#[test]
+fn let_tuple_binds_correct_types() {
+    let result = run_hir(
+        "def main(): Int := {
+            let (a, b) = (3, 7);
+            a + b
+        }",
+    );
+    assert_eq!(result, Expression::Int(10));
+}
+
+/// Let-tuple binding works with a function returning a tuple.
+#[test]
+fn let_tuple_from_function_return() {
+    let result = run_mir(
+        "def pair(): (Int, Int) := (10, 20)
+         def main(): Int := {
+             let (x, y) = pair();
+             x + y
+         }",
+    );
+    assert_eq!(result, MirValue::Int(30));
+}
+
+/// Let-tuple with a `mut` element allows reassignment of that element.
+#[test]
+fn let_tuple_mut_elem_can_be_reassigned() {
+    let result = run_hir(
+        "def main(): Int := {
+            let (a, mut b) = (1, 2);
+            b = 10;
+            a + b
+        }",
+    );
+    assert_eq!(result, Expression::Int(11));
+}
+
+/// A three-element let-tuple works.
+#[test]
+fn let_tuple_three_elements() {
+    let result = run_hir(
+        "def main(): Int := {
+            let (a, b, c) = (1, 2, 3);
+            a + b + c
+        }",
+    );
+    assert_eq!(result, Expression::Int(6));
+}
+
+/// Let-tuple with a type annotation on the RHS typechecks.
+#[test]
+fn let_tuple_with_type_annotation() {
+    typecheck(
+        "def main(): Int := {
+            let (a, b): (Int, Bool) = (42, true);
+            a
+        }",
+    );
+}
+
+/// Let-tuple whose RHS is not a tuple is a type error.
+#[test]
+fn let_tuple_non_tuple_rhs_is_error() {
+    typecheck_fails(
+        "def main(): Int := {
+            let (a, b) = 5;
+            a
+        }",
+    );
+}
+
+/// Let-tuple arity mismatch (too few LHS elements) is a type error.
+#[test]
+fn let_tuple_arity_mismatch_too_few_is_error() {
+    typecheck_fails(
+        "def main(): Int := {
+            let (a, b) = (1, 2, 3);
+            a
+        }",
+    );
+}
+
+/// Let-tuple arity mismatch (too many LHS elements) is a type error.
+#[test]
+fn let_tuple_arity_mismatch_too_many_is_error() {
+    typecheck_fails(
+        "def main(): Int := {
+            let (a, b, c) = (1, 2);
+            a
+        }",
+    );
+}
+
+// ── let-pattern (constructor) binding ────────────────────────────────────────
+
+/// Basic let-pattern binding typechecks when the else branch produces the
+/// same variant as the pattern.
+#[test]
+fn let_pattern_basic_typechecks() {
+    typecheck(
+        "type Opt = None | Some(Int)
+         def main(): Int := {
+             let Opt#Some(x) = Opt#Some(42) else Opt#Some(0);
+             x
+         }",
+    );
+}
+
+/// The extracted binding carries the correct type and value.
+#[test]
+fn let_pattern_extracts_value() {
+    let result = run_hir(
+        "type Opt = None | Some(Int)
+         def main(): Int := {
+             let Opt#Some(x) = Opt#Some(7) else Opt#Some(0);
+             x
+         }",
+    );
+    assert_eq!(result, Expression::Int(7));
+}
+
+/// The else fallback is used when the scrutinee does not match.
+#[test]
+fn let_pattern_fallback_on_mismatch() {
+    let result = run_hir(
+        "type Opt = None | Some(Int)
+         def main(): Int := {
+             let Opt#Some(x) = Opt#None else Opt#Some(-1);
+             x
+         }",
+    );
+    assert_eq!(result, Expression::Int(-1));
+}
+
+/// A wildcard sub-pattern (`_`) inside a tuple payload is accepted.
+#[test]
+fn let_pattern_wildcard_in_tuple_payload() {
+    let result = run_hir(
+        "type Pair = P((Int, Int))
+         def main(): Int := {
+             let Pair#P((a, _)) = Pair#P((10, 99)) else Pair#P((0, 0));
+             a
+         }",
+    );
+    assert_eq!(result, Expression::Int(10));
+}
+
+/// Works via MIR/compiled path too.
+#[test]
+fn let_pattern_compiled() {
+    let result = run_mir(
+        "type List = Empty | Cons((Int, List))
+         def head_or(list: List, default: Int): Int := {
+             let List#Cons((x, _)) = list else List#Cons((default, List#Empty));
+             x
+         }
+         def main(): Int := {
+             head_or(List#Cons((5, List#Empty)), 0)
+         }",
+    );
+    assert_eq!(result, MirValue::Int(5));
+}
+
+/// A missing `else` branch is a parse/type error.
+#[test]
+fn let_pattern_missing_else_is_error() {
+    typecheck_fails(
+        "type Opt = None | Some(Int)
+         def main(): Int := {
+             let Opt#Some(x) = Opt#Some(42);
+             x
+         }",
+    );
+}
+
+/// The else expression must have the same variant as the pattern; a different
+/// variant (even from the same enum) is rejected.
+#[test]
+fn let_pattern_else_wrong_variant_is_error() {
+    typecheck_fails(
+        "type AB = A(Int) | B(Int)
+         def main(): Int := {
+             let AB#A(x) = AB#A(1) else AB#B(0);
+             x
+         }",
+    );
+}
+
+/// A nested refutable sub-pattern (variant inside variant) is rejected;
+/// users should use `match` for that.
+#[test]
+fn let_pattern_nested_variant_sub_pattern_is_error() {
+    typecheck_fails(
+        "type Inner = X(Int)
+         type Outer = Wrap(Inner)
+         def main(): Int := {
+             let Outer#Wrap(Inner#X(n)) = Outer#Wrap(Inner#X(1)) else Outer#Wrap(Inner#X(0));
+             n
+         }",
+    );
+}
+
+// ── bare-tag constructor inference (todo 6)
+// ───────────────────────────────────
+
+/// A bare #Tag with payload typechecks when the expected type is known.
+#[test]
+fn tag_inference_with_payload_in_let_annotation() {
+    typecheck(
+        "type Opt = None | Some(Int)
+         def main(): Int := {
+             let x: Opt = #Some(42);
+             0
+         }",
+    );
+}
+
+/// Bare #Tag (nullary) in a `let` with annotation typechecks.
+#[test]
+fn tag_inference_nullary_in_let_annotation() {
+    typecheck(
+        "type Opt = None | Some(Int)
+         def main(): Int := {
+             let x: Opt = #None;
+             0
+         }",
+    );
+}
+
+/// Bare #Tag with payload in a function return position is resolved.
+#[test]
+fn tag_inference_in_return_position() {
+    let result = run_hir(
+        "type Opt = None | Some(Int)
+         def wrap(x: Int): Opt := #Some(x)
+         def main(): Int := {
+             match wrap(7) {
+                 Opt#Some(v) => v,
+                 Opt#None => 0,
+             }
+         }",
+    );
+    assert_eq!(result, Expression::Int(7));
+}
+
+/// Bare #Tag in a function argument position is resolved against the parameter
+/// type.
+#[test]
+fn tag_inference_in_call_argument() {
+    let result = run_hir(
+        "type Opt = None | Some(Int)
+         def unwrap_or(o: Opt, default: Int): Int :=
+             match o {
+                 Opt#Some(v) => v,
+                 Opt#None => default,
+             }
+         def main(): Int :=
+             unwrap_or(#Some(5), 0)",
+    );
+    assert_eq!(result, Expression::Int(5));
+}
+
+/// Bare #Tag in both branches of an if-else is resolved.
+#[test]
+fn tag_inference_in_if_else_branches() {
+    let result = run_hir(
+        "type Opt = None | Some(Int)
+         def main(): Int := {
+             let x: Opt = if true then #Some(3) else #None;
+             match x {
+                 Opt#Some(v) => v,
+                 Opt#None => -1,
+             }
+         }",
+    );
+    assert_eq!(result, Expression::Int(3));
+}
+
+/// Bare #Tag works in a match arm body.
+#[test]
+fn tag_inference_in_match_arm_body() {
+    let result = run_mir(
+        "type List = Empty | Cons((Int, List))
+         def sum(l: List): Int :=
+             match l {
+                 #Cons((x, rest)) => x + sum(rest),
+                 #Empty           => 0,
+             }
+         def main(): Int := sum(List#Cons((1, List#Cons((2, List#Empty)))))",
+    );
+    assert_eq!(result, MirValue::Int(3));
+}
+
+/// Providing a payload to a nullary variant via bare tag is a type error.
+#[test]
+fn tag_inference_payload_on_nullary_is_error() {
+    typecheck_fails(
+        "type Opt = None | Some(Int)
+         def main(): Int := {
+             let x: Opt = #None(42);
+             0
+         }",
+    );
+}
+
+/// Omitting the payload for a non-nullary variant via bare tag is a type error.
+#[test]
+fn tag_inference_missing_payload_is_error() {
+    typecheck_fails(
+        "type Opt = None | Some(Int)
+         def main(): Int := {
+             let x: Opt = #Some;
+             0
+         }",
+    );
 }

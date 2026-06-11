@@ -1,0 +1,46 @@
+//@TEST:{0}[1,1,3,4,5]
+
+// Insertion sort on an integer linked list.
+// Tests enum+tuple construction and destruction in a recursive algorithm.
+//
+// Input:  [3, 1, 4, 1, 5]
+// Output: [1, 1, 3, 4, 5]  (one element per line)
+
+type IList = Empty | Cons((Int, IList));
+
+// Insert x into an already-sorted list so the result is still sorted.
+def insert_sorted(x: Int, list: IList): IList :=
+    match list {
+        IList#Empty => IList#Cons((x, IList#Empty)),
+        IList#Cons((h, t)) =>
+            if x <= h then IList#Cons((x, IList#Cons((h, t))))
+            else IList#Cons((h, insert_sorted(x, t)))
+    }
+
+// Sort by recursively sorting the tail then inserting the head.
+def isort(list: IList): IList :=
+    match list {
+        IList#Empty    => IList#Empty,
+        IList#Cons((h, t)) => insert_sorted(h, isort(t))
+    }
+
+// Print each element on its own line, return 0.
+def print_list(list: IList): Int :=
+    match list {
+        IList#Empty    => 0,
+        IList#Cons((h, t)) => {
+            println(h);
+            print_list(t)
+        }
+    }
+
+def main(): Int := {
+    let l =
+        IList#Cons((3,
+        IList#Cons((1,
+        IList#Cons((4,
+        IList#Cons((1,
+        IList#Cons((5, IList#Empty))))))))));
+    let sorted = isort(l);
+    print_list(sorted)
+}

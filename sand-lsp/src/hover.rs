@@ -172,6 +172,13 @@ fn find_in_stmt(stmt: &Statement, pos: Pos) -> Option<&Expr> {
                 None
             }
         }
+        Statement::LetTuple { range, val, .. } | Statement::LetPattern { range, val, .. } => {
+            if range_contains(*range, pos) {
+                find_in_expr(val, pos).or(Some(val))
+            } else {
+                None
+            }
+        }
         Statement::Expr(e) => find_in_expr(e, pos),
     }
 }

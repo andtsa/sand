@@ -18,6 +18,7 @@ use crate::lang::intrinsics::Intrinsic;
 use crate::lang::ops::Bop;
 use crate::lang::ops::CompOp;
 use crate::lang::ops::Uop;
+use crate::lang::types::EnumRef;
 use crate::lang::types::Ty;
 use crate::lang::types::TyKind;
 
@@ -181,11 +182,14 @@ impl<'ctx> LlvmCodegen<'ctx> {
     ) -> Result<(), CodegenError> {
         match stmt {
             Statement::Assign { dst, value, .. } => {
-                let val = self.emit_rvalue(value, fn_ctx, fns)?;
+                let dst_ty = fn_ctx.local_tys[&dst.local];
+                let val = self.emit_rvalue(value, dst_ty, fn_ctx, fns)?;
                 self.builder.build_store(fn_ctx.locals[&dst.local], val)?;
             }
             Statement::Eval { value, .. } => {
-                self.emit_rvalue(value, fn_ctx, fns)?; // result discarded
+                // Side-effecting call only; Aggregate/Field never appear here,
+                // so dst_ty is irrelevant — use UNIT as a dummy.
+                self.emit_rvalue(value, Ty::UNIT, fn_ctx, fns)?;
             }
         }
 
@@ -193,9 +197,13 @@ impl<'ctx> LlvmCodegen<'ctx> {
     }
 
     /// rvalues / operands
+    /// `dst_ty` is the Sand type of the destination local — needed by
+    /// `Aggregate` (to distinguish enum from tuple) and `Field` (to know
+    /// what type to load).
     fn emit_rvalue(
         &self,
         rv: &RValue,
+        dst_ty: Ty,
         fn_ctx: &FnCtx<'_, 'ctx>,
         fns: &Map<FunRef, llvm::FunctionValue<'ctx>>,
     ) -> Result<llvm::BasicValueEnum<'ctx>, CodegenError> {
@@ -253,23 +261,9 @@ impl<'ctx> LlvmCodegen<'ctx> {
                 _ => self.emit_intrinsic_value(*fn_name, args, fn_ctx),
             },
 
-            RValue::Aggregate(..) => {
-                // payload-carrying enum variants and tuples are not yet
-                // supported by the LLVM backend (interpreter-only for this
-                // increment — see ENUM_PAYLOADS_TUPLES.todo.md §4).
-                panic!(
-                    "LLVM codegen does not yet support aggregate values (payload enums / tuples): {rv:?}"
-                )
-            }
+            RValue::Aggregate(fields) => self.emit_aggregate(fields, dst_ty, fn_ctx),
 
-            RValue::Field { .. } => {
-                // field projection (destructuring patterns) is, like
-                // `Aggregate`, interpreter-only for this increment — see
-                // DESTRUCTURING_PATTERNS.todo.md.
-                panic!(
-                    "LLVM codegen does not yet support field projection (destructuring patterns): {rv:?}"
-                )
-            }
+            RValue::Field { base, index } => self.emit_field(base, *index, dst_ty, fn_ctx),
         }
     }
 
@@ -391,63 +385,7 @@ impl<'ctx> LlvmCodegen<'ctx> {
         for arg in args {
             let val = self.emit_operand(arg, fn_ctx)?;
             let ty = Self::operand_ty(arg, fn_ctx);
-            match fn_ctx.compile_ctx.ty_kind(ty) {
-                TyKind::Int => {
-                    let fmt = self
-                        .builder
-                        .build_global_string_ptr("%ld ", "fmt_int")?
-                        .as_pointer_value();
-                    self.builder
-                        .build_call(printf, &[fmt.into(), val.into()], "")?;
-                }
-                TyKind::Bool => {
-                    // variadic call, i1 must be promoted to i32
-                    let as_i32 = self.builder.build_int_z_extend(
-                        val.into_int_value(),
-                        self.context.i32_type(),
-                        "bool_ext",
-                    )?;
-                    let fmt = self
-                        .builder
-                        .build_global_string_ptr("%d ", "fmt_bool")?
-                        .as_pointer_value(); // ← .as_pointer_value()
-                    self.builder
-                        .build_call(printf, &[fmt.into(), as_i32.into()], "")?;
-                }
-                TyKind::Unit => {}
-                TyKind::Enum(er) => {
-                    let er = *er;
-                    // build (or reuse) a global [N x ptr] variant-name table for
-                    // this enum, then index into it at runtime with the variant
-                    // index stored in `val`.
-                    let table = self.get_or_create_variant_table(er, fn_ctx.compile_ctx);
-                    let enum_def = fn_ctx.compile_ctx.get_enum(er);
-                    let n = enum_def.variants.len() as u32;
-                    let table_ty = self.context.ptr_type(Default::default()).array_type(n);
-                    // SAFETY: table is a private constant array we just created;
-                    // the index is a valid enum variant index produced by the compiler.
-                    let name_ptr = unsafe {
-                        self.builder.build_in_bounds_gep(
-                            table_ty,
-                            table.as_pointer_value(),
-                            &[self.context.i64_type().const_zero(), val.into_int_value()],
-                            "variant_name_ptr",
-                        )?
-                    };
-                    let loaded = self.builder.build_load(
-                        self.context.ptr_type(Default::default()),
-                        name_ptr,
-                        "variant_name",
-                    )?;
-                    let fmt = self
-                        .builder
-                        .build_global_string_ptr("%s ", "fmt_enum")?
-                        .as_pointer_value();
-                    self.builder
-                        .build_call(printf, &[fmt.into(), loaded.into()], "")?;
-                }
-                _ => panic!("unexpected type in intrinsic: {:?}", ty),
-            }
+            self.emit_print_value(val, ty, printf, fn_ctx)?;
         }
 
         if matches!(fn_name, Intrinsic::Println) {
@@ -646,6 +584,44 @@ impl<'ctx> LlvmCodegen<'ctx> {
         self.module.add_function("exit", fn_ty, None)
     }
 
+    fn get_or_declare_malloc(&self) -> llvm::FunctionValue<'ctx> {
+        if let Some(f) = self.module.get_function("malloc") {
+            return f;
+        }
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        let fn_ty = ptr_ty.fn_type(&[self.context.i64_type().into()], false);
+        self.module.add_function("malloc", fn_ty, None)
+    }
+
+    // aggregate type helpers
+
+    /// Returns `true` if any variant of `er` carries a payload.
+    ///
+    /// All-nullary enums are represented as a bare `i64` discriminant.
+    /// Enums where at least one variant has a payload are heap-allocated:
+    /// every value is a `ptr` to a `{ i64, ptr }` cell (field 0 = discriminant,
+    /// field 1 = separately-malloc'd payload, or null for nullary variants).
+    fn enum_has_payload(ctx: &CompileCtx, er: EnumRef) -> bool {
+        ctx.get_enum(er)
+            .variants
+            .iter()
+            .any(|v| v.payload.is_some())
+    }
+
+    /// LLVM struct type for a heap-allocated enum cell: `{ i64, ptr }`.
+    /// Field 0 = discriminant, field 1 = opaque ptr to payload (or null).
+    fn enum_cell_type(&self) -> inkwell::types::StructType<'ctx> {
+        self.context.struct_type(
+            &[
+                self.context.i64_type().into(),
+                self.context
+                    .ptr_type(inkwell::AddressSpace::default())
+                    .into(),
+            ],
+            false,
+        )
+    }
+
     // type helpers
 
     fn llvm_type(&self, ctx: &CompileCtx, ty: Ty) -> inkwell::types::BasicTypeEnum<'ctx> {
@@ -653,9 +629,303 @@ impl<'ctx> LlvmCodegen<'ctx> {
             TyKind::Int => self.context.i64_type().into(),
             TyKind::Bool => self.context.bool_type().into(),
             TyKind::Unit => self.context.struct_type(&[], false).into(),
+            TyKind::Enum(er) if Self::enum_has_payload(ctx, *er) => {
+                // heap-allocated cell; we only store/pass/load an opaque ptr
+                self.context
+                    .ptr_type(inkwell::AddressSpace::default())
+                    .into()
+            }
             TyKind::Enum(_) => self.context.i64_type().into(),
+            TyKind::Tuple(tys) => {
+                let tys = tys.clone();
+                let field_tys: Vec<_> = tys.iter().map(|t| self.llvm_type(ctx, *t)).collect();
+                self.context.struct_type(&field_tys, false).into()
+            }
             _ => panic!("no LLVM type for {:?}", ty),
         }
+    }
+
+    // aggregate rvalue helpers
+
+    /// Emit an `RValue::Aggregate` construction.
+    ///
+    /// - **Enum, all-nullary**: fields = [discriminant] → emit the `i64` disc.
+    /// - **Enum, payload**: fields = [discriminant, payload?] → malloc a `{
+    ///   i64, ptr }` cell, store the discriminant in field 0 and (optionally)
+    ///   the malloc'd payload ptr in field 1 (null if nullary).
+    /// - **Tuple**: fields = [elem0, …] → build a stack-allocated struct value.
+    fn emit_aggregate(
+        &self,
+        fields: &[Operand],
+        dst_ty: Ty,
+        fn_ctx: &FnCtx<'_, 'ctx>,
+    ) -> Result<llvm::BasicValueEnum<'ctx>, CodegenError> {
+        let ctx = fn_ctx.compile_ctx;
+        match ctx.ty_kind(dst_ty) {
+            TyKind::Enum(er) => {
+                let er = *er;
+                // fields[0] is always Const::Int(variant_idx)
+                let disc_val = self.emit_operand(&fields[0], fn_ctx)?.into_int_value();
+
+                if Self::enum_has_payload(ctx, er) {
+                    // ── heap cell ─────────────────────────────────────────────
+                    let cell_ty = self.enum_cell_type();
+                    let cell_size = cell_ty.size_of().expect("cell_ty has known size");
+                    let malloc = self.get_or_declare_malloc();
+                    let cell_ptr = self
+                        .builder
+                        .build_call(malloc, &[cell_size.into()], "enum_cell")?
+                        .try_as_basic_value()
+                        .basic()
+                        .unwrap()
+                        .into_pointer_value();
+
+                    // store discriminant into cell[0]
+                    let disc_slot =
+                        self.builder
+                            .build_struct_gep(cell_ty, cell_ptr, 0, "disc_slot")?;
+                    self.builder.build_store(disc_slot, disc_val)?;
+
+                    // store payload ptr into cell[1]
+                    let payload_slot =
+                        self.builder
+                            .build_struct_gep(cell_ty, cell_ptr, 1, "payload_slot")?;
+                    let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+
+                    if fields.len() == 2 {
+                        // non-nullary variant: malloc payload and store it
+                        let payload_val = self.emit_operand(&fields[1], fn_ctx)?;
+                        let payload_sand_ty = Self::operand_ty(&fields[1], fn_ctx);
+                        let payload_llvm_ty = self.llvm_type(ctx, payload_sand_ty);
+                        let payload_size = payload_llvm_ty
+                            .size_of()
+                            .expect("payload type has known size");
+                        let payload_ptr = self
+                            .builder
+                            .build_call(malloc, &[payload_size.into()], "payload_cell")?
+                            .try_as_basic_value()
+                            .basic()
+                            .unwrap()
+                            .into_pointer_value();
+                        self.builder.build_store(payload_ptr, payload_val)?;
+                        self.builder.build_store(payload_slot, payload_ptr)?;
+                    } else {
+                        // nullary variant: null payload ptr
+                        self.builder
+                            .build_store(payload_slot, ptr_ty.const_null())?;
+                    }
+
+                    Ok(cell_ptr.into())
+                } else {
+                    // ── all-nullary: just the discriminant ────────────────────
+                    Ok(disc_val.into())
+                }
+            }
+
+            TyKind::Tuple(tys) => {
+                let tys = tys.clone();
+                let field_tys: Vec<_> = tys.iter().map(|t| self.llvm_type(ctx, *t)).collect();
+                let struct_ty = self.context.struct_type(&field_tys, false);
+
+                // Materialise the struct via a temporary alloca, then load it
+                // so the result is a value (not a pointer).  LLVM's mem2reg
+                // pass eliminates the alloca in almost all real cases.
+                let slot = self.builder.build_alloca(struct_ty, "tuple_tmp")?;
+                for (i, field) in fields.iter().enumerate() {
+                    let val = self.emit_operand(field, fn_ctx)?;
+                    let field_ptr = self.builder.build_struct_gep(
+                        struct_ty,
+                        slot,
+                        i as u32,
+                        "tuple_field_slot",
+                    )?;
+                    self.builder.build_store(field_ptr, val)?;
+                }
+                Ok(self.builder.build_load(struct_ty, slot, "tuple_val")?)
+            }
+
+            _ => internal_bug!(
+                "emit_aggregate called with non-aggregate dst_ty {:?}",
+                dst_ty
+            ),
+        }
+    }
+
+    /// Emit an `RValue::Field` extraction.
+    ///
+    /// - **Enum (payload)**: base is a `ptr` to `{ i64, ptr }` cell; field 0 =
+    ///   `i64` discriminant, field 1 = payload (load through ptr).
+    /// - **Enum (all-nullary)**: base is the `i64` discriminant; only field 0
+    ///   is valid.
+    /// - **Tuple**: base is a struct value; extract element at `index`.
+    fn emit_field(
+        &self,
+        base: &Operand,
+        index: usize,
+        dst_ty: Ty,
+        fn_ctx: &FnCtx<'_, 'ctx>,
+    ) -> Result<llvm::BasicValueEnum<'ctx>, CodegenError> {
+        let ctx = fn_ctx.compile_ctx;
+        let base_sand_ty = Self::operand_ty(base, fn_ctx);
+        let base_val = self.emit_operand(base, fn_ctx)?;
+
+        match ctx.ty_kind(base_sand_ty) {
+            TyKind::Enum(er) if Self::enum_has_payload(ctx, *er) => {
+                let cell_ty = self.enum_cell_type();
+                let cell_ptr = base_val.into_pointer_value();
+                match index {
+                    0 => {
+                        // discriminant
+                        let disc_slot =
+                            self.builder
+                                .build_struct_gep(cell_ty, cell_ptr, 0, "disc_slot")?;
+                        Ok(self
+                            .builder
+                            .build_load(self.context.i64_type(), disc_slot, "disc")?)
+                    }
+                    1 => {
+                        // payload: load the payload ptr from cell[1], then
+                        // load the actual value through that ptr
+                        let payload_ptr_slot = self.builder.build_struct_gep(
+                            cell_ty,
+                            cell_ptr,
+                            1,
+                            "payload_ptr_slot",
+                        )?;
+                        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+                        let payload_ptr = self
+                            .builder
+                            .build_load(ptr_ty, payload_ptr_slot, "payload_ptr")?
+                            .into_pointer_value();
+                        let payload_llvm_ty = self.llvm_type(ctx, dst_ty);
+                        Ok(self
+                            .builder
+                            .build_load(payload_llvm_ty, payload_ptr, "payload")?)
+                    }
+                    _ => internal_bug!("enum field index {} out of range (valid: 0 or 1)", index),
+                }
+            }
+
+            TyKind::Enum(_) => {
+                // all-nullary: base_val *is* the i64 discriminant
+                debug_assert_eq!(index, 0, "all-nullary enum only has field 0");
+                Ok(base_val)
+            }
+
+            TyKind::Tuple(tys) => {
+                let tys = tys.clone();
+                let field_tys: Vec<_> = tys.iter().map(|t| self.llvm_type(ctx, *t)).collect();
+                // build_extract_value needs to know the struct type so LLVM
+                // can verify the index; we rebuild it here (it's the same
+                // interned struct type, so LLVM deduplicates it).
+                let _struct_ty = self.context.struct_type(&field_tys, false);
+                let struct_val = base_val.into_struct_value();
+                Ok(self
+                    .builder
+                    .build_extract_value(struct_val, index as u32, "field")?)
+            }
+
+            _ => internal_bug!(
+                "emit_field called with non-aggregate base type {:?}",
+                base_sand_ty
+            ),
+        }
+    }
+
+    /// Emit printf calls to print a single Sand value of any type.
+    ///
+    /// Values are printed in the following format:
+    /// - `Int`   → `%ld ` (e.g. `42 `)
+    /// - `Bool`  → `%d ` promoted to i32 (e.g. `1 ` / `0 `)
+    /// - `Unit`  → nothing
+    /// - `Enum` (all-nullary) → `%s ` (variant name)
+    /// - `Enum` (payload)     → `%s ` (variant name; payload is not printed)
+    /// - `Tuple` → each element printed in declaration order, space-separated
+    fn emit_print_value(
+        &self,
+        val: llvm::BasicValueEnum<'ctx>,
+        ty: Ty,
+        printf: llvm::FunctionValue<'ctx>,
+        fn_ctx: &FnCtx<'_, 'ctx>,
+    ) -> Result<(), CodegenError> {
+        let ctx = fn_ctx.compile_ctx;
+        match ctx.ty_kind(ty) {
+            TyKind::Int => {
+                let fmt = self
+                    .builder
+                    .build_global_string_ptr("%ld ", "fmt_int")?
+                    .as_pointer_value();
+                self.builder
+                    .build_call(printf, &[fmt.into(), val.into()], "")?;
+            }
+            TyKind::Bool => {
+                // Variadic call: i1 must be widened to i32 for printf
+                let as_i32 = self.builder.build_int_z_extend(
+                    val.into_int_value(),
+                    self.context.i32_type(),
+                    "bool_ext",
+                )?;
+                let fmt = self
+                    .builder
+                    .build_global_string_ptr("%d ", "fmt_bool")?
+                    .as_pointer_value();
+                self.builder
+                    .build_call(printf, &[fmt.into(), as_i32.into()], "")?;
+            }
+            TyKind::Unit => {
+                // nothing to print
+            }
+            TyKind::Enum(er) => {
+                let er = *er;
+                let disc_int = if Self::enum_has_payload(ctx, er) {
+                    // val is a ptr to `{ i64, ptr }`; load discriminant from [0]
+                    let cell_ty = self.enum_cell_type();
+                    let cell_ptr = val.into_pointer_value();
+                    let disc_slot =
+                        self.builder
+                            .build_struct_gep(cell_ty, cell_ptr, 0, "disc_slot")?;
+                    self.builder
+                        .build_load(self.context.i64_type(), disc_slot, "disc")?
+                        .into_int_value()
+                } else {
+                    // all-nullary: val is already the i64 discriminant
+                    val.into_int_value()
+                };
+                let table = self.get_or_create_variant_table(er, ctx);
+                let enum_def = ctx.get_enum(er);
+                let n = enum_def.variants.len() as u32;
+                let ptr_ty = self.context.ptr_type(Default::default());
+                let table_ty = ptr_ty.array_type(n);
+                let i64_zero = self.context.i64_type().const_zero();
+                let name_ptr = unsafe {
+                    self.builder.build_in_bounds_gep(
+                        table_ty,
+                        table.as_pointer_value(),
+                        &[i64_zero, disc_int],
+                        "variant_name_ptr",
+                    )?
+                };
+                let loaded = self.builder.build_load(ptr_ty, name_ptr, "variant_name")?;
+                let fmt = self
+                    .builder
+                    .build_global_string_ptr("%s ", "fmt_enum")?
+                    .as_pointer_value();
+                self.builder
+                    .build_call(printf, &[fmt.into(), loaded.into()], "")?;
+            }
+            TyKind::Tuple(tys) => {
+                let tys = tys.clone();
+                let struct_val = val.into_struct_value();
+                for (i, &field_ty) in tys.iter().enumerate() {
+                    let field_val =
+                        self.builder
+                            .build_extract_value(struct_val, i as u32, "print_field")?;
+                    self.emit_print_value(field_val, field_ty, printf, fn_ctx)?;
+                }
+            }
+            _ => {} // Top/Bottom don't appear at runtime
+        }
+        Ok(())
     }
 
     // output

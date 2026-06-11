@@ -1,0 +1,27 @@
+//@TEST:{0}[5,0,5]
+
+// Option / Maybe type — tests payload enum construction and pattern matching.
+//
+//   Maybe = Nothing | Just(Int)
+//
+// safe_div returns Nothing on division by zero, Just(result) otherwise.
+// unwrap_or extracts the value or falls back to a default.
+
+type Maybe = Nothing | Just(Int);
+
+def safe_div(a: Int, b: Int): Maybe :=
+    if b == 0 then Maybe#Nothing
+    else Maybe#Just(a / b)
+
+def unwrap_or(m: Maybe, default: Int): Int :=
+    match m {
+        Maybe#Nothing  => default,
+        Maybe#Just(v)  => v,
+    }
+
+def main(): Int := {
+    println(unwrap_or(safe_div(10, 2), 0));   // 10/2 = 5
+    println(unwrap_or(safe_div(10, 0), 0));   // div-by-zero → 0
+    println(unwrap_or(safe_div(15, 3), -1));  // 15/3 = 5
+    0
+}

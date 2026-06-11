@@ -5,6 +5,7 @@
 //! and all error cases.
 
 use lang::interpreter::mir::MirValue;
+use lang::ir_types::typed_hir::Expression;
 
 use crate::common::*;
 
@@ -328,13 +329,24 @@ fn match_non_exhaustive_is_error() {
     );
 }
 
-/// A match on a non-enum type is a type error.
+/// matching on Int with a wildcard is valid.
 #[test]
-fn match_on_non_enum_is_error() {
-    typecheck_fails(
+fn match_on_int_with_wildcard_is_ok() {
+    typecheck(
         "def main(): Int :=
              match 42 {
                  _ => 0,
+             }",
+    );
+}
+
+/// A match on a Unit type (no valid patterns) is still a type error.
+#[test]
+fn match_on_function_return_with_no_wildcard_is_error() {
+    typecheck_fails(
+        "def main(): Int :=
+             match 42 {
+                 1 => 1,
              }",
     );
 }
@@ -639,18 +651,215 @@ fn match_destructure_nullary_variant_is_error() {
     );
 }
 
-/// per decision D1, refutable sub-patterns (nested enum-variant patterns)
-/// are rejected — only bindings, wildcards, and tuple-destructuring are
-/// allowed in nested position.
+/// When nested variant arms together cover ALL inner variants the outer variant
+/// is now considered fully covered — the match is exhaustive without a
+/// wildcard. (Nested exhaustiveness, todo 7.)
 #[test]
-fn match_refutable_nested_pattern_is_error() {
-    typecheck_fails(
+fn match_nested_variant_all_inner_covered_is_exhaustive() {
+    let result = run_hir(
         "type Inner = A | B
          type Outer = Wrap(Inner)
          def main(): Int :=
              match Outer#Wrap(Inner#A) {
                  Outer#Wrap(Inner#A) => 1,
                  Outer#Wrap(Inner#B) => 2,
+             }",
+    );
+    assert_eq!(result, Expression::Int(1));
+}
+
+/// When only a SUBSET of inner variants are covered the outer variant is still
+/// not fully covered → NonExhaustiveMatch error.
+#[test]
+fn match_nested_variant_partial_inner_coverage_is_error() {
+    typecheck_fails(
+        "type Inner = A | B | C
+         type Outer = Wrap(Inner)
+         def main(): Int :=
+             match Outer#Wrap(Inner#A) {
+                 Outer#Wrap(Inner#A) => 1,
+                 Outer#Wrap(Inner#B) => 2,
+             }",
+    );
+}
+
+// ─── Nested exhaustiveness (todo 7) ─────────────────────────────────────────
+
+/// The false-positive bug: a tuple-wrapped refutable sub-pattern (e.g. the
+/// `List#Empty` inside `Cons((x, List#Empty))`) must make the outer Cons arm
+/// count as refutable → NonExhaustiveMatch.
+#[test]
+fn match_tuple_wrapped_refutable_sub_pattern_is_not_exhaustive() {
+    typecheck_fails(
+        "type List = Empty | Cons((Int, List))
+         def f(l: List): Int :=
+             match l {
+                 List#Cons((x, List#Empty)) => x,
+                 List#Empty => 0,
+             }
+         def main(): Int := 0",
+    );
+}
+
+/// Three inner variants: all three arms needed.  Missing one → error.
+#[test]
+fn match_nested_three_inner_variants_partial_is_error() {
+    typecheck_fails(
+        "type Shape = Circle | Square | Triangle
+         type Wrapper = W(Shape)
+         def f(w: Wrapper): Int :=
+             match w {
+                 Wrapper#W(Shape#Circle) => 1,
+                 Wrapper#W(Shape#Square) => 2,
+             }
+         def main(): Int := 0",
+    );
+}
+
+/// Three inner variants: all three arms present → exhaustive.
+#[test]
+fn match_nested_three_inner_variants_all_covered_is_exhaustive() {
+    let result = run_hir(
+        "type Shape = Circle | Square | Triangle
+         type Wrapper = W(Shape)
+         def f(w: Wrapper): Int :=
+             match w {
+                 Wrapper#W(Shape#Circle)   => 1,
+                 Wrapper#W(Shape#Square)   => 2,
+                 Wrapper#W(Shape#Triangle) => 3,
+             }
+         def main(): Int := f(Wrapper#W(Shape#Triangle))",
+    );
+    assert_eq!(result, Expression::Int(3));
+}
+
+/// Duplicate inner variant under the same outer variant is an error.
+#[test]
+fn match_nested_duplicate_inner_variant_is_error() {
+    typecheck_fails(
+        "type Inner = X | Y
+         type Outer = A(Inner) | B
+         def f(o: Outer): Int :=
+             match o {
+                 Outer#A(Inner#X) => 1,
+                 Outer#A(Inner#X) => 2,
+                 Outer#B => 3,
+             }
+         def main(): Int := 0",
+    );
+}
+
+/// Mixing irrefutable wildcard and nested variant arms: the wildcard arm
+/// already covers the outer variant, so the nested arm before it is valid too.
+#[test]
+fn match_nested_variant_then_wildcard_typechecks() {
+    let result = run_hir(
+        "type Inner = X | Y
+         type Outer = A(Inner) | B
+         def f(o: Outer): Int :=
+             match o {
+                 Outer#A(Inner#X) => 1,
+                 Outer#A(_)       => 2,
+                 Outer#B          => 3,
+             }
+         def main(): Int := f(Outer#A(Inner#Y))",
+    );
+    assert_eq!(result, Expression::Int(2));
+}
+
+// ─── Nested enum-variant patterns in payload position ─────────────────
+
+/// basic nested variant pattern with a wildcard catch-all type-checks.
+#[test]
+fn match_nested_variant_with_catchall_typechecks() {
+    run_hir(
+        "type Inner = A | B(Int)
+         type Outer = Wrap(Inner)
+         def main(): Int :=
+             match Outer#Wrap(Inner#B(42)) {
+                 Outer#Wrap(Inner#A)    => 0,
+                 Outer#Wrap(Inner#B(n)) => n,
+                 _                     => -1,
+             }",
+    );
+}
+
+/// the arm with the matching inner pattern is actually selected.
+#[test]
+fn match_nested_variant_selects_correct_arm() {
+    let result = run_hir(
+        "type Color = Red | Green | Blue
+         type Box = Colored(Color)
+         def main(): Int :=
+             match Box#Colored(Color#Green) {
+                 Box#Colored(Color#Red)   => 1,
+                 Box#Colored(Color#Green) => 2,
+                 Box#Colored(Color#Blue)  => 3,
+                 _                        => 0,
+             }",
+    );
+    assert_eq!(result, lang::ir_types::typed_hir::Expression::Int(2));
+}
+
+/// nested pattern extracts a binding from the inner variant's payload.
+#[test]
+fn match_nested_variant_binds_inner_payload() {
+    let result = run_hir(
+        "type Inner = A | B(Int)
+         type Outer = Wrap(Inner)
+         def main(): Int :=
+             match Outer#Wrap(Inner#B(99)) {
+                 Outer#Wrap(Inner#A)    => 0,
+                 Outer#Wrap(Inner#B(n)) => n,
+                 _                     => -1,
+             }",
+    );
+    assert_eq!(result, lang::ir_types::typed_hir::Expression::Int(99));
+}
+
+/// wildcard catch-all is reached when the inner pattern does not match.
+#[test]
+fn match_nested_variant_falls_through_to_catchall() {
+    let result = run_hir(
+        "type Inner = A | B(Int)
+         type Outer = Wrap(Inner)
+         def main(): Int :=
+             match Outer#Wrap(Inner#A) {
+                 Outer#Wrap(Inner#B(n)) => n,
+                 _                     => -1,
+             }",
+    );
+    assert_eq!(result, lang::ir_types::typed_hir::Expression::Int(-1));
+}
+
+/// bare tag sub-pattern resolves against the expected inner type.
+#[test]
+fn match_nested_tag_pattern_works() {
+    let result = run_hir(
+        "type Inner = A | B(Int)
+         type Outer = Wrap(Inner)
+         def main(): Int :=
+             match Outer#Wrap(Inner#B(7)) {
+                 Outer#Wrap(#A)    => 0,
+                 Outer#Wrap(#B(n)) => n,
+                 _                 => -1,
+             }",
+    );
+    assert_eq!(result, lang::ir_types::typed_hir::Expression::Int(7));
+}
+
+/// a nested variant pattern whose enum doesn't match the payload type is an
+/// error.
+#[test]
+fn match_nested_variant_wrong_type_is_error() {
+    typecheck_fails(
+        "type Inner = A | B(Int)
+         type Other = X
+         type Outer = Wrap(Inner)
+         def main(): Int :=
+             match Outer#Wrap(Inner#A) {
+                 Outer#Wrap(Other#X) => 1,
+                 _                   => 0,
              }",
     );
 }
@@ -663,6 +872,133 @@ fn match_tuple_pattern_against_non_tuple_is_error() {
          def main(): Int :=
              match Shape#Circle(5) {
                  (a, b) => a,
+             }",
+    );
+}
+
+// ─── Int / Bool literal patterns ──────────────────────────────────────
+
+/// match on Int with literal patterns — requires a wildcard/binding catch-all.
+#[test]
+fn match_int_literal_exhaustive_with_wildcard() {
+    run_hir(
+        "def main(): Int :=
+             match 5 {
+                 1 => 10,
+                 2 => 20,
+                 _ => 99,
+             }",
+    );
+}
+
+/// literal pattern that matches the scrutinee returns the correct arm.
+#[test]
+fn match_int_literal_correct_arm_selected() {
+    let result = run_hir(
+        "def main(): Int :=
+             match 2 {
+                 1 => 100,
+                 2 => 200,
+                 _ => 999,
+             }",
+    );
+    assert_eq!(result, lang::ir_types::typed_hir::Expression::Int(200));
+}
+
+/// negative integer literal pattern works.
+#[test]
+fn match_int_literal_negative() {
+    let result = run_hir(
+        "def main(): Int :=
+             match (-3) {
+                 -3 => 1,
+                 _  => 0,
+             }",
+    );
+    assert_eq!(result, lang::ir_types::typed_hir::Expression::Int(1));
+}
+
+/// Int match without a wildcard/binding catch-all is a type error.
+#[test]
+fn match_int_literal_non_exhaustive_is_error() {
+    typecheck_fails(
+        "def main(): Int :=
+             match 5 {
+                 1 => 10,
+                 2 => 20,
+             }",
+    );
+}
+
+/// duplicate Int literal pattern is a type error.
+#[test]
+fn match_int_duplicate_literal_is_error() {
+    typecheck_fails(
+        "def main(): Int :=
+             match 5 {
+                 1 => 10,
+                 1 => 20,
+                 _ => 0,
+             }",
+    );
+}
+
+/// Bool match covering both true and false is exhaustive.
+#[test]
+fn match_bool_exhaustive() {
+    run_hir(
+        "def main(): Int :=
+             match true {
+                 true  => 1,
+                 false => 0,
+             }",
+    );
+}
+
+/// Bool match selects the correct arm.
+#[test]
+fn match_bool_correct_arm() {
+    let result = run_hir(
+        "def main(): Int :=
+             match false {
+                 true  => 1,
+                 false => 0,
+             }",
+    );
+    assert_eq!(result, lang::ir_types::typed_hir::Expression::Int(0));
+}
+
+/// Bool match missing one arm is non-exhaustive.
+#[test]
+fn match_bool_non_exhaustive_is_error() {
+    typecheck_fails(
+        "def main(): Int :=
+             match true {
+                 true => 1,
+             }",
+    );
+}
+
+/// Int literal pattern against a Bool scrutinee is a type error.
+#[test]
+fn match_int_pattern_on_bool_scrutinee_is_error() {
+    typecheck_fails(
+        "def main(): Int :=
+             match true {
+                 1 => 10,
+                 _ => 0,
+             }",
+    );
+}
+
+/// Bool literal pattern against an Int scrutinee is a type error.
+#[test]
+fn match_bool_pattern_on_int_scrutinee_is_error() {
+    typecheck_fails(
+        "def main(): Int :=
+             match 5 {
+                 true => 1,
+                 _    => 0,
              }",
     );
 }

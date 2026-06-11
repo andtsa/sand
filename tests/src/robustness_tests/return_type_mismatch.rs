@@ -33,3 +33,19 @@ fn statement_only_block_in_int_function_is_type_error() {
         }",
     );
 }
+
+#[test]
+fn non_exhaustiveness_fails() {
+    typecheck_fails(
+        "type List = Empty | Cons((Int, List))
+
+def head(l: List): Int :=
+    match l {
+        List#Cons((x, List#Empty)) => x,
+        List#Empty => 0,
+    }
+
+def main(): Int :=
+    head(List#Cons((1, List#Cons((2, List#Empty)))))",
+    );
+}

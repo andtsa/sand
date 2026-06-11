@@ -92,6 +92,23 @@ fn collect_locals(cx: &mut FnCx, expr: &th::Expr) {
                         collect_locals(cx, val);
                     }
                     th::Statement::Assignment { val, .. } => collect_locals(cx, val),
+                    th::Statement::LetTuple { elems, val, .. } => {
+                        for (name, ty, _, range) in elems {
+                            cx.get_or_create_local(*name, *ty, *range);
+                        }
+                        collect_locals(cx, val);
+                    }
+                    th::Statement::LetPattern {
+                        pattern,
+                        val,
+                        else_branch,
+                        ..
+                    } => {
+                        // Register locals for all bindings introduced by the pattern.
+                        declare_pattern_locals(cx, pattern, val.range);
+                        collect_locals(cx, val);
+                        collect_locals(cx, else_branch);
+                    }
                     th::Statement::Expr(e) => collect_locals(cx, e),
                 }
             }
@@ -137,6 +154,35 @@ fn collect_locals(cx: &mut FnCx, expr: &th::Expr) {
             for arm in arms {
                 collect_locals(cx, &arm.body);
             }
+        }
+    }
+}
+
+/// Recursively declare MIR locals for every variable bound in a `LetPattern`.
+fn declare_pattern_locals(
+    cx: &mut FnCx,
+    pattern: &th::MatchPattern,
+    range: crate::compiler::structure::Range,
+) {
+    match pattern {
+        th::MatchPattern::Binding {
+            var,
+            ty,
+            range: brange,
+        } => {
+            cx.get_or_create_local(*var, *ty, *brange);
+        }
+        th::MatchPattern::Tuple { elems, .. } => {
+            for e in elems {
+                declare_pattern_locals(cx, e, range);
+            }
+        }
+        th::MatchPattern::Variant { payload, .. } => {
+            if let Some((_, sub)) = payload {
+                declare_pattern_locals(cx, sub, range);
+            }
+        }
+        th::MatchPattern::Wildcard | th::MatchPattern::IntLit(_) | th::MatchPattern::BoolLit(_) => {
         }
     }
 }

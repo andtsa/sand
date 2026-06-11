@@ -85,6 +85,26 @@ impl<'ctx> OwnershipChecker<'ctx> {
                 Ok(())
             }
 
+            th::Statement::LetTuple { elems, val, .. } => {
+                self.check_expr(val, env)?;
+                for (name, ..) in elems {
+                    env.declare(*name);
+                }
+                Ok(())
+            }
+
+            th::Statement::LetPattern {
+                pattern,
+                val,
+                else_branch,
+                ..
+            } => {
+                self.check_expr(val, env)?;
+                self.check_expr(else_branch, env)?;
+                Self::declare_pattern_bindings(pattern, env);
+                Ok(())
+            }
+
             th::Statement::Expr(e) => self.check_expr(e, env),
         }
     }
@@ -233,7 +253,9 @@ impl<'ctx> OwnershipChecker<'ctx> {
     /// `Owned` in `env` (decision D3 — see `Match` arm handling above).
     fn declare_pattern_bindings(pattern: &th::MatchPattern, env: &mut OwnershipEnv) {
         match pattern {
-            th::MatchPattern::Wildcard => {}
+            th::MatchPattern::Wildcard
+            | th::MatchPattern::IntLit(_)
+            | th::MatchPattern::BoolLit(_) => {}
             th::MatchPattern::Binding { var, .. } => env.declare(*var),
             th::MatchPattern::Tuple { elems, .. } => {
                 for sub in elems {

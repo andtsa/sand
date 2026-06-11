@@ -1,0 +1,56 @@
+//@TEST:{0}[3,20]
+
+// Binary search tree using a 3-tuple payload.
+// Tests 3-element tuple construction and pattern matching.
+//
+//   Tree = Leaf | Node((Tree, Int, Tree))
+//
+// After inserting [5, 3, 7, 1, 4] the tree looks like:
+//
+//          5
+//         / \
+//        3   7
+//       / \
+//      1   4
+//
+// depth = 3,  element-sum = 1+3+4+5+7 = 20
+
+type Tree = Leaf | Node((Tree, Int, Tree));
+
+// Insert x (duplicates go right).
+def insert(x: Int, t: Tree): Tree :=
+    match t {
+        Tree#Leaf => Tree#Node((Tree#Leaf, x, Tree#Leaf)),
+        Tree#Node((left, v, right)) =>
+            if x < v then Tree#Node((insert(x, left), v, right))
+            else Tree#Node((left, v, insert(x, right)))
+    }
+
+// Compute depth and element sum in a single pass.
+// Returns (depth, sum).
+def depth_and_sum(t: Tree): (Int, Int) :=
+    match t {
+        Tree#Leaf => (0, 0),
+        Tree#Node((left, v, right)) =>
+            match depth_and_sum(left) {
+                (dl, sl) => match depth_and_sum(right) {
+                    (dr, sr) => (1 + max(dl, dr), sl + v + sr)
+                }
+            }
+    }
+
+def main(): Int := {
+    let t = Tree#Leaf;
+    let t = insert(5, t);
+    let t = insert(3, t);
+    let t = insert(7, t);
+    let t = insert(1, t);
+    let t = insert(4, t);
+    match depth_and_sum(t) {
+        (d, s) => {
+            println(d);
+            println(s);
+        }
+    };
+    0
+}

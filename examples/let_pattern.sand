@@ -1,0 +1,16 @@
+//@TEST:{0}[5,99,-1,0]
+type List = Empty | Cons((Int, List))
+
+// Extract the head, or return `default` if the list is empty.
+def head_or(list: List, default: Int): Int := {
+    let List#Cons((x, _)) = list else List#Cons((default, List#Empty));
+    x
+}
+
+def main(): Int := {
+    println(head_or(List#Cons((5, List#Empty)), 0));     // 5
+    println(head_or(List#Cons((99, List#Empty)), 0));    // 99
+    println(head_or(List#Empty, -1));                    // -1
+    println(head_or(List#Empty, 0));                     // 0
+    0
+}

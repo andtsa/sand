@@ -325,6 +325,8 @@ fn uniquify_pattern(
                 range: *range,
             })
         }
+        HirPattern::IntLit(n) => Ok(HirPattern::IntLit(*n)),
+        HirPattern::BoolLit(b) => Ok(HirPattern::BoolLit(*b)),
         HirPattern::Wildcard => Ok(HirPattern::Wildcard),
     }
 }
@@ -370,6 +372,52 @@ fn uniquify_stmt(stmt: &Statement, u: &mut UniqCtx) -> Result<Statement, Uniquif
                 name: HirVar::Uniq(mapped),
                 range: *range,
                 val,
+            })
+        }
+
+        Statement::LetTuple {
+            elems,
+            ty,
+            val,
+            range,
+        } => {
+            // Uniquify the RHS before binding the new names (the RHS must not
+            // reference the names being introduced).
+            let val = uniquify_expr(val, u)?;
+            let new_elems = elems
+                .iter()
+                .map(|(name, is_mutable, elem_range)| {
+                    let new_name = u.bind_var(name);
+                    (HirVar::Uniq(new_name), *is_mutable, *elem_range)
+                })
+                .collect();
+            Ok(Statement::LetTuple {
+                elems: new_elems,
+                ty: *ty,
+                val,
+                range: *range,
+            })
+        }
+
+        Statement::LetPattern {
+            pattern,
+            ty,
+            val,
+            else_branch,
+            range,
+        } => {
+            // Uniquify the RHS and else before binding the pattern variables.
+            let val = uniquify_expr(val, u)?;
+            let else_branch = uniquify_expr(else_branch, u)?;
+            // Uniquify the pattern (binds new variables in scope).
+            let mut seen = crate::compiler::structure::Map::new();
+            let new_pattern = uniquify_pattern(pattern, u, &mut seen)?;
+            Ok(Statement::LetPattern {
+                pattern: new_pattern,
+                ty: *ty,
+                val,
+                else_branch,
+                range: *range,
             })
         }
 

@@ -40,6 +40,36 @@ pub enum Statement {
         val: Expr,
     },
 
+    /// Flat tuple-pattern binding after type-checking.
+    ///
+    /// Each element is `(name, ty, is_mutable, range)`.
+    /// MIR lowering desugars this to a temporary + per-element
+    /// `RValue::Field` extractions (no change to LLVM codegen needed).
+    LetTuple {
+        elems: Vec<(UniqVar, Ty, bool, Range)>,
+        range: Range,
+        val: Expr,
+    },
+
+    /// Constructor-pattern binding with mandatory else fallback.
+    ///
+    /// `let E#V(payload) = expr else fallback`
+    ///
+    /// The `pattern` is always a `MatchPattern::Variant` (its sub-pattern is
+    /// irrefutable — only bindings/wildcards/tuples inside). `else_branch` has
+    /// the same type as `val`; its outermost expression is guaranteed by the
+    /// type checker to be `Constructor { variant_idx == pattern.variant_idx }`.
+    ///
+    /// MIR lowering desugars to a discriminant branch: if the discriminant
+    /// matches, extract from `val`; otherwise evaluate `else_branch` and
+    /// extract from that (guaranteed to succeed).
+    LetPattern {
+        pattern: MatchPattern,
+        val: Expr,
+        else_branch: Expr,
+        range: Range,
+    },
+
     Assignment {
         name: UniqVar,
         range: Range,
@@ -120,14 +150,17 @@ pub struct TypedMatchArm {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum MatchPattern {
     Variant {
+        /// the enum type — the type of the value matched against this pattern.
+        /// Carried for the same reason `Tuple` carries its `ty` and `Binding`
+        /// carries its `ty`: MIR lowering operates without `CompileCtx` access
+        /// and needs the type to correctly allocate extraction temporaries when
+        /// this pattern appears in a *nested* (sub-pattern) position.
+        ty: Ty,
         enum_ref: EnumRef,
         variant_idx: usize,
         /// `Some((payload_ty, sub_pattern))` when the pattern destructures
         /// the variant's payload. `payload_ty` is the variant's *declared*
-        /// payload type — carried here (rather than re-derived from
-        /// `enum_ref`/`variant_idx` via `CompileCtx`) because MIR lowering
-        /// operates without `CompileCtx` access and needs it to type the
-        /// extraction temporary (mirrors why `Binding` carries its own `ty`).
+        /// payload type — carried here for the same reason as `ty`.
         payload: Option<(Ty, Box<MatchPattern>)>,
     },
     /// tuple destructuring `(p1, p2, ...)`. `ty` is the tuple's own type —
@@ -138,6 +171,10 @@ pub enum MatchPattern {
         ty: Ty,
         elems: Vec<MatchPattern>,
     },
+    /// integer literal in pattern position: `42` or `-7`.
+    IntLit(i64),
+    /// boolean literal in pattern position: `true` or `false`.
+    BoolLit(bool),
     /// a variable binding that destructures part of the scrutinee
     Binding {
         var: UniqVar,
@@ -177,6 +214,30 @@ impl PartialEq for Statement {
                 },
             ) => n1 == n2 && v1 == v2,
 
+            (
+                LetTuple {
+                    elems: e1, val: v1, ..
+                },
+                LetTuple {
+                    elems: e2, val: v2, ..
+                },
+            ) => e1 == e2 && v1 == v2,
+
+            (
+                LetPattern {
+                    pattern: p1,
+                    val: v1,
+                    else_branch: eb1,
+                    ..
+                },
+                LetPattern {
+                    pattern: p2,
+                    val: v2,
+                    else_branch: eb2,
+                    ..
+                },
+            ) => p1 == p2 && v1 == v2 && eb1 == eb2,
+
             (Expr(e1), Expr(e2)) => e1 == e2,
             _ => false,
         }
@@ -194,6 +255,20 @@ impl Hash for Statement {
                 name.hash(state);
                 ty.hash(state);
                 val.hash(state);
+            }
+            LetTuple { elems, val, .. } => {
+                elems.hash(state);
+                val.hash(state);
+            }
+            LetPattern {
+                pattern,
+                val,
+                else_branch,
+                ..
+            } => {
+                pattern.hash(state);
+                val.hash(state);
+                else_branch.hash(state);
             }
             Assignment { name, val, .. } => {
                 name.hash(state);

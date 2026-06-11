@@ -19,7 +19,7 @@ use crate::passes::type_ast::infer::infer_statement;
 /// classic case) or a tuple type (every legal pattern is irrefutable — see
 /// `DESTRUCTURING_PATTERNS.todo.md` decision D1 — so exhaustiveness reduces to
 /// "the first arm's pattern always matches").  any other scrutinee type is a
-/// `MatchNonEnumScrutinee` error.
+/// `MatchNonAggregateScrutinee` error.
 ///
 /// if `forced_expected` is `Some(ty)`, all arm bodies are checked against that
 /// type (check mode, enables bare-tag resolution in bodies).  if `None`, the
@@ -41,11 +41,15 @@ pub(super) fn type_check_match_arms(
     enum ScrutKind {
         Enum(EnumRef),
         Tuple,
+        Int,
+        Bool,
         Other,
     }
     let kind = match ctx.ty_kind(scrutinee_ty) {
         TyKind::Enum(er) => ScrutKind::Enum(*er),
         TyKind::Tuple(_) => ScrutKind::Tuple,
+        TyKind::Int => ScrutKind::Int,
+        TyKind::Bool => ScrutKind::Bool,
         _ => ScrutKind::Other,
     };
 
@@ -59,10 +63,10 @@ pub(super) fn type_check_match_arms(
             forced_expected,
             range,
         ),
-        ScrutKind::Tuple => {
+        ScrutKind::Tuple | ScrutKind::Int | ScrutKind::Bool => {
             type_check_match_arms_inner(ctx, env, arms, scrutinee_ty, None, forced_expected, range)
         }
-        ScrutKind::Other => Err(AstTypeError::MatchNonEnumScrutinee {
+        ScrutKind::Other => Err(AstTypeError::MatchNonAggregateScrutinee {
             ty: scrutinee_ty,
             range,
         }),
@@ -85,6 +89,19 @@ fn type_check_match_arms_inner(
     range: Range,
 ) -> Result<Vec<typed_hir::TypedMatchArm>, AstTypeError> {
     let mut covered_variants: std::collections::BTreeSet<usize> = Default::default();
+    // duplicate-detection set for Int literal patterns (BTreeSet<i64> because
+    // `covered_variants` is `usize` and can't represent negative integers).
+    let mut covered_int_lits: std::collections::BTreeSet<i64> = Default::default();
+    // Nested-enum exhaustiveness tracking: for outer variant arms whose payload is
+    // a direct enum pattern (refutable), record which inner variant indices
+    // have been covered (irrefutably).  After the arm loop we promote
+    // fully-covered outer variants into `covered_variants`.
+    // key   = outer variant_idx
+    // value = (inner EnumRef, set of covered inner variant_idx)
+    let mut nested_enum_coverage: std::collections::BTreeMap<
+        usize,
+        (EnumRef, std::collections::BTreeSet<usize>),
+    > = Default::default();
     // an "irrefutable pattern" is one that is statically guaranteed to match
     // any value of the scrutinee's type — `Wildcard`, `Binding`, or (for
     // tuple scrutinees) `Tuple` patterns whose element patterns are all
@@ -112,7 +129,7 @@ fn type_check_match_arms_inner(
                 payload,
             } => {
                 let Some(enum_ref) = enum_ref else {
-                    return Err(AstTypeError::MatchNonEnumScrutinee {
+                    return Err(AstTypeError::MatchNonAggregateScrutinee {
                         ty: scrutinee_ty,
                         range: arm.range,
                     });
@@ -124,12 +141,32 @@ fn type_check_match_arms_inner(
                         range: arm.range,
                     });
                 }
-                if !covered_variants.insert(*variant_idx) {
-                    let variant_name = ctx.get_enum(enum_ref).variants[*variant_idx].name.clone();
-                    return Err(AstTypeError::DuplicateMatchPattern {
-                        pattern: variant_name,
-                        range: arm.range,
-                    });
+                // Only register this arm as "covering" the outer variant when the
+                // payload sub-pattern is irrefutable.  A refutable inner pattern
+                // (e.g. `E#A(E#B)`) does not fully cover the outer variant — the
+                // caller still needs a wildcard/binding catch-all, and multiple arms
+                // can share the same outer variant with different inner patterns.
+                if !qpattern_payload_is_refutable(payload.as_deref()) {
+                    if !covered_variants.insert(*variant_idx) {
+                        let variant_name =
+                            ctx.get_enum(enum_ref).variants[*variant_idx].name.clone();
+                        return Err(AstTypeError::DuplicateMatchPattern {
+                            pattern: variant_name,
+                            range: arm.range,
+                        });
+                    }
+                } else {
+                    // Payload is refutable.  Try to track which inner-enum variant this
+                    // arm covers, so that multiple arms can collectively exhaust an inner
+                    // enum and together count as covering the outer variant.
+                    record_nested_enum_coverage(
+                        ctx,
+                        enum_ref,
+                        *variant_idx,
+                        payload.as_deref(),
+                        arm.range,
+                        &mut nested_enum_coverage,
+                    )?;
                 }
                 let typed_payload = check_variant_payload_pattern(
                     ctx,
@@ -140,6 +177,7 @@ fn type_check_match_arms_inner(
                     &mut bindings,
                 )?;
                 typed_hir::MatchPattern::Variant {
+                    ty: scrutinee_ty,
                     enum_ref: *pat_er,
                     variant_idx: *variant_idx,
                     payload: typed_payload,
@@ -147,7 +185,7 @@ fn type_check_match_arms_inner(
             }
             qhir::QPattern::Tag { variant, payload } => {
                 let Some(enum_ref) = enum_ref else {
-                    return Err(AstTypeError::MatchNonEnumScrutinee {
+                    return Err(AstTypeError::MatchNonAggregateScrutinee {
                         ty: scrutinee_ty,
                         range: arm.range,
                     });
@@ -159,11 +197,23 @@ fn type_check_match_arms_inner(
                         range: arm.range,
                     }
                 })?;
-                if !covered_variants.insert(idx) {
-                    return Err(AstTypeError::DuplicateMatchPattern {
-                        pattern: variant.clone(),
-                        range: arm.range,
-                    });
+                // Same coverage logic: only insert if the inner pattern is irrefutable.
+                if !qpattern_payload_is_refutable(payload.as_deref()) {
+                    if !covered_variants.insert(idx) {
+                        return Err(AstTypeError::DuplicateMatchPattern {
+                            pattern: variant.clone(),
+                            range: arm.range,
+                        });
+                    }
+                } else {
+                    record_nested_enum_coverage(
+                        ctx,
+                        enum_ref,
+                        idx,
+                        payload.as_deref(),
+                        arm.range,
+                        &mut nested_enum_coverage,
+                    )?;
                 }
                 let typed_payload = check_variant_payload_pattern(
                     ctx,
@@ -174,6 +224,7 @@ fn type_check_match_arms_inner(
                     &mut bindings,
                 )?;
                 typed_hir::MatchPattern::Variant {
+                    ty: scrutinee_ty,
                     enum_ref,
                     variant_idx: idx,
                     payload: typed_payload,
@@ -184,6 +235,51 @@ fn type_check_match_arms_inner(
                     check_tuple_pattern(ctx, sub_patterns, scrutinee_ty, arm.range, &mut bindings)?;
                 irrefutable_seen = true;
                 typed
+            }
+            qhir::QPattern::IntLit(n) => {
+                // Int literal patterns are only valid against an Int scrutinee.
+                if !matches!(ctx.ty_kind(scrutinee_ty), TyKind::Int) {
+                    return Err(AstTypeError::PatternTypeMismatch {
+                        message: format!(
+                            "integer literal pattern used against non-Int type {}",
+                            ctx.display_ty(scrutinee_ty)
+                        ),
+                        range: arm.range,
+                    });
+                }
+                // duplicate detection
+                if !covered_int_lits.insert(*n) {
+                    return Err(AstTypeError::DuplicateMatchPattern {
+                        pattern: n.to_string(),
+                        range: arm.range,
+                    });
+                }
+                typed_hir::MatchPattern::IntLit(*n)
+                // note: NOT setting irrefutable_seen — Int literals are
+                // refutable
+            }
+            qhir::QPattern::BoolLit(b) => {
+                // Bool literal patterns are only valid against a Bool scrutinee.
+                if !matches!(ctx.ty_kind(scrutinee_ty), TyKind::Bool) {
+                    return Err(AstTypeError::PatternTypeMismatch {
+                        message: format!(
+                            "boolean literal pattern used against non-Bool type {}",
+                            ctx.display_ty(scrutinee_ty)
+                        ),
+                        range: arm.range,
+                    });
+                }
+                // track coverage: false = 0, true = 1
+                let idx = *b as usize;
+                if !covered_variants.insert(idx) {
+                    return Err(AstTypeError::DuplicateMatchPattern {
+                        pattern: b.to_string(),
+                        range: arm.range,
+                    });
+                }
+                typed_hir::MatchPattern::BoolLit(*b)
+                // note: NOT setting irrefutable_seen — Bool literals are
+                // refutable
             }
             qhir::QPattern::Binding { var, range: brange } => {
                 bindings.push((*var, scrutinee_ty, *brange));
@@ -224,6 +320,17 @@ fn type_check_match_arms_inner(
         });
     }
 
+    // Nested-enum promotion: if all inner variants for a given outer variant are
+    // covered by arms with refutable payloads, count the outer variant as covered.
+    for (&outer_vi, (inner_er, inner_covered)) in &nested_enum_coverage {
+        if !covered_variants.contains(&outer_vi) {
+            let num_inner = ctx.get_enum(*inner_er).variants.len();
+            if inner_covered.len() == num_inner {
+                covered_variants.insert(outer_vi);
+            }
+        }
+    }
+
     // exhaustiveness:
     //  - enum scrutinees: require every variant to be covered, unless an
     //    irrefutable pattern (wildcard/binding) was seen
@@ -231,14 +338,116 @@ fn type_check_match_arms_inner(
     //    is always exhaustive — `irrefutable_seen` is guaranteed `true` by the time
     //    we get here (every branch above that can apply to a tuple scrutinee sets
     //    it), so there is nothing further to check.
-    if let Some(enum_ref) = enum_ref
-        && !irrefutable_seen
-    {
+    check_exhaustiveness(
+        ctx,
+        scrutinee_ty,
+        enum_ref,
+        &covered_variants,
+        irrefutable_seen,
+        range,
+    )?;
+
+    Ok(typed_arms)
+}
+
+/// When an outer variant arm has a **refutable** payload, attempt to record the
+/// specific inner-enum variant that this arm covers, so that multiple arms that
+/// together exhaust an inner enum can collectively count as covering the outer
+/// variant (nested-enum exhaustiveness, todo 7).
+///
+/// Only fires when:
+/// - the outer variant's declared payload type is a direct enum (not wrapped in
+///   a tuple)
+/// - the payload pattern is a `Variant` or `Tag` whose own payload is
+///   irrefutable
+///
+/// On a duplicate inner variant (same (outer_vi, inner_vi) pair already
+/// recorded), returns an error.
+fn record_nested_enum_coverage(
+    ctx: &CompileCtx,
+    outer_er: EnumRef,
+    outer_vi: usize,
+    payload: Option<&qhir::QPattern>,
+    arm_range: Range,
+    nested: &mut std::collections::BTreeMap<usize, (EnumRef, std::collections::BTreeSet<usize>)>,
+) -> Result<(), AstTypeError> {
+    // The outer variant's declared payload type must be a direct enum.
+    let outer_payload_ty = ctx.get_enum(outer_er).variants[outer_vi].payload;
+    let Some(payload_ty) = outer_payload_ty else {
+        return Ok(());
+    };
+    let inner_er = match ctx.ty_kind(payload_ty) {
+        TyKind::Enum(er) => *er,
+        _ => return Ok(()), // payload is not an enum — nothing to track
+    };
+    // Resolve the inner variant index from the payload pattern.
+    let inner_vi = match payload {
+        Some(qhir::QPattern::Variant {
+            variant_idx: vi,
+            payload: inner_p,
+            ..
+        }) => {
+            if qpattern_payload_is_refutable(inner_p.as_deref()) {
+                return Ok(()); // 3+ level nesting: skip for now
+            }
+            *vi
+        }
+        Some(qhir::QPattern::Tag {
+            variant: name,
+            payload: inner_p,
+        }) => {
+            if qpattern_payload_is_refutable(inner_p.as_deref()) {
+                return Ok(()); // 3+ level nesting: skip for now
+            }
+            match ctx.lookup_variant(inner_er, name) {
+                Some(vi) => vi,
+                None => return Ok(()), // unknown tag — type error reported elsewhere
+            }
+        }
+        _ => return Ok(()), // not a direct variant/tag payload
+    };
+    // Record the inner variant.  Duplicate = same inner variant seen twice.
+    let entry = nested
+        .entry(outer_vi)
+        .or_insert_with(|| (inner_er, std::collections::BTreeSet::new()));
+    if !entry.1.insert(inner_vi) {
+        let outer_name = ctx.get_enum(outer_er).variants[outer_vi].name.clone();
+        let inner_name = ctx.get_enum(inner_er).variants[inner_vi].name.clone();
+        return Err(AstTypeError::DuplicateMatchPattern {
+            pattern: format!("{}({})", outer_name, inner_name),
+            range: arm_range,
+        });
+    }
+    Ok(())
+}
+
+/// Verify that a match expression's arm set is exhaustive.
+///
+/// - `enum_ref = Some(er)`: scrutinee is an enum; every variant index in
+///   `0..num_variants` must appear in `covered` unless `has_irrefutable` is
+///   true (a wildcard/binding arm matches everything remaining).
+/// - `enum_ref = None`, `scrutinee_ty = Bool`: exhaustive iff `has_irrefutable`
+///   or both `false` (0) and `true` (1) appear in `covered`.
+/// - `enum_ref = None`, `scrutinee_ty = Int`: exhaustive iff `has_irrefutable`
+///   (Int is unbounded; literal arms alone can never cover all values).
+/// - `enum_ref = None`, otherwise (Tuple etc.): trivially exhaustive.
+fn check_exhaustiveness(
+    ctx: &CompileCtx,
+    scrutinee_ty: Ty,
+    enum_ref: Option<EnumRef>,
+    covered: &std::collections::BTreeSet<usize>,
+    has_irrefutable: bool,
+    range: Range,
+) -> Result<(), AstTypeError> {
+    if has_irrefutable {
+        return Ok(());
+    }
+    if let Some(enum_ref) = enum_ref {
         let enum_def = ctx.get_enum(enum_ref);
         let num_variants = enum_def.variants.len();
-        if covered_variants.len() < num_variants {
+        if covered.len() < num_variants {
             let uncovered: Vec<String> = (0..num_variants)
-                .filter(|i| !covered_variants.contains(i))
+                .filter(|i| !covered.contains(i))
                 .map(|i| enum_def.variants[i].name.clone())
                 .collect();
             return Err(AstTypeError::NonExhaustiveMatch {
@@ -247,9 +456,42 @@ fn type_check_match_arms_inner(
                 range,
             });
         }
+        return Ok(());
     }
-
-    Ok(typed_arms)
+    // Tuple (or unit) — trivially exhaustive (the single irrefutable arm was
+    // required). Int — literal arms alone cannot be exhaustive; a wildcard or
+    // binding is required. Bool — exhaustive iff both false (0) and true (1)
+    // are covered.
+    match ctx.ty_kind(scrutinee_ty) {
+        TyKind::Bool => {
+            if covered.contains(&0) && covered.contains(&1) {
+                Ok(())
+            } else {
+                let uncovered: Vec<&str> = [(0usize, "false"), (1, "true")]
+                    .iter()
+                    .filter(|(i, _)| !covered.contains(i))
+                    .map(|(_, name)| *name)
+                    .collect();
+                Err(AstTypeError::NonExhaustiveMatch {
+                    enum_name: "Bool".to_string(),
+                    uncovered: uncovered.into_iter().map(str::to_string).collect(),
+                    range,
+                })
+            }
+        }
+        TyKind::Int => {
+            // Int is unbounded; literal arms alone cannot be exhaustive.
+            Err(AstTypeError::NonExhaustiveMatch {
+                enum_name: "Int".to_string(),
+                uncovered: vec!["(all other integers)".to_string()],
+                range,
+            })
+        }
+        _ => {
+            // Tuple / Unit / etc. — trivially exhaustive once any arm is present.
+            Ok(())
+        }
+    }
 }
 
 /// validate & translate an (optional) payload sub-pattern attached to a
@@ -323,12 +565,39 @@ fn check_tuple_pattern(
     })
 }
 
+/// Returns `true` if `pattern` can fail to match some values of its type —
+/// i.e. it is **refutable**.  `Wildcard` and `Binding` are irrefutable;
+/// `Variant`, `Tag`, `IntLit`, `BoolLit` are refutable.  `Tuple` is refutable
+/// iff *any* of its elements is refutable (recursive).
+fn qpattern_is_refutable(pattern: &qhir::QPattern) -> bool {
+    match pattern {
+        qhir::QPattern::Variant { .. }
+        | qhir::QPattern::Tag { .. }
+        | qhir::QPattern::IntLit(_)
+        | qhir::QPattern::BoolLit(_) => true,
+        qhir::QPattern::Tuple(elems) => elems.iter().any(qpattern_is_refutable),
+        qhir::QPattern::Binding { .. } | qhir::QPattern::Wildcard => false,
+    }
+}
+
+/// Convenience wrapper: is the *payload* of a variant pattern refutable?
+fn qpattern_payload_is_refutable(payload: Option<&qhir::QPattern>) -> bool {
+    payload.is_some_and(qpattern_is_refutable)
+}
+
 /// validate & translate a pattern that appears in a *nested* (sub-pattern)
-/// position — inside a payload or a tuple element. per decision D1, only
-/// irrefutable forms are allowed here: bindings, wildcards, and recursive
-/// tuple-destructuring. `Variant`/`Tag` patterns (which would be refutable,
-/// requiring full pattern-matrix exhaustiveness analysis to support soundly)
-/// are rejected with `RefutableNestedPattern`.
+/// position — inside a payload or a tuple element.
+///
+/// Supported here:
+/// - bindings, wildcards — irrefutable
+/// - tuple destructuring — recursively irrefutable
+/// - enum variant patterns (`E#V(p)` or `#V(p)`) — refutable but well-typed;
+///   exhaustiveness in nested position is **not** checked (noted as a future
+///   todo); the check chain in MIR lowering handles the runtime test
+///
+/// Still rejected: integer/boolean literal patterns (`IntLit`, `BoolLit`) —
+/// these cannot be nested because Int is unbounded and exhaustiveness for Bool
+/// at an arbitrary nesting depth is not yet tracked.
 fn check_subpattern(
     ctx: &mut CompileCtx,
     pattern: &qhir::QPattern,
@@ -338,28 +607,85 @@ fn check_subpattern(
 ) -> Result<typed_hir::MatchPattern, AstTypeError> {
     match pattern {
         qhir::QPattern::Variant {
-            enum_ref,
+            enum_ref: pat_er,
             variant_idx,
-            ..
-        } => Err(AstTypeError::RefutableNestedPattern {
-            enum_name: ctx.get_enum(*enum_ref).name.clone(),
-            variant: ctx.get_enum(*enum_ref).variants[*variant_idx].name.clone(),
-            range: arm_range,
-        }),
-        qhir::QPattern::Tag { variant, .. } => {
-            // bare tags in nested position: we don't know the enum statically
-            // without the expected type being one — try to resolve it so the
-            // error message can name the right variant; fall back gracefully.
-            let enum_name = match ctx.ty_kind(expected_ty) {
-                TyKind::Enum(er) => ctx.get_enum(*er).name.clone(),
-                _ => "<unknown>".to_string(),
-            };
-            Err(AstTypeError::RefutableNestedPattern {
-                enum_name,
-                variant: variant.clone(),
-                range: arm_range,
+            payload,
+        } => {
+            // The expected type must be the same enum that the pattern names.
+            match ctx.ty_kind(expected_ty) {
+                TyKind::Enum(er) if *er == *pat_er => {}
+                _ => {
+                    return Err(AstTypeError::PatternTypeMismatch {
+                        message: format!(
+                            "enum variant pattern '{}' used against type {}",
+                            ctx.get_enum(*pat_er).variants[*variant_idx].name,
+                            ctx.display_ty(expected_ty)
+                        ),
+                        range: arm_range,
+                    });
+                }
+            }
+            let typed_payload = check_variant_payload_pattern(
+                ctx,
+                *pat_er,
+                *variant_idx,
+                payload.as_deref(),
+                arm_range,
+                bindings,
+            )?;
+            Ok(typed_hir::MatchPattern::Variant {
+                ty: expected_ty,
+                enum_ref: *pat_er,
+                variant_idx: *variant_idx,
+                payload: typed_payload,
             })
         }
+        qhir::QPattern::Tag { variant, payload } => {
+            // Resolve the expected type to an enum, then look up the variant.
+            let enum_ref = match ctx.ty_kind(expected_ty) {
+                TyKind::Enum(er) => *er,
+                _ => {
+                    return Err(AstTypeError::PatternTypeMismatch {
+                        message: format!(
+                            "bare tag pattern '#{variant}' used against non-enum type {}",
+                            ctx.display_ty(expected_ty)
+                        ),
+                        range: arm_range,
+                    });
+                }
+            };
+            let idx = ctx.lookup_variant(enum_ref, variant).ok_or_else(|| {
+                AstTypeError::UnknownTagVariant {
+                    variant: variant.clone(),
+                    enum_name: ctx.get_enum(enum_ref).name.clone(),
+                    range: arm_range,
+                }
+            })?;
+            let typed_payload = check_variant_payload_pattern(
+                ctx,
+                enum_ref,
+                idx,
+                payload.as_deref(),
+                arm_range,
+                bindings,
+            )?;
+            Ok(typed_hir::MatchPattern::Variant {
+                ty: expected_ty,
+                enum_ref,
+                variant_idx: idx,
+                payload: typed_payload,
+            })
+        }
+        qhir::QPattern::IntLit(n) => Err(AstTypeError::RefutableNestedPattern {
+            enum_name: "Int".to_string(),
+            variant: n.to_string(),
+            range: arm_range,
+        }),
+        qhir::QPattern::BoolLit(b) => Err(AstTypeError::RefutableNestedPattern {
+            enum_name: "Bool".to_string(),
+            variant: b.to_string(),
+            range: arm_range,
+        }),
         qhir::QPattern::Tuple(sub_patterns) => {
             check_tuple_pattern(ctx, sub_patterns, expected_ty, arm_range, bindings)
         }
@@ -385,8 +711,8 @@ pub(super) fn check(
     expected: Ty,
 ) -> Result<typed_hir::Expr, AstTypeError> {
     match &expr.expr {
-        // Resolve a bare #Tag against the expected enum type.
-        qhir::Expression::Tag { variant } => {
+        // Resolve a bare #Tag (optionally with payload) against the expected enum type.
+        qhir::Expression::Tag { variant, payload } => {
             let er = match ctx.ty_kind(expected) {
                 TyKind::Enum(er) => *er,
                 _ => {
@@ -403,11 +729,32 @@ pub(super) fn check(
                         enum_name: ctx.get_enum(er).name.clone(),
                         range: expr.range,
                     })?;
+            // `declared_payload_ty` is `Copy` so the immutable borrow of ctx ends here.
+            let declared_payload_ty = ctx.get_enum(er).variants[variant_idx].payload;
+            let typed_payload = match (payload.as_deref(), declared_payload_ty) {
+                (None, None) => None,
+                (None, Some(_)) => {
+                    return Err(AstTypeError::TagMissingPayload {
+                        variant: variant.clone(),
+                        range: expr.range,
+                    });
+                }
+                (Some(_), None) => {
+                    return Err(AstTypeError::TagPayloadOnNullaryVariant {
+                        variant: variant.clone(),
+                        range: expr.range,
+                    });
+                }
+                (Some(p), Some(declared_ty)) => {
+                    let typed = check(ctx, env, p, declared_ty)?;
+                    Some(Box::new(typed))
+                }
+            };
             Ok(typed_hir::Expr {
                 expr: typed_hir::Expression::Constructor {
                     enum_ref: er,
                     variant_idx,
-                    payload: None,
+                    payload: typed_payload,
                 },
                 ty: expected,
                 range: expr.range,
@@ -524,5 +871,93 @@ pub(super) fn check(
             }
             Ok(e)
         }
+    }
+}
+
+// ── let-pattern ────────────────────────────────────────────────────────
+
+/// Validate and translate a `let E#V(payload) = expr` LHS pattern.
+///
+/// Returns the typed `MatchPattern` and the list of bindings it introduces
+/// (`(UniqVar, Ty, Range)`).
+///
+/// Errors:
+/// - `PatternTypeMismatch` if `scrutinee_ty` is not the enum named in the
+///   pattern
+/// - `NestedVariantInLetPattern` if the sub-pattern contains a refutable
+///   variant
+/// - `PatternPayloadMismatch` / `PatternArityMismatch` if arity doesn't match
+pub(super) fn check_let_pattern(
+    ctx: &mut CompileCtx,
+    pattern: &qhir::QPattern,
+    scrutinee_ty: Ty,
+    range: Range,
+) -> Result<(typed_hir::MatchPattern, Vec<(UniqVar, Ty, Range)>), AstTypeError> {
+    let mut bindings: Vec<(UniqVar, Ty, Range)> = Vec::new();
+    let typed_pattern = check_let_pattern_inner(ctx, pattern, scrutinee_ty, range, &mut bindings)?;
+    Ok((typed_pattern, bindings))
+}
+
+fn check_let_pattern_inner(
+    ctx: &mut CompileCtx,
+    pattern: &qhir::QPattern,
+    expected_ty: Ty,
+    range: Range,
+    bindings: &mut Vec<(UniqVar, Ty, Range)>,
+) -> Result<typed_hir::MatchPattern, AstTypeError> {
+    match pattern {
+        qhir::QPattern::Variant {
+            enum_ref,
+            variant_idx,
+            payload,
+        } => {
+            // The expected type must be this enum.
+            match ctx.ty_kind(expected_ty) {
+                TyKind::Enum(er) if *er == *enum_ref => {}
+                _ => {
+                    return Err(AstTypeError::PatternTypeMismatch {
+                        message: format!(
+                            "let-pattern '{}#{}' cannot match value of type {}",
+                            ctx.get_enum(*enum_ref).name,
+                            ctx.get_enum(*enum_ref).variants[*variant_idx].name,
+                            ctx.display_ty(expected_ty)
+                        ),
+                        range,
+                    });
+                }
+            }
+            // The sub-pattern must be irrefutable (no nested variant/tag/literal).
+            if let Some(sub) = payload.as_deref() {
+                if matches!(
+                    sub,
+                    qhir::QPattern::Variant { .. }
+                        | qhir::QPattern::Tag { .. }
+                        | qhir::QPattern::IntLit(_)
+                        | qhir::QPattern::BoolLit(_)
+                ) {
+                    return Err(AstTypeError::NestedVariantInLetPattern { range });
+                }
+            }
+            let typed_payload = check_variant_payload_pattern(
+                ctx,
+                *enum_ref,
+                *variant_idx,
+                payload.as_deref(),
+                range,
+                bindings,
+            )?;
+            Ok(typed_hir::MatchPattern::Variant {
+                ty: expected_ty,
+                enum_ref: *enum_ref,
+                variant_idx: *variant_idx,
+                payload: typed_payload,
+            })
+        }
+        _ => Err(AstTypeError::PatternTypeMismatch {
+            message:
+                "let-pattern LHS must be a constructor pattern `E#V(...)` — use `match` for other patterns"
+                    .to_string(),
+            range,
+        }),
     }
 }

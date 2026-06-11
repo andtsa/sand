@@ -58,6 +58,32 @@ pub enum Statement {
         val: Expr,
     },
 
+    /// Flat tuple-pattern binding: `let (a, mut b) = expr`.
+    ///
+    /// Each element is `(name, is_mutable, range)`.  `ty` is the optional
+    /// type annotation on the whole binding (`let (a, b): (Int, Bool) = ...`).
+    LetTuple {
+        elems: Vec<(HirVar, bool, Range)>,
+        ty: Option<Ty>,
+        val: Expr,
+        range: Range,
+    },
+
+    /// Constructor-pattern binding: `let E#V(payload) = expr else fallback`.
+    ///
+    /// The `pattern` must have a `Constructor` or `Tag` at its root
+    /// (refutable). The `else_branch` is required whenever the pattern is
+    /// refutable; it supplies a fallback **value** (not a pattern) of the
+    /// same type as `val` whose outermost constructor must match the
+    /// pattern's variant.
+    LetPattern {
+        pattern: HirPattern,
+        ty: Option<Ty>,
+        val: Expr,
+        else_branch: Expr,
+        range: Range,
+    },
+
     Assignment {
         name: HirVar,
         range: Range,
@@ -80,8 +106,8 @@ impl Expr {
     /// Applies the fallible transformation `f` to every direct child `Expr`
     /// and reconstructs the parent node around the results, threading the
     /// original `range` through unchanged. Terminal nodes that contain no
-    /// sub-expressions (`Var`, `Int`, `Bool`, `Unit`, `Tag`) are returned
-    /// untouched; `Constructor`/`ExternalConstructor` recurse into their
+    /// sub-expressions (`Var`, `Int`, `Bool`, `Unit`) are returned
+    /// untouched; `Tag`, `Constructor`/`ExternalConstructor` recurse into their
     /// optional payload and `Tuple` into its elements. `Block` is
     /// deliberately *excluded*: its children are `Statement`s rather than
     /// bare `Expr`s and visiting it requires scope bookkeeping that only the
@@ -181,13 +207,16 @@ impl Expr {
             Expression::Tuple(elems) => {
                 Expression::Tuple(elems.iter().map(&mut f).collect::<Result<_, _>>()?)
             }
+            Expression::Tag { variant, payload } => Expression::Tag {
+                variant: variant.clone(),
+                payload: payload.as_deref().map(&mut f).transpose()?.map(Box::new),
+            },
             // Terminal nodes: no sub-expressions to traverse into, just
             // clone the (cheap) payload through unchanged.
             leaf @ (Expression::Var(_)
             | Expression::Int(_)
             | Expression::Bool(_)
-            | Expression::Unit
-            | Expression::Tag { .. }) => (*leaf).clone(),
+            | Expression::Unit) => (*leaf).clone(),
             // `Block` mixes `Statement` children and scoping concerns —
             // callers must handle it before delegating here.
             block @ Expression::Block { .. } => (*block).clone(),
@@ -244,6 +273,7 @@ pub enum Expression {
     },
     Tag {
         variant: String,
+        payload: Option<Box<Expr>>,
     },
     Match {
         scrutinee: Box<Expr>,
@@ -271,6 +301,10 @@ pub enum HirPattern {
         payload: Option<Box<HirPattern>>,
     },
     Tuple(Vec<HirPattern>),
+    /// integer literal in pattern position: `42` or `-7`.
+    IntLit(i64),
+    /// boolean literal in pattern position: `true` or `false`.
+    BoolLit(bool),
     /// a variable binding that destructures part of the scrutinee, e.g. the
     /// `r` in `Circle(r)` or `a`/`b` in `(a, b)`. carries its own `Range`
     /// since it is a declaration site (needed for "declared at..."
@@ -307,6 +341,23 @@ impl Hash for Statement {
                 name.hash(state);
                 val.hash(state);
             }
+            LetTuple { elems, ty, val, .. } => {
+                elems.hash(state);
+                ty.hash(state);
+                val.hash(state);
+            }
+            LetPattern {
+                pattern,
+                ty,
+                val,
+                else_branch,
+                ..
+            } => {
+                pattern.hash(state);
+                ty.hash(state);
+                val.hash(state);
+                else_branch.hash(state);
+            }
             Expr(e) => e.hash(state),
         }
     }
@@ -341,6 +392,36 @@ impl PartialEq for Statement {
             ) => n1 == n2 && v1 == v2,
 
             (Expr(e1), Expr(e2)) => e1 == e2,
+            (
+                LetTuple {
+                    elems: e1,
+                    ty: t1,
+                    val: v1,
+                    ..
+                },
+                LetTuple {
+                    elems: e2,
+                    ty: t2,
+                    val: v2,
+                    ..
+                },
+            ) => e1 == e2 && t1 == t2 && v1 == v2,
+            (
+                LetPattern {
+                    pattern: p1,
+                    ty: t1,
+                    val: v1,
+                    else_branch: eb1,
+                    ..
+                },
+                LetPattern {
+                    pattern: p2,
+                    ty: t2,
+                    val: v2,
+                    else_branch: eb2,
+                    ..
+                },
+            ) => p1 == p2 && t1 == t2 && v1 == v2 && eb1 == eb2,
             _ => false,
         }
     }

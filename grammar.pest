@@ -7,20 +7,24 @@ COMMENT    = _{ ("/*" ~ (!"*/" ~ ANY)* ~ "*/") | ("//" ~ (!"\n" ~ ANY)*) }
 // Qualified type: `mod::TypeName`
 qualified_type = { identifier ~ "::" ~ identifier }
 
-// Ad-hoc tag union type: `#ok | #err` — structural, anonymous
+// Ad-hoc tag union type: `#ok | #err` (structural, anonymous)
 tag_type = { "#" ~ identifier ~ ("|" ~ "#" ~ identifier)* }
 
-// Tuple type: `(Int, Bool)` — arity >= 2 (one element is just grouping, handled by build_type)
+// Tuple type: `(Int, Bool)`, arity >= 2 (one element is just grouping, handled by build_type)
 tuple_type = { "(" ~ type_ ~ ("," ~ type_)+ ~ ")" }
 
 type_ = {
     "Int"
   | "Bool"
   | "Unit" // equivalent to rust (), python None
-  | qualified_type  // cross-module enum type: mod::TypeName
-  | tag_type        // ad-hoc tag union: #ok | #err
-  | tuple_type      // product type: (A, B, ...)
-  | identifier      // named enum type
+
+  | qualified_type // cross-module enum type: mod::TypeName
+
+  | tag_type // ad-hoc tag union: #ok | #err
+
+  | tuple_type // product type: (A, B, ...)
+
+  | identifier // named enum type
 }
 
 // keywords (prevent them from being identifiers)
@@ -32,8 +36,6 @@ empty_identifier = @{ "_" }
 number = @{ ASCII_DIGIT+ }
 
 boolean = @{ "true" | "false" }
-
-// binary_operand = _{ add | subtract | multiply | divide | power | and | or | xor }
 
 unary_operand = { subtract | negate }
 
@@ -62,23 +64,28 @@ type_alias   = { "type" ~ identifier ~ "=" ~ enum_variant ~ ("|" ~ enum_variant)
 // an optional parenthesised argument supplies the variant's payload: `Result#Ok(5)`
 external_constructor_expr = { identifier ~ "::" ~ identifier ~ "#" ~ identifier ~ ("(" ~ expression ~ ")")? }
 constructor_expr          = { identifier ~ "#" ~ identifier ~ ("(" ~ expression ~ ")")? }
-tag_expr                  = { "#" ~ identifier }
+tag_expr                  = { "#" ~ identifier ~ ("(" ~ expression ~ ")")? }
 
 // pattern matching
 // patterns are recursive: a payload-carrying variant or a tuple may itself
 // contain (irrefutable) sub-patterns that bind/destructure the payload.
-// only bindings, wildcards, and recursive tuple-destructuring are allowed in
-// sub-pattern position — see DESTRUCTURING_PATTERNS.todo.md decision D1.
 wildcard_pattern    = { "_" }
 binding_pattern     = { identifier }
 tuple_pattern       = { "(" ~ pattern ~ ("," ~ pattern)+ ~ ")" }
 tag_pattern         = { "#" ~ identifier ~ ("(" ~ pattern ~ ")")? }
 constructor_pattern = { identifier ~ "#" ~ identifier ~ ("(" ~ pattern ~ ")")? }
-pattern             = { constructor_pattern | tag_pattern | tuple_pattern | wildcard_pattern | binding_pattern }
-match_arm           = { pattern ~ "=>" ~ expression ~ ","? }
-match_expr          = { "match" ~ expression ~ "{" ~ match_arm+ ~ "}" }
+// literal patterns (refutable; int/bool values in match position)
+// bool_literal_pattern must precede binding_pattern so "true"/"false" are
+// not captured as variable names (they are keywords, but the ordering makes
+// the intent explicit). int_literal_pattern supports optional leading minus.
+int_literal_pattern  = @{ "-"? ~ number }
+bool_literal_pattern = @{ "true" | "false" }
+pattern              =  { constructor_pattern | tag_pattern | tuple_pattern | wildcard_pattern | bool_literal_pattern | int_literal_pattern | binding_pattern }
+match_arm            =  { pattern ~ "=>" ~ expression ~ ","? }
+match_expr           =  { "match" ~ expression ~ "{" ~ match_arm+ ~ "}" }
 
-// language is built around expressions,
+// the language is built around expressions
+
 ifstatement = {
     "if" ~ expression ~ "then" ~ expression ~ ("else" ~ expression)?
 }
@@ -90,8 +97,10 @@ whileloop = {
 function_call          = { identifier ~ "(" ~ (expression ~ ("," ~ expression)*)? ~ ")" }
 external_function_call = { identifier ~ "::" ~ identifier ~ "(" ~ (expression ~ ("," ~ expression)*)? ~ ")" }
 
-// tuple literal: `(a, b, ...)` — arity >= 2 (one element is just grouping)
+// tuple literal: `(a, b, ...)`
 tuple_expr = { "(" ~ expression ~ ("," ~ expression)+ ~ ")" }
+
+// todo: anonymous functions (lambdas) & first class functions
 
 // precedence chaining
 primary = {
@@ -124,12 +133,23 @@ expression = { logic_or }
 
 mut_kw = { "mut" }
 
-// variables
-declaration = { "let" ~ mut_kw? ~ (identifier | empty_identifier) ~ (":" ~ type_)? ~ "=" ~ expression }
+// tuple-pattern `let` binding: `let (a, mut b) = expr`
+let_tuple_elem = { mut_kw? ~ identifier }
+let_tuple      = { "(" ~ let_tuple_elem ~ ("," ~ let_tuple_elem)+ ~ ")" }
 
-// left here for later:
-// constant = { "const" ~ declaration }
-// mutable = { "mut" ~ declaration }
+// constructor-pattern `let` binding: `let E#V(payload) = expr else fallback`
+// Sub-pattern elements are immutable bindings only (no mut_kw at this level), for now.
+// Mutability in top-level let-tuple bindings (`let (a, mut b) = ...`) is unaffected.
+let_binding_elem  = { identifier | empty_identifier }
+let_binding_tuple = { "(" ~ let_binding_elem ~ ("," ~ let_binding_elem)+ ~ ")" }
+let_destructure   = { let_constructor | let_binding_tuple | let_binding_elem }
+let_constructor   = { identifier ~ "#" ~ identifier ~ ("(" ~ let_destructure ~ ")")? }
+
+// variables, either a single binding, a flat tuple-pattern, a constructor-pattern, or bare binding
+// The `else` clause is required when the LHS is a refutable (constructor) pattern.
+declaration = {
+    "let" ~ (let_constructor | let_tuple | mut_kw? ~ (identifier | empty_identifier)) ~ (":" ~ type_)? ~ "=" ~ expression ~ ("else" ~ expression)?
+}
 
 assignment = { identifier ~ "=" ~ expression }
 

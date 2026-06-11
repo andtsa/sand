@@ -3,7 +3,34 @@ use std::collections::HashSet;
 use crate::compiler::structure::UniqVar;
 use crate::ir_types::typed_hir::Expr;
 use crate::ir_types::typed_hir::Expression;
+use crate::ir_types::typed_hir::MatchPattern;
 use crate::ir_types::typed_hir::Statement;
+
+/// Collect all variable names bound by a `LetPattern`'s match pattern.
+pub fn collect_let_pattern_bindings(pattern: &MatchPattern) -> HashSet<UniqVar> {
+    let mut set = HashSet::new();
+    collect_match_pattern_bindings(pattern, &mut set);
+    set
+}
+
+fn collect_match_pattern_bindings(pattern: &MatchPattern, set: &mut HashSet<UniqVar>) {
+    match pattern {
+        MatchPattern::Binding { var, .. } => {
+            set.insert(*var);
+        }
+        MatchPattern::Tuple { elems, .. } => {
+            for e in elems {
+                collect_match_pattern_bindings(e, set);
+            }
+        }
+        MatchPattern::Variant { payload, .. } => {
+            if let Some((_, sub)) = payload {
+                collect_match_pattern_bindings(sub, set);
+            }
+        }
+        MatchPattern::Wildcard | MatchPattern::IntLit(_) | MatchPattern::BoolLit(_) => {}
+    }
+}
 
 pub fn get_dependencies(expr: &Expr) -> HashSet<UniqVar> {
     let mut dependencies = HashSet::new();
@@ -46,6 +73,9 @@ pub fn collect_dependencies(expr: &Expression, dependencies: &mut HashSet<UniqVa
                     Statement::Assignment { val, .. } => {
                         collect_dependencies(&val.expr, dependencies);
                     }
+                    Statement::LetTuple { val, .. } | Statement::LetPattern { val, .. } => {
+                        collect_dependencies(&val.expr, dependencies);
+                    }
                     Statement::Expr(e) => {
                         collect_dependencies(&e.expr, dependencies);
                     }
@@ -79,6 +109,8 @@ pub fn get_mutations_stmt(stmt: &Statement) -> HashSet<UniqVar> {
     match stmt {
         Statement::Declaration { name, .. } => HashSet::from([*name]),
         Statement::Assignment { name, .. } => HashSet::from([*name]),
+        Statement::LetTuple { elems, .. } => elems.iter().map(|(n, ..)| *n).collect(),
+        Statement::LetPattern { pattern, .. } => collect_let_pattern_bindings(pattern),
         Statement::Expr(_) => HashSet::new(),
     }
 }
@@ -99,6 +131,14 @@ fn collect_mutations(expr: &Expression, mutations: &mut HashSet<UniqVar>) {
                     }
                     Statement::Assignment { name, .. } => {
                         mutations.insert(*name);
+                    }
+                    Statement::LetTuple { elems, .. } => {
+                        for (name, ..) in elems {
+                            mutations.insert(*name);
+                        }
+                    }
+                    Statement::LetPattern { pattern, .. } => {
+                        mutations.extend(collect_let_pattern_bindings(pattern));
                     }
                     Statement::Expr(e) => {
                         collect_mutations(&e.expr, mutations);

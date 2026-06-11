@@ -1,0 +1,37 @@
+//@TEST:{0}[1,3,0,42]
+
+// Nested enum-variant patterns in match arms (todo 5c).
+//
+//   Result  = Ok(Int) | Err(Int)
+//   Wrapper = Val(Result) | Empty
+//
+// Demonstrates: matching on the outer variant and simultaneously
+// destructuring the inner variant in a single pattern.
+
+type Result  = Ok(Int) | Err(Int);
+type Wrapper = Val(Result) | Empty;
+
+// Nested variant arms do not "cover" the outer variant for exhaustiveness
+// purposes (todo: nested exhaustiveness checking is a future improvement).
+// Use an irrefutable catch-all arm to cover any Val not matched above.
+def classify(w: Wrapper): Int :=
+    match w {
+        Wrapper#Val(Result#Ok(n)) => n,
+        Wrapper#Val(_)            => -1,   // catches Val(Err(_)) and any future variants
+        Wrapper#Empty             => -2,
+    }
+
+// is_ok: 1 if the wrapper holds Ok, 0 otherwise
+def is_ok(w: Wrapper): Int :=
+    match w {
+        Wrapper#Val(Result#Ok(_)) => 1,
+        _                         => 0,
+    }
+
+def main(): Int := {
+    println(is_ok(Wrapper#Val(Result#Ok(99))));        // 1
+    println(classify(Wrapper#Val(Result#Ok(3))));      // 3
+    println(is_ok(Wrapper#Val(Result#Err(5))));        // 0
+    println(classify(Wrapper#Val(Result#Ok(42))));     // 42
+    0
+}

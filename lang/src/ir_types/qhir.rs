@@ -50,6 +50,23 @@ pub enum Statement {
         val: Expr,
     },
 
+    /// Flat tuple-pattern binding after uniquification.
+    LetTuple {
+        elems: Vec<(UniqVar, bool, Range)>,
+        ty: Option<Ty>,
+        val: Expr,
+        range: Range,
+    },
+
+    /// Constructor-pattern binding: `let E#V(payload) = expr else fallback`.
+    LetPattern {
+        pattern: QPattern,
+        ty: Option<Ty>,
+        val: Expr,
+        else_branch: Expr,
+        range: Range,
+    },
+
     Assignment {
         name: UniqVar,
         range: Range,
@@ -109,6 +126,7 @@ pub enum Expression {
     },
     Tag {
         variant: String,
+        payload: Option<Box<Expr>>,
     },
     Match {
         scrutinee: Box<Expr>,
@@ -143,6 +161,10 @@ pub enum QPattern {
     },
     /// Tuple destructuring `(p1, p2, ...)`
     Tuple(Vec<QPattern>),
+    /// integer literal in pattern position: `42` or `-7`.
+    IntLit(i64),
+    /// boolean literal in pattern position: `true` or `false`.
+    BoolLit(bool),
     /// a variable binding (already uniquified — `var` is a `UniqVar`)
     Binding { var: UniqVar, range: Range },
     /// Wildcard `_`
@@ -166,6 +188,23 @@ impl Hash for Statement {
             Assignment { name, val, .. } => {
                 name.hash(state);
                 val.hash(state);
+            }
+            LetTuple { elems, ty, val, .. } => {
+                elems.hash(state);
+                ty.hash(state);
+                val.hash(state);
+            }
+            LetPattern {
+                pattern,
+                ty,
+                val,
+                else_branch,
+                ..
+            } => {
+                pattern.hash(state);
+                ty.hash(state);
+                val.hash(state);
+                else_branch.hash(state);
             }
             Expr(e) => e.hash(state),
         }
@@ -201,6 +240,36 @@ impl PartialEq for Statement {
             ) => n1 == n2 && v1 == v2,
 
             (Expr(e1), Expr(e2)) => e1 == e2,
+            (
+                LetTuple {
+                    elems: e1,
+                    ty: t1,
+                    val: v1,
+                    ..
+                },
+                LetTuple {
+                    elems: e2,
+                    ty: t2,
+                    val: v2,
+                    ..
+                },
+            ) => e1 == e2 && t1 == t2 && v1 == v2,
+            (
+                LetPattern {
+                    pattern: p1,
+                    ty: t1,
+                    val: v1,
+                    else_branch: eb1,
+                    ..
+                },
+                LetPattern {
+                    pattern: p2,
+                    ty: t2,
+                    val: v2,
+                    else_branch: eb2,
+                    ..
+                },
+            ) => p1 == p2 && t1 == t2 && v1 == v2 && eb1 == eb2,
             _ => false,
         }
     }

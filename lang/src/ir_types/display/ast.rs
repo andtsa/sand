@@ -158,6 +158,7 @@ fn dump_match_pattern(pattern: &MatchPattern, ctx: &CompileCtx) -> String {
             enum_ref,
             variant_idx,
             payload,
+            ..
         } => {
             let tag = ctx.enum_display(*enum_ref, *variant_idx);
             match payload {
@@ -173,6 +174,8 @@ fn dump_match_pattern(pattern: &MatchPattern, ctx: &CompileCtx) -> String {
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
+        MatchPattern::IntLit(n) => n.to_string(),
+        MatchPattern::BoolLit(b) => b.to_string(),
         MatchPattern::Binding { var, .. } => ctx.uniq_variable_name(var),
         MatchPattern::Wildcard => "_".to_string(),
     }
@@ -184,6 +187,31 @@ fn dump_statement(out: &mut String, stmt: &Statement, ctx: &CompileCtx, level: u
             indent(out, level);
             let _ = writeln!(out, "let {}: {} =", ctx.uniq_variable_name(name), ty);
             dump_expr(out, val, ctx, level + 1);
+        }
+        Statement::LetTuple { elems, val, .. } => {
+            indent(out, level);
+            let names: Vec<String> = elems
+                .iter()
+                .map(|(name, _, is_mutable, _)| {
+                    let n = ctx.uniq_variable_name(name);
+                    if *is_mutable { format!("mut {n}") } else { n }
+                })
+                .collect();
+            let _ = writeln!(out, "let ({}) =", names.join(", "));
+            dump_expr(out, val, ctx, level + 1);
+        }
+        Statement::LetPattern {
+            pattern,
+            val,
+            else_branch,
+            ..
+        } => {
+            indent(out, level);
+            let _ = writeln!(out, "let {} =", dump_match_pattern(pattern, ctx));
+            dump_expr(out, val, ctx, level + 1);
+            indent(out, level);
+            let _ = writeln!(out, "else");
+            dump_expr(out, else_branch, ctx, level + 1);
         }
         Statement::Assignment { name, val, .. } => {
             indent(out, level);

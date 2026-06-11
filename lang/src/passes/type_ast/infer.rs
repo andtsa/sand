@@ -7,8 +7,10 @@ use crate::ir_types::typed_hir;
 use crate::ir_types::typed_hir::TypedFunction;
 use crate::lang::intrinsics::INTRINSICS;
 use crate::lang::types::Ty;
+use crate::lang::types::TyKind;
 use crate::passes::type_ast::TypeEnv;
 use crate::passes::type_ast::check::check;
+use crate::passes::type_ast::check::check_let_pattern;
 use crate::passes::type_ast::check::type_check_match_arms;
 pub use crate::passes::type_ast::errors::AstTypeError;
 use crate::passes::type_ast::errors::TypeError;
@@ -99,6 +101,109 @@ pub(super) fn infer_statement(
                 val: val_expr,
             })
         }
+        qhir::Statement::LetTuple {
+            elems,
+            ty: annotation,
+            val,
+            range,
+        } => {
+            // Infer or check the RHS; it must be a tuple type of matching arity.
+            let val_expr = match annotation {
+                Some(declared_ty) => check(ctx, env, val, *declared_ty)?,
+                None => infer(ctx, env, val)?,
+            };
+            let elem_tys = match ctx.ty_kind(val_expr.ty) {
+                TyKind::Tuple(tys) => tys.clone(),
+                _ => {
+                    return Err(AstTypeError::PatternTypeMismatch {
+                        message: format!(
+                            "let-tuple pattern used against non-tuple type {}",
+                            ctx.display_ty(val_expr.ty)
+                        ),
+                        range: *range,
+                    });
+                }
+            };
+            if elem_tys.len() != elems.len() {
+                return Err(AstTypeError::PatternArityMismatch {
+                    expected: elem_tys.len(),
+                    found: elems.len(),
+                    range: *range,
+                });
+            }
+            // Register each element in the environment and collect typed elems.
+            let typed_elems: Vec<(
+                crate::compiler::structure::UniqVar,
+                Ty,
+                bool,
+                crate::compiler::structure::Range,
+            )> = elems
+                .iter()
+                .zip(elem_tys.iter())
+                .map(|((name, is_mutable, elem_range), &ty)| {
+                    env.insert(*name, (ty, *is_mutable));
+                    (*name, ty, *is_mutable, *elem_range)
+                })
+                .collect();
+            Ok(typed_hir::Statement::LetTuple {
+                elems: typed_elems,
+                range: *range,
+                val: val_expr,
+            })
+        }
+
+        qhir::Statement::LetPattern {
+            pattern,
+            ty: annotation,
+            val,
+            else_branch,
+            range,
+        } => {
+            // 1. Type-check (or infer) the main value expression.
+            let val_expr = match annotation {
+                Some(declared_ty) => check(ctx, env, val, *declared_ty)?,
+                None => infer(ctx, env, val)?,
+            };
+            let scrutinee_ty = val_expr.ty;
+
+            // 2. Resolve the pattern against scrutinee_ty; collect bindings.
+            let (typed_pattern, bindings) = check_let_pattern(ctx, pattern, scrutinee_ty, *range)?;
+
+            // 3. Extract the expected variant_idx from the typed pattern for the else
+            //    check.
+            let expected_variant_idx = match &typed_pattern {
+                typed_hir::MatchPattern::Variant { variant_idx, .. } => *variant_idx,
+                _ => unreachable!("check_let_pattern always returns a Variant pattern"),
+            };
+
+            // 4. Type-check the else branch against the same type as `val`.
+            let else_expr = check(ctx, env, else_branch, scrutinee_ty)?;
+
+            // 5. Verify the else expression is a constructor of the same variant so that
+            //    destructuring the fallback is always guaranteed to succeed.
+            match &else_expr.expr {
+                typed_hir::Expression::Constructor {
+                    variant_idx: else_vi,
+                    ..
+                } if *else_vi == expected_variant_idx => {}
+                _ => {
+                    return Err(AstTypeError::LetPatternElseNotIrrefutable { range: *range });
+                }
+            }
+
+            // 6. Register all bindings in the environment.
+            for (var, ty, _range) in &bindings {
+                env.insert(*var, (*ty, false)); // all let-pattern bindings are immutable
+            }
+
+            Ok(typed_hir::Statement::LetPattern {
+                pattern: typed_pattern,
+                val: val_expr,
+                else_branch: else_expr,
+                range: *range,
+            })
+        }
+
         qhir::Statement::Expr(e) => {
             let e_expr = infer(ctx, env, e)?;
             Ok(typed_hir::Statement::Expr(e_expr))
@@ -178,7 +283,7 @@ pub(super) fn infer(
             })
         }
 
-        qhir::Expression::Tag { variant } => Err(AstTypeError::TagWithoutContext {
+        qhir::Expression::Tag { variant, .. } => Err(AstTypeError::TagWithoutContext {
             variant: variant.clone(),
             range: expr.range,
         }),
@@ -345,16 +450,15 @@ pub(super) fn infer(
         }
         qhir::Expression::Call { fn_name, args } => {
             let fun_sig = ctx.fun_sig(fn_name);
-
-            let arg_exprs = args
-                .iter()
-                .map(|arg| infer(ctx, env, arg))
-                .collect::<Result<Vec<_>, _>>()?;
-
-            let arg_tys: Vec<Ty> = arg_exprs.iter().map(|e| e.ty).collect();
             let expected_tys: Vec<Ty> = fun_sig.args.iter().map(|p| p.1).collect();
 
-            if arg_tys.len() != expected_tys.len() {
+            if args.len() != expected_tys.len() {
+                // Arity mismatch: infer args just for the error message.
+                let arg_exprs = args
+                    .iter()
+                    .map(|arg| infer(ctx, env, arg))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let arg_tys: Vec<Ty> = arg_exprs.iter().map(|e| e.ty).collect();
                 return Err(AstTypeError::FunctionCallTypeError {
                     message: format!(
                         "function '{}' expects {} arguments but found {}",
@@ -368,26 +472,13 @@ pub(super) fn infer(
                 });
             }
 
-            arg_tys
+            // check() each argument against the declared parameter type so that bare
+            // tags in argument position can be resolved from the expected type context.
+            let arg_exprs = args
                 .iter()
                 .zip(&expected_tys)
-                .enumerate()
-                .find(|(_, (found, expected))| found.type_neq(expected))
-                .map(|(i, (found, expected))| {
-                    Err::<(), AstTypeError>(AstTypeError::FunctionCallTypeError {
-                        message: format!(
-                            "argument {} of function '{}' expects type {} but found {}",
-                            i + 1,
-                            ctx.original_fun_name(*fn_name),
-                            expected,
-                            found
-                        ),
-                        expected: vec![*expected],
-                        found: vec![*found],
-                        range: args[i].range,
-                    })
-                })
-                .transpose()?;
+                .map(|(arg, &expected_ty)| check(ctx, env, arg, expected_ty))
+                .collect::<Result<Vec<_>, _>>()?;
 
             Ok(typed_hir::Expr {
                 expr: typed_hir::Expression::Call {
@@ -400,48 +491,34 @@ pub(super) fn infer(
         }
         qhir::Expression::IntrinsicCall { fn_name, args } => {
             let (_, fn_sig) = &INTRINSICS[fn_name];
+            let expected_tys = fn_sig.args.clone();
 
-            let arg_exprs = args
-                .iter()
-                .map(|arg| infer(ctx, env, arg))
-                .collect::<Result<Vec<_>, _>>()?;
-
-            let arg_tys: Vec<Ty> = arg_exprs.iter().map(|e| e.ty).collect();
-
-            if arg_tys.len() != fn_sig.args.len() {
+            if args.len() != expected_tys.len() {
+                // Arity mismatch: infer args just for the error message.
+                let arg_exprs = args
+                    .iter()
+                    .map(|arg| infer(ctx, env, arg))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let arg_tys: Vec<Ty> = arg_exprs.iter().map(|e| e.ty).collect();
                 return Err(AstTypeError::FunctionCallTypeError {
                     message: format!(
                         "intrinsic '{}' expects {} arguments but found {}",
                         fn_name,
-                        fn_sig.args.len(),
+                        expected_tys.len(),
                         arg_tys.len()
                     ),
-                    expected: fn_sig.args.to_vec(),
+                    expected: expected_tys,
                     found: arg_tys,
                     range: expr.range,
                 });
             }
 
-            arg_tys
+            // check() each argument against the declared parameter type.
+            let arg_exprs = args
                 .iter()
-                .zip(&fn_sig.args)
-                .enumerate()
-                .find(|(_, (found, expected))| found.type_neq(expected))
-                .map(|(i, (found, expected))| {
-                    Err::<(), AstTypeError>(AstTypeError::FunctionCallTypeError {
-                        message: format!(
-                            "argument {} of intrinsic '{}' expects type {} but found {}",
-                            i + 1,
-                            fn_name,
-                            expected,
-                            found
-                        ),
-                        expected: vec![*expected],
-                        found: vec![*found],
-                        range: args[i].range,
-                    })
-                })
-                .transpose()?;
+                .zip(&expected_tys)
+                .map(|(arg, &expected_ty)| check(ctx, env, arg, expected_ty))
+                .collect::<Result<Vec<_>, _>>()?;
 
             Ok(typed_hir::Expr {
                 expr: typed_hir::Expression::IntrinsicCall {

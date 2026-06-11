@@ -186,7 +186,12 @@ impl FnCx {
         statements: &mut Vec<Statement>,
     ) {
         match pattern {
-            th::MatchPattern::Wildcard => {}
+            th::MatchPattern::Wildcard
+            | th::MatchPattern::IntLit(_)
+            | th::MatchPattern::BoolLit(_) => {
+                // no bindings — the check was already done in the dispatch
+                // chain
+            }
             th::MatchPattern::Binding {
                 var,
                 ty,
@@ -212,14 +217,18 @@ impl FnCx {
     /// bind `pattern` against the result of projecting `projection` out of
     /// `base`. simple patterns (`Binding`, `Wildcard`) consume the
     /// `RValue::Field` directly — `Binding` is assigned straight from it,
-    /// `Wildcard` discards it (no statement). compound patterns (`Tuple` —
-    /// the only nested form decision D1 allows; `Variant`/`Tag` sub-patterns
-    /// are rejected at typecheck via `RefutableNestedPattern`) must first
-    /// materialize the projection into a fresh temp, because `RValue::Field`
-    /// isn't an `Operand` — further projection needs `Copy(Place)`/`Const`,
-    /// so the intermediate value needs a `Place` to be copied from. the
-    /// temp's type comes from the pattern's own carried `ty` (`Tuple.ty`),
-    /// which always equals the type of the value it's matched against.
+    /// `Wildcard` discards it (no statement). compound patterns (`Tuple`,
+    /// `Variant`) must first materialize the projection into a fresh temp,
+    /// because `RValue::Field` isn't an `Operand` — further projection needs
+    /// `Copy(Place)`/`Const`, so the intermediate value needs a `Place` to be
+    /// copied from.
+    ///
+    /// For `Variant` sub-patterns, `field = Field(base, index)` is the nested
+    /// enum value; we materialize it into a temp and recurse into its payload
+    /// (`field 1`) to extract any deeper bindings. The discriminant check for
+    /// the nested variant was already emitted in the dispatch chain by
+    /// `build_arm_check_chain`; here we only extract the bindings (assuming
+    /// the checks passed).
     pub(super) fn lower_projected_pattern(
         &mut self,
         pattern: &th::MatchPattern,
@@ -249,11 +258,194 @@ impl FnCx {
                     self.lower_projected_pattern(sub, base.clone(), i, range, statements);
                 }
             }
-            th::MatchPattern::Variant { .. } => internal_bug!(
-                "nested Variant/Tag pattern reached MIR lowering \
-                 (decision D1 / RefutableNestedPattern should have rejected \
-                 this at typecheck)"
+            th::MatchPattern::Variant {
+                ty,
+                payload: Some((_, inner_sub)),
+                ..
+            } => {
+                // `field` IS the nested enum value (of type `ty`). Materialise it
+                // into a correctly-typed temp, then recurse into field 1 (the payload)
+                // to extract deeper bindings.  We use `ty` (the enum type, e.g.
+                // `Result`) rather than `payload_ty` (the payload type, e.g. `Int`)
+                // because `field` holds the whole inner enum, not just its payload.
+                let tmp = self.fresh_temp("nested_variant_extract", *ty, range);
+                statements.push(self.assign_stmt(tmp, field, range));
+                let base = Operand::Copy(Self::place(tmp));
+                self.lower_projected_pattern(inner_sub, base, 1, range, statements);
+            }
+            th::MatchPattern::Variant { payload: None, .. } => {
+                // nullary inner variant — no payload, so nothing to bind.
+                // The discriminant check was done in the dispatch chain.
+            }
+            th::MatchPattern::IntLit(_) | th::MatchPattern::BoolLit(_) => internal_bug!(
+                "nested IntLit/BoolLit pattern reached MIR lowering \
+                 (RefutableNestedPattern should have rejected this at typecheck)"
             ),
+        }
+    }
+
+    /// Returns true if `pattern` requires a runtime check (i.e. is refutable).
+    /// Wildcard, Binding, and Tuple are irrefutable; Variant, IntLit, BoolLit
+    /// are refutable.
+    fn pattern_is_refutable(pattern: &th::MatchPattern) -> bool {
+        matches!(
+            pattern,
+            th::MatchPattern::Variant { .. }
+                | th::MatchPattern::IntLit(_)
+                | th::MatchPattern::BoolLit(_)
+        )
+    }
+
+    /// Build the check blocks for a single arm's pattern, emitting as many
+    /// basic blocks as there are nested refutable layers.
+    ///
+    /// - `value_tmp`: the `LocalId` holding the value to match against
+    ///   `pattern`.
+    /// - `arm_bb`: destination when *all* checks in the chain pass.
+    /// - `fallthrough_bb`: destination when *any* check in the chain fails.
+    ///
+    /// Returns the entry block of the check chain (the outermost check for
+    /// refutable patterns, or `arm_bb` directly for irrefutable ones).
+    ///
+    /// For `Variant { payload: Some((payload_ty, inner_pat)) }` where
+    /// `inner_pat` is also refutable, the method emits:
+    ///
+    /// ```text
+    /// outer_check_bb:
+    ///   disc_tmp   = Field(value_tmp, 0)
+    ///   cmp_tmp    = (disc_tmp == variant_idx)
+    ///   Branch(cmp_tmp → extract_bb, else → fallthrough_bb)
+    ///
+    /// extract_bb:
+    ///   payload_tmp = Field(value_tmp, 1)
+    ///   Goto inner_check_entry
+    ///
+    /// inner_check_entry …  (recurse)
+    /// ```
+    fn build_arm_check_chain(
+        &mut self,
+        pattern: &th::MatchPattern,
+        value_tmp: LocalId,
+        arm_bb: BlockId,
+        fallthrough_bb: BlockId,
+        range: Range,
+    ) -> BlockId {
+        match pattern {
+            // Irrefutable patterns need no check — jump straight to the arm.
+            th::MatchPattern::Wildcard
+            | th::MatchPattern::Binding { .. }
+            | th::MatchPattern::Tuple { .. } => arm_bb,
+
+            th::MatchPattern::IntLit(n) => {
+                let cmp_tmp = self.fresh_temp("match_int_cmp", Ty::BOOL, range);
+                self.new_block(
+                    vec![self.assign_stmt(
+                        cmp_tmp,
+                        RValue::BinaryOp {
+                            op: Bop::Comp(CompOp::Eq),
+                            left: Operand::Copy(Self::place(value_tmp)),
+                            right: Operand::Const(Constant::Int(*n)),
+                        },
+                        range,
+                    )],
+                    Terminator::Branch {
+                        cond: Operand::Copy(Self::place(cmp_tmp)),
+                        then_bb: arm_bb,
+                        else_bb: fallthrough_bb,
+                    },
+                )
+            }
+
+            th::MatchPattern::BoolLit(b) => {
+                let cmp_tmp = self.fresh_temp("match_bool_cmp", Ty::BOOL, range);
+                self.new_block(
+                    vec![self.assign_stmt(
+                        cmp_tmp,
+                        RValue::BinaryOp {
+                            op: Bop::Comp(CompOp::Eq),
+                            left: Operand::Copy(Self::place(value_tmp)),
+                            right: Operand::Const(Constant::Bool(*b)),
+                        },
+                        range,
+                    )],
+                    Terminator::Branch {
+                        cond: Operand::Copy(Self::place(cmp_tmp)),
+                        then_bb: arm_bb,
+                        else_bb: fallthrough_bb,
+                    },
+                )
+            }
+
+            th::MatchPattern::Variant {
+                variant_idx,
+                payload,
+                ..
+            } => {
+                // Determine where to go when the outer disc check passes.
+                // If the payload itself contains a refutable sub-pattern, we
+                // need to extract the payload into a temp and continue checking
+                // it before reaching arm_bb.
+                let inner_target = match payload {
+                    Some((payload_ty, inner_pat)) if Self::pattern_is_refutable(inner_pat) => {
+                        // Allocate a local for the inner enum (the payload).
+                        let payload_tmp = self.fresh_temp("check_payload", *payload_ty, range);
+                        // Recursively build the check chain for the inner pattern.
+                        let inner_check_entry = self.build_arm_check_chain(
+                            inner_pat,
+                            payload_tmp,
+                            arm_bb,
+                            fallthrough_bb,
+                            range,
+                        );
+                        // Build an extraction block: payload_tmp = Field(value_tmp, 1);
+                        // then jump into the inner check chain.
+                        self.new_block(
+                            vec![self.assign_stmt(
+                                payload_tmp,
+                                RValue::Field {
+                                    base: Operand::Copy(Self::place(value_tmp)),
+                                    index: 1,
+                                },
+                                range,
+                            )],
+                            Terminator::Goto {
+                                target: inner_check_entry,
+                            },
+                        )
+                    }
+                    _ => arm_bb,
+                };
+
+                // Build the outer discriminant check.
+                let disc_tmp = self.fresh_temp("match_disc", Ty::INT, range);
+                let cmp_tmp = self.fresh_temp("match_cmp", Ty::BOOL, range);
+                self.new_block(
+                    vec![
+                        self.assign_stmt(
+                            disc_tmp,
+                            RValue::Field {
+                                base: Operand::Copy(Self::place(value_tmp)),
+                                index: 0,
+                            },
+                            range,
+                        ),
+                        self.assign_stmt(
+                            cmp_tmp,
+                            RValue::BinaryOp {
+                                op: Bop::Comp(CompOp::Eq),
+                                left: Operand::Copy(Self::place(disc_tmp)),
+                                right: Operand::Const(Constant::Int(*variant_idx as i64)),
+                            },
+                            range,
+                        ),
+                    ],
+                    Terminator::Branch {
+                        cond: Operand::Copy(Self::place(cmp_tmp)),
+                        then_bb: inner_target,
+                        else_bb: fallthrough_bb,
+                    },
+                )
+            }
         }
     }
 
@@ -318,6 +510,119 @@ impl FnCx {
             th::Statement::Assignment { name, range, val } => {
                 let dst = self.get_or_create_local(*name, val.ty, *range);
                 self.lower_assign(val, dst, cont)
+            }
+
+            th::Statement::LetTuple { elems, range, val } => {
+                // Desugar to: tuple_tmp = val; a = Field(tmp, 0); b = Field(tmp, 1); ...
+                let tuple_tmp = self.fresh_temp("let_tuple_tmp", val.ty, *range);
+                // Build an extraction block that fills each element local.
+                let mut extract_stmts = Vec::with_capacity(elems.len());
+                for (i, (name, elem_ty, _, elem_range)) in elems.iter().enumerate() {
+                    let local = self.get_or_create_local(*name, *elem_ty, *elem_range);
+                    extract_stmts.push(self.assign_stmt(
+                        local,
+                        RValue::Field {
+                            base: Operand::Copy(Self::place(tuple_tmp)),
+                            index: i,
+                        },
+                        *elem_range,
+                    ));
+                }
+                let extract_bb = self.new_block(extract_stmts, Terminator::Goto { target: cont });
+                self.lower_assign(val, tuple_tmp, extract_bb)
+            }
+
+            th::Statement::LetPattern {
+                pattern,
+                val,
+                else_branch,
+                range,
+            } => {
+                // Desugar `let E#V(payload) = val else fallback`:
+                //
+                //   scrut_tmp  = eval(val)
+                //   disc_tmp   = Field(scrut_tmp, 0)        // discriminant
+                //   cmp_tmp    = disc_tmp == variant_idx
+                //   branch cmp_tmp:
+                //     then_bb: [extract bindings from scrut_tmp] → cont
+                //     else_bb: fallback_tmp = eval(fallback)
+                //              [extract bindings from fallback_tmp] → cont
+                //
+                // The type checker guarantees `fallback` is a constructor of
+                // the same variant, so the extraction in else_bb always succeeds.
+                let th::MatchPattern::Variant {
+                    ty: scrut_ty,
+                    variant_idx,
+                    payload,
+                    ..
+                } = pattern
+                else {
+                    unreachable!("LetPattern always has a Variant pattern at the top level");
+                };
+
+                let scrut_tmp = self.fresh_temp("let_pattern_scrut", *scrut_ty, *range);
+
+                // ── then branch: extract from the matched value ─────────────────────────
+                let mut then_stmts = Vec::new();
+                if let Some((_, sub)) = payload {
+                    self.lower_projected_pattern(
+                        sub,
+                        Operand::Copy(Self::place(scrut_tmp)),
+                        1,
+                        *range,
+                        &mut then_stmts,
+                    );
+                }
+                let then_bb = self.new_block(then_stmts, Terminator::Goto { target: cont });
+
+                // ── else branch: evaluate fallback; extract from it ─────────────────────
+                let fallback_tmp = self.fresh_temp("let_pattern_fallback", *scrut_ty, *range);
+                let mut else_stmts = Vec::new();
+                if let Some((_, sub)) = payload {
+                    self.lower_projected_pattern(
+                        sub,
+                        Operand::Copy(Self::place(fallback_tmp)),
+                        1,
+                        *range,
+                        &mut else_stmts,
+                    );
+                }
+                let after_extract_bb =
+                    self.new_block(else_stmts, Terminator::Goto { target: cont });
+                let else_bb = self.lower_assign(else_branch, fallback_tmp, after_extract_bb);
+
+                // ── discriminant check: disc == variant_idx ──────────────────────────────
+                let disc_tmp = self.fresh_temp("let_pattern_disc", Ty::INT, *range);
+                let cmp_tmp = self.fresh_temp("let_pattern_cmp", Ty::BOOL, *range);
+                let check_bb = self.new_block(
+                    vec![
+                        self.assign_stmt(
+                            disc_tmp,
+                            RValue::Field {
+                                base: Operand::Copy(Self::place(scrut_tmp)),
+                                index: 0,
+                            },
+                            *range,
+                        ),
+                        self.assign_stmt(
+                            cmp_tmp,
+                            RValue::BinaryOp {
+                                op: Bop::Comp(CompOp::Eq),
+                                left: Operand::Copy(Self::place(disc_tmp)),
+                                right: Operand::Const(Constant::Int(*variant_idx as i64)),
+                            },
+                            *range,
+                        ),
+                    ],
+                    Terminator::Branch {
+                        cond: Operand::Copy(Self::place(cmp_tmp)),
+                        then_bb,
+                        else_bb,
+                    },
+                );
+
+                // ── evaluate main value into scrut_tmp ──────────────────────────────────
+                self.lower_assign(val, scrut_tmp, check_bb)
             }
 
             th::Statement::Expr(e) => self.lower_effect(e, cont),
@@ -558,49 +863,21 @@ impl FnCx {
                         th::MatchPattern::Wildcard
                         | th::MatchPattern::Binding { .. }
                         | th::MatchPattern::Tuple { .. } => {
-                            // irrefutable (D1: every legal tuple-scrutinee
-                            // pattern matches unconditionally; `irrefutable_seen`
-                            // guarantees nothing meaningful follows an enum-side
-                            // wildcard/binding either) -> unconditional
-                            // fall-through to this arm
+                            // irrefutable — unconditional fall-through to this arm
                             fallthrough_bb = *arm_bb;
                         }
-                        th::MatchPattern::Variant { variant_idx, .. } => {
-                            // Extract the discriminant (field 0) then compare
-                            // it as a plain integer against the target variant
-                            // index. This makes tag dispatch explicit in the
-                            // MIR — no special `EnumVariant` constant needed.
-                            let disc_tmp = self.fresh_temp("match_disc", Ty::INT, arm.range);
-                            let cmp_tmp = self.fresh_temp("match_cmp", Ty::BOOL, arm.range);
-                            let check_bb = self.new_block(
-                                vec![
-                                    self.assign_stmt(
-                                        disc_tmp,
-                                        RValue::Field {
-                                            base: Operand::Copy(Self::place(scrut_tmp)),
-                                            index: 0,
-                                        },
-                                        arm.range,
-                                    ),
-                                    self.assign_stmt(
-                                        cmp_tmp,
-                                        RValue::BinaryOp {
-                                            op: Bop::Comp(CompOp::Eq),
-                                            left: Operand::Copy(Self::place(disc_tmp)),
-                                            right: Operand::Const(Constant::Int(
-                                                *variant_idx as i64,
-                                            )),
-                                        },
-                                        arm.range,
-                                    ),
-                                ],
-                                Terminator::Branch {
-                                    cond: Operand::Copy(Self::place(cmp_tmp)),
-                                    then_bb: *arm_bb,
-                                    else_bb: fallthrough_bb,
-                                },
+                        _ => {
+                            // refutable pattern: delegate to the unified check-chain
+                            // builder which handles Variant (with optional nested
+                            // refutable payloads), IntLit, and BoolLit uniformly.
+                            let check_entry = self.build_arm_check_chain(
+                                &arm.pattern,
+                                scrut_tmp,
+                                *arm_bb,
+                                fallthrough_bb,
+                                arm.range,
                             );
-                            fallthrough_bb = check_bb;
+                            fallthrough_bb = check_entry;
                         }
                     }
                 }

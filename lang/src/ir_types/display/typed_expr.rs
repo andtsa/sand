@@ -15,6 +15,7 @@ fn fmt_match_pattern(pattern: &MatchPattern, ctx: &CompileCtx) -> String {
             enum_ref,
             variant_idx,
             payload,
+            ..
         } => {
             let tag = ctx.enum_display(*enum_ref, *variant_idx);
             match payload {
@@ -30,6 +31,8 @@ fn fmt_match_pattern(pattern: &MatchPattern, ctx: &CompileCtx) -> String {
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
+        MatchPattern::IntLit(n) => n.to_string(),
+        MatchPattern::BoolLit(b) => b.to_string(),
         MatchPattern::Binding { var, .. } => ctx.uniq_variable_name(var),
         MatchPattern::Wildcard => "_".to_string(),
     }
@@ -173,6 +176,42 @@ impl<'fmt, 'run> Iterator for TypedExprFormatter<'fmt, 'run> {
                         self.stack
                             .push(Token(self.ctx.uniq_variable_name(name), Space));
                         continue;
+                    }
+                    Stmt::LetTuple { elems, val, .. } => {
+                        // emission order: let ( a, mut b ) = val ;
+                        self.stack.push(Token(";".into(), Newline(Same)));
+                        self.stack.push(Exp(&val.expr));
+                        self.stack.push(Token("=".into(), Space));
+                        self.stack.push(Token(")".into(), Space));
+                        for (i, (name, _, is_mutable, _)) in elems.iter().enumerate().rev() {
+                            let n = self.ctx.uniq_variable_name(name);
+                            let s = if *is_mutable { format!("mut {n}") } else { n };
+                            self.stack.push(Token(s, Nothing));
+                            if i > 0 {
+                                self.stack.push(Token(",".into(), Space));
+                            }
+                        }
+                        self.stack.push(Token("(".into(), Nothing));
+                        self.stack.push(Sep(Whitespace));
+                        return Some(("let".into(), Whitespace));
+                    }
+                    Stmt::LetPattern {
+                        pattern,
+                        val,
+                        else_branch,
+                        ..
+                    } => {
+                        // emission order: let P = val else fallback ;
+                        let pat_str = fmt_match_pattern(pattern, self.ctx);
+                        self.stack.push(Token(";".into(), Newline(Same)));
+                        self.stack.push(Exp(&else_branch.expr));
+                        self.stack.push(Token("else".into(), Whitespace));
+                        self.stack.push(Sep(Whitespace));
+                        self.stack.push(Exp(&val.expr));
+                        self.stack.push(Token("=".into(), Space));
+                        self.stack.push(Token(pat_str, Whitespace));
+                        self.stack.push(Sep(Whitespace));
+                        return Some(("let".into(), Whitespace));
                     }
                     Stmt::Expr(e) => {
                         // a bare expression used as a statement still ends with ";"

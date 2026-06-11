@@ -489,9 +489,92 @@ fn build_statement<'run>(
 
     let inner_range = Range::from(&first);
     match first.as_rule() {
-        d @ Rule::declaration => {
+        Rule::declaration => {
             let mut decl_inner = first.into_inner();
             let first_child = decl_inner.next().missing("declaration body", inner_range)?;
+
+            // Check for constructor-pattern binding: `let E#V(payload) = expr else
+            // fallback`
+            if first_child.as_rule() == Rule::let_constructor {
+                let pattern = build_let_constructor(ctx, first_child)?;
+                // Optional type annotation.
+                let next = decl_inner
+                    .next()
+                    .missing("let_constructor declaration body", inner_range)?;
+                let (ty, expr_pair) = if next.as_rule() == Rule::type_ {
+                    let ty = build_type(ctx, next)?;
+                    let ep = decl_inner
+                        .next()
+                        .missing("let_constructor declaration expression", inner_range)?;
+                    (Some(ty), ep)
+                } else {
+                    (None, next)
+                };
+                let val = build_expr(ctx, expr_pair, src)?;
+                // The `else` expression is mandatory for refutable patterns;
+                // the type checker enforces this — here we just require it.
+                let else_pair = decl_inner
+                    .next()
+                    .missing("let_constructor else expression", inner_range)?;
+                let else_branch = build_expr(ctx, else_pair, src)?;
+                return Ok(Statement::LetPattern {
+                    pattern,
+                    ty,
+                    val,
+                    else_branch,
+                    range: inner_range,
+                });
+            }
+
+            // Check for tuple-pattern binding: `let (a, mut b) = expr`
+            if first_child.as_rule() == Rule::let_tuple {
+                // Parse each element of the tuple pattern.
+                let mut elems: Vec<(HirVar, bool, Range)> = Vec::new();
+                for elem_pair in first_child.into_inner() {
+                    // elem_pair matches `let_tuple_elem = { mut_kw? ~ identifier }`
+                    let elem_range = Range::from(&elem_pair);
+                    let mut elem_inner = elem_pair.into_inner();
+                    let first_elem_child = elem_inner
+                        .next()
+                        .missing("let_tuple_elem body", elem_range)?;
+                    let (is_mutable, ident_pair) = if first_elem_child.as_rule() == Rule::mut_kw {
+                        (
+                            true,
+                            elem_inner
+                                .next()
+                                .missing("let_tuple_elem identifier", elem_range)?,
+                        )
+                    } else {
+                        (false, first_elem_child)
+                    };
+                    // Register the element variable (using declaration context).
+                    let var =
+                        HirVar::Decl(ctx.new_original_variable(&ident_pair, Rule::declaration)?);
+                    elems.push((var, is_mutable, elem_range));
+                }
+                // Optional type annotation, then the RHS expression.
+                let next = decl_inner
+                    .next()
+                    .missing("let_tuple declaration body", inner_range)?;
+                let (ty, expr_pair) = if next.as_rule() == Rule::type_ {
+                    let ty = build_type(ctx, next)?;
+                    let expr_pair = decl_inner
+                        .next()
+                        .missing("let_tuple declaration expression", inner_range)?;
+                    (Some(ty), expr_pair)
+                } else {
+                    (None, next)
+                };
+                let expr = build_expr(ctx, expr_pair, src)?;
+                return Ok(Statement::LetTuple {
+                    elems,
+                    ty,
+                    val: expr,
+                    range: inner_range,
+                });
+            }
+
+            // Regular single-binding declaration.
             let (is_mutable, name_pair) = if first_child.as_rule() == Rule::mut_kw {
                 (
                     true,
@@ -500,7 +583,7 @@ fn build_statement<'run>(
             } else {
                 (false, first_child)
             };
-            let var = HirVar::Decl(ctx.new_original_variable(&name_pair, d)?);
+            let var = HirVar::Decl(ctx.new_original_variable(&name_pair, Rule::declaration)?);
             tracing::trace!("declaration name: {}", name_pair.as_str());
             let next = decl_inner.next().missing("declaration body", inner_range)?;
             let (ty, expr_pair) = if next.as_rule() == Rule::type_ {
@@ -1006,16 +1089,22 @@ fn build_primary<'run>(
             })
         }
         Rule::tag_expr => {
-            // tag_expr = { "#" ~ identifier }
+            // tag_expr = { "#" ~ identifier ~ ("(" ~ expression ~ ")")? }
             let inner_range = Range::from(&inner);
-            let variant = inner
-                .into_inner()
+            let mut children = inner.into_inner();
+            let variant = children
                 .next()
                 .missing("tag variant", inner_range)?
                 .as_str()
                 .to_string();
+            // optional payload expression
+            let payload = children
+                .next()
+                .map(|p| build_expr(ctx, p, src))
+                .transpose()?
+                .map(Box::new);
             Ok(Expr {
-                expr: Expression::Tag { variant },
+                expr: Expression::Tag { variant, payload },
                 range: inner_range,
             })
         }
@@ -1149,6 +1238,115 @@ fn build_match<'run>(
     })
 }
 
+/// Parse a `let_constructor` node (the outermost constructor in a `let E#V(...)
+/// = ...`).
+///
+/// `let_constructor = { identifier ~ "#" ~ identifier ~ ("(" ~ let_destructure
+/// ~ ")")? }`
+fn build_let_constructor<'run>(
+    ctx: &mut CompileCtx<'run>,
+    pair: Pair<Rule>,
+) -> Result<HirPattern, AstError> {
+    assert_eq!(pair.as_rule(), Rule::let_constructor);
+    let range = Range::from(&pair);
+    let mut parts = pair.into_inner();
+    let type_name = parts
+        .next()
+        .missing("let_constructor type name", range)?
+        .as_str()
+        .to_string();
+    let variant = parts
+        .next()
+        .missing("let_constructor variant name", range)?
+        .as_str()
+        .to_string();
+    let payload = parts
+        .next()
+        .map(|p| build_let_destructure(ctx, p))
+        .transpose()?
+        .map(Box::new);
+    Ok(HirPattern::Constructor {
+        type_name,
+        variant,
+        payload,
+    })
+}
+
+/// Parse a `let_destructure` node: a sub-pattern inside a `let_constructor`.
+///
+/// `let_destructure = { let_constructor | let_binding_tuple | let_binding_elem
+/// }` where `let_binding_elem = { identifier | empty_identifier }` so wildcards
+/// (`_`) are allowed.
+///
+/// All bindings here are **immutable** (no `mut_kw` in sub-patterns).
+fn build_let_destructure<'run>(
+    ctx: &mut CompileCtx<'run>,
+    pair: Pair<Rule>,
+) -> Result<HirPattern, AstError> {
+    assert_eq!(pair.as_rule(), Rule::let_destructure);
+    let range = Range::from(&pair);
+    let inner = pair
+        .into_inner()
+        .next()
+        .missing("let_destructure body", range)?;
+    match inner.as_rule() {
+        Rule::let_constructor => build_let_constructor(ctx, inner),
+        Rule::let_binding_tuple => {
+            // let_binding_tuple = { "(" ~ let_binding_elem ~ ("," ~ let_binding_elem)+ ~
+            // ")" }
+            let elems = inner
+                .into_inner()
+                .map(|elem| {
+                    // let_binding_elem = { identifier | empty_identifier }
+                    let r = Range::from(&elem);
+                    let child = elem
+                        .into_inner()
+                        .next()
+                        .missing("let_binding_elem body", r)?;
+                    match child.as_rule() {
+                        Rule::identifier => {
+                            let var =
+                                HirVar::Decl(ctx.new_original_variable(&child, Rule::declaration)?);
+                            Ok(HirPattern::Binding { var, range: r })
+                        }
+                        Rule::empty_identifier => Ok(HirPattern::Wildcard),
+                        other => Err(AstError::UnexpectedRule {
+                            expected: "identifier | empty_identifier",
+                            got: other,
+                            range: r,
+                        }),
+                    }
+                })
+                .collect::<Result<Vec<_>, AstError>>()?;
+            Ok(HirPattern::Tuple(elems))
+        }
+        Rule::let_binding_elem => {
+            // let_binding_elem = { identifier | empty_identifier }
+            let child = inner
+                .into_inner()
+                .next()
+                .missing("let_binding_elem body", range)?;
+            match child.as_rule() {
+                Rule::identifier => {
+                    let var = HirVar::Decl(ctx.new_original_variable(&child, Rule::declaration)?);
+                    Ok(HirPattern::Binding { var, range })
+                }
+                Rule::empty_identifier => Ok(HirPattern::Wildcard),
+                other => Err(AstError::UnexpectedRule {
+                    expected: "identifier | empty_identifier",
+                    got: other,
+                    range,
+                }),
+            }
+        }
+        other => Err(AstError::UnexpectedRule {
+            expected: "let_constructor | let_binding_tuple | let_binding_elem",
+            got: other,
+            range,
+        }),
+    }
+}
+
 fn build_pattern<'run>(
     ctx: &mut CompileCtx<'run>,
     pair: Pair<Rule>,
@@ -1219,8 +1417,25 @@ fn build_pattern<'run>(
             })
         }
         Rule::wildcard_pattern => Ok(HirPattern::Wildcard),
+        Rule::int_literal_pattern => {
+            let s = inner.as_str();
+            let v = s.parse::<i64>().map_err(|e| AstError::InvalidInteger {
+                got: s.to_string(),
+                range,
+                source: e,
+            })?;
+            Ok(HirPattern::IntLit(v))
+        }
+        Rule::bool_literal_pattern => {
+            let b = match inner.as_str() {
+                "true" => true,
+                "false" => false,
+                _ => unreachable!("bool_literal_pattern is 'true' | 'false'"),
+            };
+            Ok(HirPattern::BoolLit(b))
+        }
         other => Err(AstError::UnexpectedRule {
-            expected: "constructor_pattern | tag_pattern | tuple_pattern | wildcard_pattern | binding_pattern",
+            expected: "constructor_pattern | tag_pattern | tuple_pattern | wildcard_pattern | bool_literal_pattern | int_literal_pattern | binding_pattern",
             got: other,
             range,
         }),

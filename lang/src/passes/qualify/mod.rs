@@ -415,7 +415,13 @@ fn qualify_expr(
                 payload: q_payload,
             }
         }
-        hhir::Expression::Tag { variant } => qhir::Expression::Tag { variant },
+        hhir::Expression::Tag { variant, payload } => qhir::Expression::Tag {
+            variant,
+            payload: payload
+                .map(|p| qualify_expr(q, module_name, *p))
+                .transpose()?
+                .map(Box::new),
+        },
         hhir::Expression::Tuple(elems) => qhir::Expression::Tuple(
             elems
                 .into_iter()
@@ -546,6 +552,8 @@ fn qualify_pattern(
                 range: brange,
             })
         }
+        hhir::HirPattern::IntLit(n) => Ok(qhir::QPattern::IntLit(n)),
+        hhir::HirPattern::BoolLit(b) => Ok(qhir::QPattern::BoolLit(b)),
         hhir::HirPattern::Wildcard => Ok(qhir::QPattern::Wildcard),
     }
 }
@@ -580,6 +588,41 @@ fn qualify_statement(
                 val: qualify_expr(q, module_name, val)?,
             })
         }
+        hhir::Statement::LetTuple {
+            elems,
+            ty,
+            val,
+            range,
+        } => Ok(qhir::Statement::LetTuple {
+            elems: elems
+                .into_iter()
+                .map(|(name, is_mutable, elem_range)| {
+                    (
+                        UniqPrism::expect(name, "unqualified variable in let-tuple after uniquify"),
+                        is_mutable,
+                        elem_range,
+                    )
+                })
+                .collect(),
+            ty,
+            val: qualify_expr(q, module_name, val)?,
+            range,
+        }),
+
+        hhir::Statement::LetPattern {
+            pattern,
+            ty,
+            val,
+            else_branch,
+            range,
+        } => Ok(qhir::Statement::LetPattern {
+            pattern: qualify_pattern(q, module_name, pattern, range)?,
+            ty,
+            val: qualify_expr(q, module_name, val)?,
+            else_branch: qualify_expr(q, module_name, else_branch)?,
+            range,
+        }),
+
         hhir::Statement::Expr(expr) => {
             Ok(qhir::Statement::Expr(qualify_expr(q, module_name, expr)?))
         }

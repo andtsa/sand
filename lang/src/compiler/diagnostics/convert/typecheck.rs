@@ -202,7 +202,37 @@ pub fn type_error_to_diagnostic(
                 },
             );
         }
-        MatchNonEnumScrutinee { ty, range } => {
+        TagPayloadOnNullaryVariant { variant, range } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    message: format!(
+                        "variant '#{variant}' takes no payload, but a payload was provided"
+                    ),
+                    range: *range,
+                    related: vec![],
+                    file: Some(file),
+                    ..Default::default()
+                },
+            );
+        }
+        TagMissingPayload { variant, range } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    message: format!(
+                        "variant '#{variant}' expects a payload, but none was provided"
+                    ),
+                    range: *range,
+                    related: vec![],
+                    file: Some(file),
+                    ..Default::default()
+                },
+            );
+        }
+        MatchNonAggregateScrutinee { ty, range } => {
             diagnostics.add_one(
                 file,
                 SandDiagnostic {
@@ -381,8 +411,50 @@ pub fn type_error_to_diagnostic(
                 SandDiagnostic {
                     severity: DiagnosticSeverity::Error,
                     message: format!(
-                        "matching on a specific variant ('{enum_name}#{variant}') is not supported in a nested pattern position; only bindings ('x'), wildcards ('_'), and tuple-destructuring ('(a, b)') may appear inside a payload or tuple pattern"
+                        "literal pattern '{variant}' (of type '{enum_name}') cannot appear in a nested pattern position; enum variant patterns ('E#Variant(...)'), bindings ('x'), wildcards ('_'), and tuple-destructuring ('(a, b)') are permitted inside a payload or tuple element, but integer and boolean literals are not"
                     ),
+                    range: *range,
+                    related: vec![],
+                    file: Some(file),
+                    ..Default::default()
+                },
+            );
+        }
+
+        LetPatternElseMissing { range } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    message: "`let E#V(…) = …` requires an `else` branch because the pattern is refutable".to_string(),
+                    range: *range,
+                    related: vec![],
+                    file: Some(file),
+                    ..Default::default()
+                },
+            );
+        }
+
+        NestedVariantInLetPattern { range } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    message: "the sub-pattern inside a `let E#V(…)` constructor must be irrefutable (bindings, wildcards, tuple-of-bindings); use `match` for nested refutable patterns".to_string(),
+                    range: *range,
+                    related: vec![],
+                    file: Some(file),
+                    ..Default::default()
+                },
+            );
+        }
+
+        LetPatternElseNotIrrefutable { range } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    message: "the `else` expression must be a constructor of the same variant as the LHS pattern so that destructuring the fallback always succeeds".to_string(),
                     range: *range,
                     related: vec![],
                     file: Some(file),

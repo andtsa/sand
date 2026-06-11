@@ -64,22 +64,22 @@ def main(): Int := {
     let mut t = 0;
     let d = match pop(c) {
         (s, r) => {
-            l = s;
+            t = s;
             r
         }
     };
 
-    // t = pop(d)
+    // t = first pop value
     println(t);
 
     let d = match pop(d) {
         (s, r) => {
-            l = s;
+            t = s;
             r
         }
     };
 
-    // t = pop(d)
+    // t = second pop value
     println(t);
 
     let l = match len(d) {

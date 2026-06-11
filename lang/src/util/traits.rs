@@ -84,8 +84,12 @@ impl fmt::Display for Expression {
                 }
                 Ok(())
             }
-            Expression::Tag { variant } => {
-                write!(f, "#{variant}")
+            Expression::Tag { variant, payload } => {
+                write!(f, "#{variant}")?;
+                if let Some(p) = payload {
+                    write!(f, "({})", p.expr)?;
+                }
+                Ok(())
             }
             Expression::Match { scrutinee, arms } => {
                 fn fmt_hir_pattern(
@@ -126,6 +130,8 @@ impl fmt::Display for Expression {
                             }
                             write!(f, ")")
                         }
+                        HirPattern::IntLit(n) => write!(f, "{n}"),
+                        HirPattern::BoolLit(b) => write!(f, "{b}"),
                         HirPattern::Binding { var, .. } => write!(f, "{var:?}"),
                         HirPattern::Wildcard => write!(f, "_"),
                     }
@@ -161,6 +167,34 @@ impl fmt::Display for Statement {
             },
             Statement::Assignment { name, val, .. } => {
                 write!(f, "{:?} = {}", name, val.expr)
+            }
+            Statement::LetTuple { elems, ty, val, .. } => {
+                let names: Vec<String> = elems
+                    .iter()
+                    .map(|(name, is_mutable, _)| {
+                        if *is_mutable {
+                            format!("mut {:?}", name)
+                        } else {
+                            format!("{:?}", name)
+                        }
+                    })
+                    .collect();
+                match ty {
+                    Some(ty) => write!(f, "let ({}): {} = {}", names.join(", "), ty, val.expr),
+                    None => write!(f, "let ({}) = {}", names.join(", "), val.expr),
+                }
+            }
+            Statement::LetPattern {
+                pattern,
+                val,
+                else_branch,
+                ..
+            } => {
+                write!(
+                    f,
+                    "let {:?} = {} else {}",
+                    pattern, val.expr, else_branch.expr
+                )
             }
             Statement::Expr(expr) => {
                 write!(f, "{}", expr.expr)
