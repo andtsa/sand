@@ -925,7 +925,8 @@ fn bop_from_rule(rule: Rule) -> Bop {
     match rule {
         Rule::or => Bop::Or,
         Rule::xor => Bop::Xor,
-        Rule::and => Bop::And,
+        Rule::logand => Bop::And,
+        Rule::bitand => Bop::BitAnd,
         _ => internal_bug!("unexpected bop_from_rule: {rule:?}"),
     }
 }

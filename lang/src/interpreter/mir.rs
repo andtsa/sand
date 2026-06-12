@@ -263,7 +263,7 @@ fn eval_binop<'tcx>(
             }
         }
         (Bop::Pow, MirValue::Int(a), MirValue::Int(b)) => Ok(MirValue::Int(a.pow(b as u32))),
-        (Bop::And, MirValue::Int(a), MirValue::Int(b)) => Ok(MirValue::Int(a & b)),
+        (Bop::BitAnd, MirValue::Int(a), MirValue::Int(b)) => Ok(MirValue::Int(a & b)),
         (Bop::Or, MirValue::Int(a), MirValue::Int(b)) => Ok(MirValue::Int(a | b)),
         (Bop::Xor, MirValue::Int(a), MirValue::Int(b)) => Ok(MirValue::Int(a ^ b)),
         (Bop::And, MirValue::Bool(a), MirValue::Bool(b)) => Ok(MirValue::Bool(a && b)),

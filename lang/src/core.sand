@@ -6,9 +6,9 @@ def max(a: Int, b: Int): Int := __max(a, b)
 
 def clamp(n: Int, lo: Int, hi: Int): Int := min(max(n, lo), hi)
 
-def is_odd(n: Int): Bool := (n & 1) != 0
+def is_odd(n: Int): Bool := (n && 1) != 0
 
-def is_even(n: Int): Bool := (n & 1) == 0
+def is_even(n: Int): Bool := (n && 1) == 0
 
 def pow(base: Int, exp: Int): Int :=
     if base == 0 then 0

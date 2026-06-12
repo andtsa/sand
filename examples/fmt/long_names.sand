@@ -18,7 +18,7 @@ def calculate_the_greatest_common_divisor_using_euclidean_algorithm(dividend_int
 }
 
 def determine_whether_integer_is_within_acceptable_inclusive_bounds(value_to_check_against_bounds: Int, lower_bound_inclusive: Int, upper_bound_inclusive: Int): Bool :=
-    value_to_check_against_bounds >= lower_bound_inclusive & value_to_check_against_bounds <= upper_bound_inclusive
+    value_to_check_against_bounds >= lower_bound_inclusive and value_to_check_against_bounds <= upper_bound_inclusive
 
 def accumulate_sum_of_integers_from_lower_bound_to_upper_bound_inclusive(iteration_lower_bound: Int, iteration_upper_bound: Int): Int := {
     let mut accumulated_sum_of_all_integers_in_range: Int = 0;

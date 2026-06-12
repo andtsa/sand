@@ -340,7 +340,7 @@ fn eval_binop<'tcx>(
             CompOp::Gt => Ok(Expression::Bool(l > r)),
             CompOp::Ge => Ok(Expression::Bool(l >= r)),
         },
-        (Expression::Int(l), Expression::Int(r), Bop::And) => Ok(Expression::Int(l & r)),
+        (Expression::Int(l), Expression::Int(r), Bop::BitAnd) => Ok(Expression::Int(l & r)),
         (Expression::Int(l), Expression::Int(r), Bop::Or) => Ok(Expression::Int(l | r)),
         (Expression::Int(l), Expression::Int(r), Bop::Xor) => Ok(Expression::Int(l ^ r)),
         (Expression::Bool(l), Expression::Bool(r), Bop::And) => Ok(Expression::Bool(l && r)),

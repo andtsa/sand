@@ -51,7 +51,7 @@ fn typecheck_equality_returns_bool() {
 
 #[test]
 fn typecheck_boolean_and() {
-    typecheck("def main(): Bool := true & false");
+    typecheck("def main(): Bool := true and false");
 }
 
 #[test]

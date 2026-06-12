@@ -17,7 +17,7 @@ def add8(a: Int, b: Int, c: Int, d: Int, e: Int, f: Int, g: Int, h: Int): Int :=
     a + b + c + d + e + f + g + h
 
 def mixed_types_five(x: Int, y: Int, z: Int, flag_a: Bool, flag_b: Bool): Int :=
-    if flag_a & flag_b then x + y + z else x - y + z
+    if flag_a and flag_b then x + y + z else x - y + z
 
 def mixed_types_seven(alpha: Int, beta: Int, gamma: Int, delta: Int, flag_one: Bool, flag_two: Bool, flag_three: Bool): Int := {
     let base: Int = alpha + beta + gamma + delta;

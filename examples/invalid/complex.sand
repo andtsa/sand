@@ -156,7 +156,7 @@ def t13(a: Int, b: Int): Bool :=
     let x: Bool = a > b;
     b = b + 1;
     let y: Bool = a > b;
-    x & y
+    x and y
 }
 
 def t14(a: Int, b: Int, c: Int): Int :=

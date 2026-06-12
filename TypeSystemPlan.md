@@ -473,14 +473,20 @@ actual constraint solving.
 
 ## Step 7 — Borrowed Kind and Shared Reference Types
 
-> **Pre-step note — `&` operator conflict:**
-> Sand currently uses `&` as the boolean AND operator. The calculus
-> (§8.3) frees `&` for borrow syntax by renaming bitwise AND to `band`.
-> Before introducing borrow expressions, this operator must be renamed.
-> Proposed rename: boolean AND `&` → `&&` (conventional two-char form),
-> keeping `|` as boolean OR unchanged. The grammar change is in this
-> step; all existing tests using `&` for boolean AND must be updated.
-> Decide the exact replacement symbol here before touching borrow syntax.
+> **Pre-step note — `&` operator conflict: ✅ DONE.**
+> The old `&` operator was *overloaded* — bitwise AND on `Int` and logical
+> AND on `Bool` (it accepted any `left == right`). It has been **split** to
+> free single `&` for borrow syntax:
+> - **`&&`** = bitwise AND on `Int` (`Bop::BitAnd`);
+> - **`and`** = logical AND on `Bool` (`Bop::And`, now a keyword).
+>
+> The two are type-restricted (`&&` rejects `Bool`, `and` rejects `Int`);
+> both lower to LLVM `and`. `|` (OR) and `xor` are left overloaded — they
+> don't conflict with borrows, and `|` is also the tag-union / match-arm
+> separator. Single `&` is now a parse error and is reserved for `&'r T`.
+> Updated: `core.sand` (`n & 1` → `n && 1`, genuinely bitwise) and all
+> existing tests/examples (`&` on `Bool` → `and`). New `operator_tests.rs`
+> (9 tests) locks in the split. Borrow syntax (`&` / `&mut`) is added below.
 
 **Goal**: Add `Borrowed 'r` as a kind and `&'r T` as a type. Implement
 shared (immutable) borrow expressions and borrow let-bindings. This is
