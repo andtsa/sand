@@ -215,13 +215,8 @@ impl LanguageServer for Backend {
                 else {
                     return Ok(None);
                 };
-                let loc = goto_definition::definition_at_position(
-                    lsp_pos,
-                    uri,
-                    ctx,
-                    ast,
-                    &slot.project,
-                );
+                let loc =
+                    goto_definition::definition_at_position(lsp_pos, uri, ctx, ast, &slot.project);
                 return Ok(loc.map(GotoDefinitionResponse::Scalar));
             }
         }

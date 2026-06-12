@@ -13,6 +13,9 @@ tag_type = { "#" ~ identifier ~ ("|" ~ "#" ~ identifier)* }
 // Tuple type: `(Int, Bool)`, arity >= 2 (one element is just grouping, handled by build_type)
 tuple_type = { "(" ~ type_ ~ ("," ~ type_)+ ~ ")" }
 
+// Generic enum instantiation at a use site: `Option<Int>`, `Either<Int, Bool>`.
+type_application = { identifier ~ "<" ~ type_ ~ ("," ~ type_)* ~ ">" }
+
 type_ = {
     "Int"
   | "Bool"
@@ -23,6 +26,8 @@ type_ = {
   | tag_type // ad-hoc tag union: #ok | #err
 
   | tuple_type // product type: (A, B, ...)
+
+  | type_application // generic instantiation: Option<Int>
 
   | identifier // named enum type
 }

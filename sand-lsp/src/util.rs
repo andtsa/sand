@@ -61,10 +61,7 @@ pub(crate) fn range_contains(range: LangRange, pos: Pos) -> bool {
     p >= (range.start.line, range.start.col) && p <= (range.end.line, range.end.col)
 }
 
-pub(crate) fn find_in_expr<'a, 'tcx>(
-    expr: &'a Expr<'tcx>,
-    pos: Pos,
-) -> Option<&'a Expr<'tcx>> {
+pub(crate) fn find_in_expr<'a, 'tcx>(expr: &'a Expr<'tcx>, pos: Pos) -> Option<&'a Expr<'tcx>> {
     if !range_contains(expr.range, pos) {
         return None;
     }

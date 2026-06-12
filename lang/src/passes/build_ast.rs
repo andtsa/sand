@@ -62,6 +62,16 @@ pub enum AstError {
 
     #[error("unknown module '{module}' at {range}")]
     UnknownModule { module: String, range: Range },
+
+    #[error(
+        "generic type '{name}' expects {expected} type argument(s) but {found} were given at {range}"
+    )]
+    TypeArgArityMismatch {
+        name: String,
+        expected: usize,
+        found: usize,
+        range: Range,
+    },
 }
 
 trait AstExt<T> {
@@ -461,6 +471,35 @@ fn build_type<'run>(ctx: &mut CompileCtx<'run>, pair: Pair<Rule>) -> Result<Ty<'
             let tags: Vec<String> = inner.into_inner().map(|p| p.as_str().to_string()).collect();
             let er = ctx.register_or_get_anon_enum(tags, range);
             Ok(ctx.enum_ty(er))
+        }
+        Some(inner) if inner.as_rule() == Rule::type_application => {
+            // type_application = { identifier ~ "<" ~ type_ ~ ("," ~ type_)* ~ ">" }
+            let app_range = Range::from(&inner);
+            let mut parts = inner.into_inner();
+            let name = parts
+                .next()
+                .missing("generic type name", app_range)?
+                .as_str()
+                .to_string();
+            let arg_tys = parts
+                .map(|p| build_type(ctx, p))
+                .collect::<Result<Vec<Ty<'run>>, _>>()?;
+            let er = ctx
+                .lookup_enum_by_name(&name)
+                .ok_or_else(|| AstError::UnknownType {
+                    name: name.clone(),
+                    range,
+                })?;
+            let expected = ctx.get_enum(er).type_params.len();
+            if expected != arg_tys.len() {
+                return Err(AstError::TypeArgArityMismatch {
+                    name,
+                    expected,
+                    found: arg_tys.len(),
+                    range,
+                });
+            }
+            Ok(ctx.intern_app(er, arg_tys))
         }
         Some(inner) if inner.as_rule() == Rule::qualified_type => {
             // qualified_type = { identifier ~ "::" ~ identifier }

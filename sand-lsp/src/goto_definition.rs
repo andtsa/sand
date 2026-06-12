@@ -32,7 +32,8 @@ pub fn definition_at_position<'tcx>(
             continue;
         }
 
-        // Cursor on the function name/header — already at the definition, nothing to jump to.
+        // Cursor on the function name/header — already at the definition, nothing to
+        // jump to.
         if range_contains(fun.range, pos) {
             return None;
         }

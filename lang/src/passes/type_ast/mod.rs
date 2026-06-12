@@ -5,6 +5,7 @@
 
 mod check;
 mod errors;
+mod generics;
 mod infer;
 
 use crate::compiler::context::CompileCtx;

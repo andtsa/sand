@@ -89,6 +89,10 @@ pub enum AstTypeError<'tcx> {
         range: Range,
     },
     #[error(
+        "cannot infer the type arguments of generic enum '{enum_name}' at {range}; add a type annotation (e.g. `{enum_name}<...>`)"
+    )]
+    CannotInferTypeArguments { enum_name: String, range: Range },
+    #[error(
         "pattern '{enum_name}#{variant}' at {range}: payload mismatch — variant {} a payload, but the pattern {}",
         if *expected_payload { "carries" } else { "does not carry" },
         if *expected_payload { "doesn't destructure it" } else { "tries to destructure one" }

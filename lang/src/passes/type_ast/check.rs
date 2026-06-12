@@ -10,12 +10,38 @@ use crate::lang::types::Ty;
 use crate::lang::types::TyKind;
 use crate::passes::type_ast::TypeEnv;
 pub use crate::passes::type_ast::errors::AstTypeError;
+use crate::passes::type_ast::generics::Subst;
+use crate::passes::type_ast::generics::subst;
 use crate::passes::type_ast::infer::infer;
+use crate::passes::type_ast::infer::infer_constructor;
 use crate::passes::type_ast::infer::infer_statement;
 
 /// Variable bindings introduced by a pattern: each is the uniquified variable,
 /// the type bound to it, and its declaration range.
 type PatternBindings<'tcx> = Vec<(UniqVar<'tcx>, Ty<'tcx>, Range)>;
+
+/// View a type as an enum scrutinee: the base enum plus a substitution mapping
+/// its type parameters to the instantiation's arguments (empty for a plain,
+/// non-generic `Enum`). Returns `None` for non-enum types.
+fn enum_instantiation<'tcx>(
+    ctx: &CompileCtx<'tcx>,
+    ty: Ty<'tcx>,
+) -> Option<(EnumRef<'tcx>, Subst<'tcx>)> {
+    match ty.kind() {
+        TyKind::Enum(er) => Some((*er, Subst::new())),
+        TyKind::App(er, args) => {
+            let mapping = ctx
+                .get_enum(*er)
+                .type_params
+                .iter()
+                .map(|p| p.id)
+                .zip(args.iter().copied())
+                .collect();
+            Some((*er, mapping))
+        }
+        _ => None,
+    }
+}
 
 /// type-check a list of match arms against a scrutinee of type `scrutinee_ty`.
 ///
@@ -50,6 +76,8 @@ pub(super) fn type_check_match_arms<'tcx>(
     }
     let kind = match scrutinee_ty.kind() {
         TyKind::Enum(er) => ScrutKind::Enum(*er),
+        // a generic enum instantiation matches just like its base enum.
+        TyKind::App(er, _) => ScrutKind::Enum(*er),
         TyKind::Tuple(_) => ScrutKind::Tuple,
         TyKind::Int => ScrutKind::Int,
         TyKind::Bool => ScrutKind::Bool,
@@ -115,6 +143,11 @@ fn type_check_match_arms_inner<'tcx>(
     let mut typed_arms: Vec<typed_hir::TypedMatchArm> = Vec::with_capacity(arms.len());
     // the type all arm bodies must produce
     let mut result_ty: Option<Ty<'tcx>> = forced_expected;
+    // substitution from the scrutinee's instantiation (empty for plain enums),
+    // applied to variant payload types so bindings get concrete types.
+    let inst: Subst<'tcx> = enum_instantiation(ctx, scrutinee_ty)
+        .map(|(_, m)| m)
+        .unwrap_or_default();
 
     for arm in arms {
         if irrefutable_seen {
@@ -176,6 +209,7 @@ fn type_check_match_arms_inner<'tcx>(
                     *pat_er,
                     *variant_idx,
                     payload.as_deref(),
+                    &inst,
                     arm.range,
                     &mut bindings,
                 )?;
@@ -223,6 +257,7 @@ fn type_check_match_arms_inner<'tcx>(
                     enum_ref,
                     idx,
                     payload.as_deref(),
+                    &inst,
                     arm.range,
                     &mut bindings,
                 )?;
@@ -509,10 +544,14 @@ fn check_variant_payload_pattern<'tcx>(
     enum_ref: EnumRef<'tcx>,
     variant_idx: usize,
     payload_pattern: Option<&qhir::QPattern<'tcx>>,
+    inst: &Subst<'tcx>,
     arm_range: Range,
     bindings: &mut PatternBindings<'tcx>,
 ) -> Result<Option<(Ty<'tcx>, Box<typed_hir::MatchPattern<'tcx>>)>, AstTypeError<'tcx>> {
-    let declared_payload = ctx.get_enum(enum_ref).variants[variant_idx].payload.get();
+    // Substitute the scrutinee's type arguments into the declared payload so a
+    // pattern on `Option<Int>#Some(x)` binds `x : Int`, not the parameter `T`.
+    let raw_payload = ctx.get_enum(enum_ref).variants[variant_idx].payload.get();
+    let declared_payload = raw_payload.map(|p| subst(ctx, p, inst));
     match (declared_payload, payload_pattern) {
         (None, None) => Ok(None),
         (Some(payload_ty), Some(sub)) => {
@@ -618,8 +657,8 @@ fn check_subpattern<'tcx>(
             payload,
         } => {
             // The expected type must be the same enum that the pattern names.
-            match expected_ty.kind() {
-                TyKind::Enum(er) if *er == *pat_er => {}
+            let inst = match enum_instantiation(ctx, expected_ty) {
+                Some((er, inst)) if er == *pat_er => inst,
                 _ => {
                     return Err(AstTypeError::PatternTypeMismatch {
                         message: format!(
@@ -630,12 +669,13 @@ fn check_subpattern<'tcx>(
                         range: arm_range,
                     });
                 }
-            }
+            };
             let typed_payload = check_variant_payload_pattern(
                 ctx,
                 *pat_er,
                 *variant_idx,
                 payload.as_deref(),
+                &inst,
                 arm_range,
                 bindings,
             )?;
@@ -648,9 +688,9 @@ fn check_subpattern<'tcx>(
         }
         qhir::QPattern::Tag { variant, payload } => {
             // Resolve the expected type to an enum, then look up the variant.
-            let enum_ref = match expected_ty.kind() {
-                TyKind::Enum(er) => *er,
-                _ => {
+            let (enum_ref, inst) = match enum_instantiation(ctx, expected_ty) {
+                Some(pair) => pair,
+                None => {
                     return Err(AstTypeError::PatternTypeMismatch {
                         message: format!(
                             "bare tag pattern '#{variant}' used against non-enum type {}",
@@ -672,6 +712,7 @@ fn check_subpattern<'tcx>(
                 enum_ref,
                 idx,
                 payload.as_deref(),
+                &inst,
                 arm_range,
                 bindings,
             )?;
@@ -765,6 +806,33 @@ pub(super) fn check<'tcx>(
                 ty: expected,
                 range: expr.range,
             })
+        }
+
+        // Resolve a generic enum constructor against the expected instantiation,
+        // e.g. `let x: Option<Int> = Option#None` solves `T = Int` from `expected`.
+        qhir::Expression::Constructor {
+            enum_ref,
+            variant_idx,
+            payload,
+        } => {
+            let e = infer_constructor(
+                ctx,
+                env,
+                expr,
+                *enum_ref,
+                *variant_idx,
+                payload.as_deref(),
+                Some(expected),
+            )?;
+            if e.ty.type_neq(expected) {
+                return Err(AstTypeError::TypeError {
+                    message: format!("expected type {} but found {}", expected, e.ty),
+                    expected,
+                    found: e.ty,
+                    range: expr.range,
+                });
+            }
+            Ok(e)
         }
 
         // Propagate check mode into both branches of an if-else.
@@ -918,8 +986,8 @@ fn check_let_pattern_inner<'tcx>(
             payload,
         } => {
             // The expected type must be this enum.
-            match expected_ty.kind() {
-                TyKind::Enum(er) if *er == *enum_ref => {}
+            let inst = match enum_instantiation(ctx, expected_ty) {
+                Some((er, inst)) if er == *enum_ref => inst,
                 _ => {
                     return Err(AstTypeError::PatternTypeMismatch {
                         message: format!(
@@ -931,7 +999,7 @@ fn check_let_pattern_inner<'tcx>(
                         range,
                     });
                 }
-            }
+            };
             // The sub-pattern must be irrefutable (no nested variant/tag/literal).
             if let Some(sub) = payload.as_deref()
                 && matches!(
@@ -949,6 +1017,7 @@ fn check_let_pattern_inner<'tcx>(
                 *enum_ref,
                 *variant_idx,
                 payload.as_deref(),
+                &inst,
                 range,
                 bindings,
             )?;

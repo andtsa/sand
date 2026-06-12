@@ -105,6 +105,18 @@ impl<'tcx> Ty<'tcx> {
         matches!(self.kind(), TyKind::Int | TyKind::Bool | TyKind::Unit)
     }
 
+    /// `true` if this type mentions any type parameter (directly or nested in a
+    /// tuple/instantiation). Used to decide whether a value's type still needs
+    /// substitution before it is fully concrete.
+    pub fn has_param(self) -> bool {
+        match self.kind() {
+            TyKind::Param(_) => true,
+            TyKind::Tuple(elems) => elems.iter().any(|t| t.has_param()),
+            TyKind::App(_, args) => args.iter().any(|t| t.has_param()),
+            _ => false,
+        }
+    }
+
     /// Equality that treats `Top` as compatible with any type.
     pub fn type_eq(self, other: Ty<'tcx>) -> bool {
         if std::ptr::eq(self.0, other.0) {

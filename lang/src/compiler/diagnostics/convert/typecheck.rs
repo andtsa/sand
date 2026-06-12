@@ -462,6 +462,22 @@ pub fn type_error_to_diagnostic<'tcx>(
                 },
             );
         }
+
+        CannotInferTypeArguments { enum_name, range } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    message: format!(
+                        "cannot infer the type arguments of generic enum '{enum_name}'; add a type annotation"
+                    ),
+                    range: *range,
+                    related: vec![],
+                    file: Some(file),
+                    ..Default::default()
+                },
+            );
+        }
     }
     diagnostics
 }

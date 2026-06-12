@@ -2,18 +2,24 @@
 
 use crate::compiler::context::CompileCtx;
 use crate::compiler::structure::FunRef;
+use crate::compiler::structure::Map;
 use crate::ir_types::qhir;
 use crate::ir_types::typed_hir;
 use crate::ir_types::typed_hir::TypedFunction;
 use crate::lang::intrinsics::INTRINSICS;
+use crate::lang::types::EnumRef;
 use crate::lang::types::Ty;
 use crate::lang::types::TyKind;
+use crate::lang::types::TypeParamId;
 use crate::passes::type_ast::TypeEnv;
 use crate::passes::type_ast::check::check;
 use crate::passes::type_ast::check::check_let_pattern;
 use crate::passes::type_ast::check::type_check_match_arms;
 pub use crate::passes::type_ast::errors::AstTypeError;
 use crate::passes::type_ast::errors::TypeError;
+use crate::passes::type_ast::generics::Subst;
+use crate::passes::type_ast::generics::subst;
+use crate::passes::type_ast::generics::unify;
 
 pub(super) fn infer_function<'tcx>(
     ctx: &mut CompileCtx<'tcx>,
@@ -44,6 +50,120 @@ pub(super) fn infer_function<'tcx>(
             src_module: func.src_module,
         },
     ))
+}
+
+/// Type-check an enum constructor expression. For a non-generic enum this
+/// checks the payload against the declared type and yields the enum type. For a
+/// generic enum it solves the type arguments — seeded from `expected` (when it
+/// is an `App` of this enum, e.g. a `let x: Option<Int> = ...` context) and/or
+/// inferred by unifying the declared payload against the actual payload — and
+/// yields the corresponding `App` instantiation. A generic constructor whose
+/// arguments cannot be determined (e.g. a bare nullary `Option#None` with no
+/// annotation) is a `CannotInferTypeArguments` error.
+pub(super) fn infer_constructor<'tcx>(
+    ctx: &mut CompileCtx<'tcx>,
+    env: &TypeEnv<'tcx>,
+    expr: &qhir::Expr<'tcx>,
+    enum_ref: EnumRef<'tcx>,
+    variant_idx: usize,
+    payload: Option<&qhir::Expr<'tcx>>,
+    expected: Option<Ty<'tcx>>,
+) -> Result<typed_hir::Expr<'tcx>, AstTypeError<'tcx>> {
+    // `def` is arena-backed (`'tcx`) and does not borrow `ctx`, so we can keep
+    // these around while calling `&mut ctx` methods below.
+    let def = ctx.get_enum(enum_ref);
+    let enum_name = def.name.clone();
+    let variant_name = def.variants[variant_idx].name.clone();
+    let declared_payload = def.variants[variant_idx].payload.get();
+    let tp_ids: Vec<TypeParamId> = def.type_params.iter().map(|p| p.id).collect();
+
+    // payload presence must match the variant's declaration
+    if declared_payload.is_none() && payload.is_some() {
+        return Err(AstTypeError::ConstructorPayloadMismatch {
+            enum_name,
+            variant: variant_name,
+            expected_payload: false,
+            range: payload.map(|p| p.range).unwrap_or(expr.range),
+        });
+    }
+    if declared_payload.is_some() && payload.is_none() {
+        return Err(AstTypeError::ConstructorPayloadMismatch {
+            enum_name,
+            variant: variant_name,
+            expected_payload: true,
+            range: expr.range,
+        });
+    }
+
+    let make = |payload, ty| {
+        Ok(typed_hir::Expr {
+            expr: typed_hir::Expression::Constructor {
+                enum_ref,
+                variant_idx,
+                payload,
+            },
+            range: expr.range,
+            ty,
+        })
+    };
+
+    // Non-generic enum: check payload against the declared type directly.
+    if tp_ids.is_empty() {
+        let typed_payload = match (declared_payload, payload) {
+            (Some(decl), Some(p)) => Some(Box::new(check(ctx, env, p, decl)?)),
+            _ => None,
+        };
+        return make(typed_payload, ctx.enum_ty(enum_ref));
+    }
+
+    // Generic enum: solve the type arguments.
+    let mut mapping: Subst<'tcx> = Map::new();
+    if let Some(exp) = expected
+        && let TyKind::App(exp_er, exp_args) = exp.kind()
+        && *exp_er == enum_ref
+        && exp_args.len() == tp_ids.len()
+    {
+        for (id, arg) in tp_ids.iter().zip(*exp_args) {
+            mapping.insert(*id, *arg);
+        }
+    }
+
+    let typed_payload = match (declared_payload, payload) {
+        (Some(decl), Some(p)) => {
+            let decl = subst(ctx, decl, &mapping);
+            if decl.has_param() {
+                // payload type still parametric: infer the argument and unify.
+                let tp = infer(ctx, env, p)?;
+                unify(decl, tp.ty, &mut mapping).map_err(|_| {
+                    AstTypeError::ConstructorPayloadMismatch {
+                        enum_name: enum_name.clone(),
+                        variant: variant_name.clone(),
+                        expected_payload: true,
+                        range: p.range,
+                    }
+                })?;
+                Some(Box::new(tp))
+            } else {
+                Some(Box::new(check(ctx, env, p, decl)?))
+            }
+        }
+        _ => None,
+    };
+
+    let mut args = Vec::with_capacity(tp_ids.len());
+    for id in &tp_ids {
+        match mapping.get(id) {
+            Some(&t) => args.push(t),
+            None => {
+                return Err(AstTypeError::CannotInferTypeArguments {
+                    enum_name,
+                    range: expr.range,
+                });
+            }
+        }
+    }
+    let ty = ctx.intern_app(enum_ref, args);
+    make(typed_payload, ty)
 }
 
 pub(super) fn infer_statement<'tcx>(
@@ -251,38 +371,15 @@ pub(super) fn infer<'tcx>(
             enum_ref,
             variant_idx,
             payload,
-        } => {
-            let declared_payload = ctx.get_enum(*enum_ref).variants[*variant_idx].payload.get();
-            let typed_payload = match (declared_payload, payload) {
-                (None, None) => None,
-                (Some(declared_ty), Some(p)) => Some(Box::new(check(ctx, env, p, declared_ty)?)),
-                (None, Some(p)) => {
-                    return Err(AstTypeError::ConstructorPayloadMismatch {
-                        enum_name: ctx.get_enum(*enum_ref).name.clone(),
-                        variant: ctx.get_enum(*enum_ref).variants[*variant_idx].name.clone(),
-                        expected_payload: false,
-                        range: p.range,
-                    });
-                }
-                (Some(_), None) => {
-                    return Err(AstTypeError::ConstructorPayloadMismatch {
-                        enum_name: ctx.get_enum(*enum_ref).name.clone(),
-                        variant: ctx.get_enum(*enum_ref).variants[*variant_idx].name.clone(),
-                        expected_payload: true,
-                        range: expr.range,
-                    });
-                }
-            };
-            Ok(typed_hir::Expr {
-                expr: typed_hir::Expression::Constructor {
-                    enum_ref: *enum_ref,
-                    variant_idx: *variant_idx,
-                    payload: typed_payload,
-                },
-                range: expr.range,
-                ty: ctx.enum_ty(*enum_ref),
-            })
-        }
+        } => infer_constructor(
+            ctx,
+            env,
+            expr,
+            *enum_ref,
+            *variant_idx,
+            payload.as_deref(),
+            None,
+        ),
 
         qhir::Expression::Tag { variant, .. } => Err(AstTypeError::TagWithoutContext {
             variant: variant.clone(),
@@ -470,13 +567,60 @@ pub(super) fn infer<'tcx>(
                 });
             }
 
-            // check() each argument against the declared parameter type so that bare
-            // tags in argument position can be resolved from the expected type context.
+            // A call is generic when the declared signature still mentions any
+            // type parameter; otherwise the existing concrete path applies.
+            let is_generic =
+                expected_tys.iter().any(|t| t.has_param()) || fun_sig.ret_ty.has_param();
+
+            if !is_generic {
+                // check() each argument against the declared parameter type so that
+                // bare tags in argument position resolve from the expected context.
+                let arg_exprs = args
+                    .iter()
+                    .zip(&expected_tys)
+                    .map(|(arg, &expected_ty)| check(ctx, env, arg, expected_ty))
+                    .collect::<Result<Vec<_>, _>>()?;
+                return Ok(typed_hir::Expr {
+                    expr: typed_hir::Expression::Call {
+                        fn_name: *fn_name,
+                        args: arg_exprs,
+                    },
+                    range: expr.range,
+                    ty: fun_sig.ret_ty,
+                });
+            }
+
+            // Generic call: infer parametric arguments, check concrete ones, then
+            // unify to solve the type parameters and substitute into the return.
             let arg_exprs = args
                 .iter()
                 .zip(&expected_tys)
-                .map(|(arg, &expected_ty)| check(ctx, env, arg, expected_ty))
+                .map(|(arg, &decl)| {
+                    if decl.has_param() {
+                        infer(ctx, env, arg)
+                    } else {
+                        check(ctx, env, arg, decl)
+                    }
+                })
                 .collect::<Result<Vec<_>, _>>()?;
+
+            let mut mapping: Subst<'tcx> = Map::new();
+            for (&decl, a) in expected_tys.iter().zip(&arg_exprs) {
+                if decl.has_param() {
+                    unify(decl, a.ty, &mut mapping).map_err(|_| {
+                        AstTypeError::FunctionCallTypeError {
+                            message: format!(
+                                "could not infer type parameters of '{}' from its arguments",
+                                ctx.original_fun_name(*fn_name)
+                            ),
+                            expected: expected_tys.clone(),
+                            found: arg_exprs.iter().map(|e| e.ty).collect(),
+                            range: expr.range,
+                        }
+                    })?;
+                }
+            }
+            let ret_ty = subst(ctx, fun_sig.ret_ty, &mapping);
 
             Ok(typed_hir::Expr {
                 expr: typed_hir::Expression::Call {
@@ -484,7 +628,7 @@ pub(super) fn infer<'tcx>(
                     args: arg_exprs,
                 },
                 range: expr.range,
-                ty: fun_sig.ret_ty,
+                ty: ret_ty,
             })
         }
         qhir::Expression::IntrinsicCall { fn_name, args } => {
