@@ -33,8 +33,14 @@ core_type = {
 
   | type_application // generic instantiation: Option<Int>
 
+  | borrow_type // shared reference: &T, &'r T
+
   | identifier // named enum type
 }
+
+// shared (immutable) reference type `&'r T` (Calculus §2.3). the lifetime is
+// optional; an absent one is assigned a fresh region.
+borrow_type = { "&" ~ lifetime? ~ core_type }
 
 // a type, optionally ascribed to a region: `Int`, `Int @ 'r` (Calculus §2.3).
 // the `@ 'r` suffix is parsed here (rather than a left-recursive `region_type`)
@@ -42,7 +48,7 @@ core_type = {
 type_ = { core_type ~ ("@" ~ lifetime)? }
 
 // keywords (prevent them from being identifiers)
-KEYWORD = { "if" | "then" | "else" | "let" | "def" | "true" | "false" | "Unit" | "Int" | "Bool" | "while" | "do" | "module" | "mut" | "type" | "match" | "and" }
+KEYWORD = { "if" | "then" | "else" | "let" | "def" | "true" | "false" | "Unit" | "Int" | "Bool" | "while" | "do" | "module" | "mut" | "type" | "match" | "and" | "where" }
 
 identifier       = @{ !(KEYWORD ~ !(ASCII_ALPHANUMERIC | "_")) ~ "_"* ~ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
 empty_identifier = @{ "_" }
@@ -80,7 +86,14 @@ le       = { "<=" | "≤" }
 variance_ann = { "+" | "-" }
 kind_ann     = { "Owned" | "Never" }
 type_param   = { variance_ann? ~ identifier ~ (":" ~ kind_ann)? }
-type_params  = { "<" ~ type_param ~ ("," ~ type_param)* ~ ">" }
+// a region (lifetime) parameter `'r` declared on a generic item (Calculus §8.4).
+region_param = { lifetime }
+type_params  = { "<" ~ (region_param | type_param) ~ ("," ~ (region_param | type_param))* ~ ">" }
+
+// outlives constraints on a function signature: `where 'r >= 's` (Calculus
+// §8.10). typeclass constraints (`where T : Clone`) arrive in Step 15.
+where_constraint = { lifetime ~ ">=" ~ lifetime }
+where_clause     = { "where" ~ where_constraint ~ ("," ~ where_constraint)* }
 
 // enum type declarations
 // a variant is a bare tag (`Red`, nullary) or a tag with a payload type (`Ok(Int)`)
@@ -130,8 +143,13 @@ tuple_expr = { "(" ~ expression ~ ("," ~ expression)+ ~ ")" }
 // todo: anonymous functions (lambdas) & first class functions
 
 // precedence chaining
+// shared borrow expression `&e` (Calculus §3.2 / §8.7). binds tightly (to a
+// primary), so `&x + 1` is `(&x) + 1`.
+borrow_expr = { "&" ~ primary }
+
 primary = {
-    tuple_expr
+    borrow_expr
+  | tuple_expr
   | ("(" ~ expression ~ ")")
   | ifstatement
   | whileloop
@@ -172,10 +190,14 @@ let_binding_tuple = { "(" ~ let_binding_elem ~ ("," ~ let_binding_elem)+ ~ ")" }
 let_destructure   = { let_constructor | let_binding_tuple | let_binding_elem }
 let_constructor   = { identifier ~ "#" ~ identifier ~ ("(" ~ let_destructure ~ ")")? }
 
+// shared-borrow binding `let &x = e` (Calculus §3.2 / §6.4): `x` borrows `e`,
+// so it stays usable and `e` is not consumed.
+borrow_binding = { "&" ~ (identifier | empty_identifier) }
+
 // variables, either a single binding, a flat tuple-pattern, a constructor-pattern, or bare binding
 // The `else` clause is required when the LHS is a refutable (constructor) pattern.
 declaration = {
-    "let" ~ (let_constructor | let_tuple | mut_kw? ~ (identifier | empty_identifier)) ~ (":" ~ type_)? ~ "=" ~ expression ~ ("else" ~ expression)?
+    "let" ~ (let_constructor | let_tuple | borrow_binding | mut_kw? ~ (identifier | empty_identifier)) ~ (":" ~ type_)? ~ "=" ~ expression ~ ("else" ~ expression)?
 }
 
 assignment = { identifier ~ "=" ~ expression }
@@ -189,7 +211,7 @@ statement = {
 parameter  = { mut_kw? ~ (identifier | empty_identifier) ~ ":" ~ type_ }
 parameters = { parameter ~ ("," ~ parameter)* ~ ","? }
 
-function = { "def" ~ identifier ~ type_params? ~ "(" ~ parameters? ~ ")" ~ ":" ~ type_ ~ ":=" ~ expression }
+function = { "def" ~ identifier ~ type_params? ~ "(" ~ parameters? ~ ")" ~ ":" ~ type_ ~ where_clause? ~ ":=" ~ expression }
 
 module = { "module" ~ identifier ~ ";"? }
 

@@ -1,7 +1,7 @@
 //@TEST:{0}[61]
 
-// Ackermann function — pure integer recursion, no enums or tuples.
-// A(3, 3) = 61.  Used to stress-test deep recursion in the compiler.
+// Ackermann function is pure integer recursion used to stress-test deep recursion in the compiler.
+// A(3, 3) = 61
 //
 //   A(0, n)    = n + 1
 //   A(m, 0)    = A(m-1, 1)

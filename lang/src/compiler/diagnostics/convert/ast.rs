@@ -170,6 +170,20 @@ pub fn ast_error_to_diagnostics(
                 },
             );
         }
+        AstError::UnknownRegion { name, range } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    file: Some(file),
+                    severity: DiagnosticSeverity::Error,
+                    message: format!(
+                        "unknown lifetime '{name}': declare it as a region parameter, e.g. `<'{name}>`"
+                    ),
+                    range: *range,
+                    ..Default::default()
+                },
+            );
+        }
         AstError::TypeArgArityMismatch {
             name,
             expected,

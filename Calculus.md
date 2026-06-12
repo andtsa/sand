@@ -50,7 +50,7 @@ Kind           k  ::=  Owned
 ### 1.2 Subkinding
 
 The relation `k₁ <: k₂` reads "`k₁` is usable where `k₂` is expected."
-`Owned` is at the top — it carries the most capability. The three borrow
+`Owned` is at the top, since it carries the most capability. The three borrow
 modes are mutually incomparable. `Never` is the bottom — a subkind of
 everything, corresponding to the uninhabited type.
 
@@ -76,7 +76,7 @@ Never <: k
 ```
 
 There is intentionally no rule relating `Borrowed`, `BorrowedMut`, and
-`InteriorMut` to each other — they are incomparable branches of the lattice.
+`InteriorMut` to each other, indicating they are incomparable branches of the lattice.
 
 ### 1.3 Kind Lattice
 
@@ -137,7 +137,7 @@ InteriorMut, any position            →  ∅  (hidden mutation, always invarian
 
 Declaration-site annotations (`+`, `-`, `∅`) override these defaults.
 The kind checker verifies that the declared variance is sound for the
-given kind — for example, declaring `+a : BorrowedMut` is a kind error.
+given kind. For example, declaring `+a : BorrowedMut` is a kind error.
 
 ### 2.2 Type Constructor Parameters
 
@@ -202,7 +202,7 @@ fmap_ref : (a →[Borrowed 'r] b) →[Borrowed 'r] &'r F<a> →[Owned] F<b>
 ```
 
 Region ascription `T @ 'r` is a type-level construct only. There is no
-term-level `@` operator — regions are tracked through the type system,
+term-level `@` operator, meaning regions are tracked through the type system,
 not annotated on expressions directly.
 
 ---
@@ -317,10 +317,10 @@ Context   Γ  ::=
 
 The subscript on `:ₖ` is the ownership mode of the binding:
 
-- `x :_Owned T`          — x is consumed on use; removed from Γ afterward
-- `x :_(Borrowed 'r) T`  — x may be used multiple times within 'r; stays in Γ
-- `x :_(BorrowedMut 'r) T` — same, but exclusive write access within 'r
-- `x :_InteriorMut T`    — x may be used multiple times; mutation is internal
+- `x :_Owned T`            - x is consumed on use; removed from Γ afterward
+- `x :_(Borrowed 'r) T`    - x may be used multiple times within 'r; stays in Γ
+- `x :_(BorrowedMut 'r) T` - same, but exclusive write access within 'r
+- `x :_InteriorMut T`      - x may be used multiple times; mutation is internal
 
 ---
 
@@ -425,7 +425,7 @@ an `Owned` value where `Borrowed` is expected).
 ### 6.3 Blocks
 
 Each block introduces a fresh implicit region `'r`. The final expression
-is the block's result. The result type must not mention `'r` — this is
+is the block's result. *The result type must not mention `'r`* is
 the formal statement of lifetime safety: values cannot outlive their region.
 
 ```
@@ -484,7 +484,8 @@ cannot escape the scope in which they are introduced.
 ### 6.6 Heap Allocation
 
 `box` is the single allocation intrinsic. It moves a value into the
-heap region, which is `'static` — it outlives every other region.
+heap region, which is referred to as the `'static` region, which 
+outlives every other region.
 
 ```
 Γ ⊢ e ⇒ T : Owned
@@ -594,7 +595,8 @@ the chain with no hidden allocation.
 
 `Monad` is only well-kinded at `Owned → Owned` type constructors.
 Attempting to instantiate it at a `Borrowed` constructor is a kind
-error — the lattice enforces this structurally rather than by convention.
+error, and the lattice is able to enforce this structurally, rather
+than by convention.
 
 `fmap` and `ap` can both be derived from `pure` and `bind`, so a
 `Monad` instance needs only provide those two. The `Functor` and
@@ -617,7 +619,7 @@ typeclass Copy<T : Owned> requires Clone<T> {}
 ```
 
 Primitive types (`Int`, `Bool`, `Unit`) implement `Copy` automatically.
-Heap-allocated types (`Box<T>`) do not — they require explicit `.clone()`.
+Heap-allocated types (`Box<T>`) do not, and require explicit `clone()`.
 
 ---
 
@@ -637,8 +639,8 @@ KEYWORD = {
 }
 ```
 
-`move`, `copy`, and `drop` are not keywords — they are library
-identifiers. `clone` is a method name.
+`move`, `copy`, and `drop` are library identifiers, not keywords.
+`clone` is a method name.
 
 ### 8.2 Lifetime / Region Syntax
 

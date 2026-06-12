@@ -7,8 +7,6 @@ use lang::interpreter::mir::MirValue;
 
 use crate::common::*;
 
-/// Nested if-else with three levels — wrong block patching would
-/// execute the wrong branch.
 #[test]
 fn nested_if_else_executes_correct_branch() {
     let src = "
@@ -32,7 +30,6 @@ fn nested_if_else_executes_correct_branch() {
     );
 }
 
-/// while-inside-if — exercises multiple levels of block reversal.
 #[test]
 fn while_inside_if_executes_correctly() {
     let src = "

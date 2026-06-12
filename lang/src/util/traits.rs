@@ -21,6 +21,9 @@ impl fmt::Display for Expression<'_> {
             Expression::Unit => {
                 write!(f, "()")
             }
+            Expression::Borrow(inner) => {
+                write!(f, "&{}", inner.expr)
+            }
             Expression::Var(name) => {
                 write!(f, "{:?}", name)
             }

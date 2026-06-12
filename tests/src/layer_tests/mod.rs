@@ -10,6 +10,7 @@
 //! Tests in this category do NOT verify agreement between layers—see
 //! `agreement_tests` for cross-layer verification.
 
+pub mod borrow_tests;
 pub mod enum_tests;
 pub mod generics_tests;
 pub mod interpreter_tests;
@@ -19,5 +20,6 @@ pub mod operator_tests;
 pub mod ownership_tests;
 pub mod parse_tests;
 pub mod qualify_tests;
+pub mod region_param_tests;
 pub mod region_tests;
 pub mod typecheck_tests;

@@ -70,6 +70,7 @@ pub(crate) fn find_in_expr<'a, 'tcx>(expr: &'a Expr<'tcx>, pos: Pos) -> Option<&
             find_in_expr(left, pos).or_else(|| find_in_expr(right, pos))
         }
         Expression::UnOp { right, .. } => find_in_expr(right, pos),
+        Expression::Borrow(inner) => find_in_expr(inner, pos),
         Expression::If { cond, t, f } => find_in_expr(cond, pos)
             .or_else(|| find_in_expr(t, pos))
             .or_else(|| find_in_expr(f, pos)),

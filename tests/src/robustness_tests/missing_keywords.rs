@@ -12,10 +12,8 @@ fn while_cannot_be_used_as_function_name() {
     parse_fails("def while(): Int := 1  def main(): Int := while()");
 }
 
-/// Same for `do` — it should not be allowed as a variable name.
 #[test]
 fn do_cannot_be_used_as_variable_name() {
-    // `let do: Int = 1` — `do` is not guarded and currently parses.
     parse_fails(
         "def main(): Int := {
             let do: Int = 5;

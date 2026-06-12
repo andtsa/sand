@@ -19,6 +19,8 @@ use crate::compiler::structure::OriginalFun;
 use crate::compiler::structure::OriginalVar;
 use crate::compiler::structure::OriginalVarRef;
 use crate::compiler::structure::Range;
+use crate::compiler::structure::RegionParam;
+use crate::compiler::structure::RegionParamSpec;
 use crate::compiler::structure::Set;
 use crate::compiler::structure::TypeParam;
 use crate::compiler::structure::TypeParamSpec;
@@ -45,13 +47,14 @@ const DEFAULT_MODULE_NAME: &str = "mAin";
 
 /// Backing store for all arena-allocated compiler data.
 ///
-/// Opaque by design — only [`CompileCtx`] internals allocate through it.
-/// To swap the allocators, change only this struct and its methods.
+/// this is opaque by design, since only [`CompileCtx`] internals allocate
+/// through it. to swap the allocators we only need to change this struct and
+/// its methods.
 ///
 /// `bump` holds `Copy`, destructor-free type data ([`TyKind`]). The
 /// [`typed_arena::Arena`]s hold owning data ([`OriginalFun`], [`CodeModule`],
 /// [`EnumDef`], [`OriginalVar`]) whose `String`/`Vec` fields must have their
-/// destructors run when the arena is dropped — `bumpalo` would leak them.
+/// destructors run when the arena is dropped, since `bumpalo` would leak them.
 struct Arenas {
     bump: bumpalo::Bump,
     functions: typed_arena::Arena<OriginalFun<'static>>,
@@ -61,12 +64,12 @@ struct Arenas {
 }
 
 /// Safety: after the initial compilation phase, the arena is never mutated
-/// again — only existing allocations are read. `bumpalo::Bump` and
+/// again; only existing allocations are read. `bumpalo::Bump` and
 /// `typed_arena::Arena` both use `Cell<>` internally, which makes them `!Sync`
 /// to prevent concurrent *writes*, but since the LSP and other multi-threaded
 /// users only read after compilation, sharing `Arenas` across threads is sound.
 ///
-/// todo: create a new struct RoArena that takes ownership of the inner arenas
+/// todo: create a new struct `RoArena` that takes ownership of the inner arenas
 /// after compilation has finished, and implement send + sync on that
 unsafe impl Send for Arenas {}
 unsafe impl Sync for Arenas {}
@@ -141,13 +144,20 @@ pub struct CompileCtx<'tcx> {
     // regions
     /// Number of region variables allocated so far.
     region_count: usize,
-    /// Region name → variable. Regions are currently interned globally (they
-    /// have no semantics yet); per-scope region binding arrives in Step 8.
-    region_names: Map<String, RegionVar>,
+    /// Name → variable for the region parameters in scope while the current
+    /// declaration is being built (set by [`Self::begin_region_params`]).
+    /// Named regions (`&'r T`, `T @ 'r`) resolve against this scope, so a
+    /// region must be declared (`def f<'r>(...)`) to be referenced.
+    cur_regions: Map<String, RegionVar>,
+    /// The single region shared by all elided borrows (`&T`/`&e` with no
+    /// lifetime), allocated lazily. Shared so that an elided `&T` type and an
+    /// elided `&e` value compare equal; lexically-scoped elision regions arrive
+    /// with the escape check in Step 8b.
+    anon_region_var: Option<RegionVar>,
 
     // type parameters
-    /// Number of type parameters allocated so far — assigns each a globally
-    /// unique [`TypeParamId`].
+    /// Number of type parameters allocated so far.
+    /// assigns each a globally unique [`TypeParamId`].
     type_param_count: usize,
     /// Display names of every allocated type parameter, keyed by id.
     type_param_names: Map<TypeParamId, String>,
@@ -156,8 +166,8 @@ pub struct CompileCtx<'tcx> {
     cur_type_params: Map<String, TypeParamId>,
 
     // variables
-    /// Number of original variables registered so far — assigns each a stable
-    /// monotonic `id` used for ordering.
+    /// Number of original variables registered so far.
+    /// assigns each a stable monotonic `id` used for ordering.
     var_count: usize,
     pub variable_usages: Map<OriginalVarRef<'tcx>, Set<Range>>,
     /// Number of uniquified variables registered so far — assigns each a stable
@@ -241,7 +251,7 @@ impl Drop for CompileCtx<'_> {
             // (Ty<'tcx>, etc.) is `Copy` with a trivial drop, so there is no
             // use-after-free even if some arena-backed value is still
             // technically in scope at the point where `CompileCtx` is dropped
-            // — the final drop of such values never dereferences the pointer.
+            // the final drop of such values never dereferences the pointer.
             unsafe {
                 let _ = Box::from_raw(self.arenas as *const Arenas as *mut Arenas);
             }
@@ -285,7 +295,8 @@ impl<'tcx> CompileCtx<'tcx> {
             app_interner: Default::default(),
             region_ty_interner: Default::default(),
             region_count: 0,
-            region_names: Default::default(),
+            cur_regions: Default::default(),
+            anon_region_var: None,
             type_param_count: 0,
             type_param_names: Default::default(),
             cur_type_params: Default::default(),
@@ -325,7 +336,7 @@ impl<'tcx> CompileCtx<'tcx> {
         ty
     }
 
-    /// Intern a tuple type from its element handles. Arity must be >= 2 —
+    /// Intern a tuple type from its element handles. Arity must be >= 2.
     /// callers must route arity-0 to `ctx.types.unit` and arity-1 to the
     /// element type itself before calling this.
     pub fn intern_tuple(&mut self, elems: Vec<Ty<'tcx>>) -> Ty<'tcx> {
@@ -361,28 +372,30 @@ impl<'tcx> CompileCtx<'tcx> {
         ty
     }
 
-    /// The kind of a type — the default kind of a value of that type (Calculus
-    /// §5 kinding judgment). Every current type is `Owned`; borrow modes and
-    /// declared constructor kinds arrive in later steps.
-    pub fn kind_of(&self, _ty: Ty<'tcx>) -> Kind {
-        Kind::Owned
+    /// # get the _kind of a type_
+    /// returns the default kind for a value of that type
+    /// (see Calculus§5 kinding judgment).
+    /// A shared reference `&'r T` has kind `Borrowed 'r`
+    /// (`K-Borrow`); everything else is `Owned`.
+    pub fn kind_of(&self, ty: Ty<'tcx>) -> Kind {
+        match ty.kind() {
+            TyKind::Ref(r, _) => Kind::Borrowed(*r),
+            _ => Kind::Owned,
+        }
     }
 
     // ============================ Regions ====================================
 
-    /// Resolve a lifetime name to a [`Region`]. `'static` is the permanent
-    /// region; any other name is interned to a [`RegionVar`].
-    pub fn resolve_region(&mut self, name: &str) -> Region {
+    /// Resolve a *declared* lifetime name to its [`Region`], or `None` if no
+    /// region by that name is in scope. `'static` is always available; any
+    /// other name must be a region parameter of the current declaration
+    /// (`def f<'r>(...)`). Elided borrows do not go through here — they call
+    /// [`Self::anon_region`] directly.
+    pub fn resolve_region(&self, name: &str) -> Option<Region> {
         if name == "static" {
-            return Region::Static;
+            return Some(Region::Static);
         }
-        if let Some(&rv) = self.region_names.get(name) {
-            return Region::Var(rv);
-        }
-        let rv = RegionVar(self.region_count);
-        self.region_count += 1;
-        self.region_names.insert(name.to_string(), rv);
-        Region::Var(rv)
+        self.cur_regions.get(name).map(|&rv| Region::Var(rv))
     }
 
     /// Intern a region-ascribed type `inner @ region` (Calculus §2.3).
@@ -395,6 +408,25 @@ impl<'tcx> CompileCtx<'tcx> {
         let ty = Ty(kind_ref);
         self.region_ty_interner.insert(key, ty);
         ty
+    }
+
+    /// Intern a shared reference type `&region inner` (Calculus §2.3).
+    pub fn ref_ty(&mut self, region: Region, inner: Ty<'tcx>) -> Ty<'tcx> {
+        self.intern_ty(TyKind::Ref(region, inner))
+    }
+
+    /// The shared anonymous region used for elided borrows (`&e`, `&T` with no
+    /// explicit lifetime). All elided borrows share one region for now, so that
+    /// an elided `&T` type and an elided `&e` value compare equal. Per-borrow
+    /// fresh regions and the escape check arrive with the solver in Step 8b.
+    pub fn anon_region(&mut self) -> Region {
+        if let Some(rv) = self.anon_region_var {
+            return Region::Var(rv);
+        }
+        let rv = RegionVar(self.region_count);
+        self.region_count += 1;
+        self.anon_region_var = Some(rv);
+        Region::Var(rv)
     }
 
     /// Discharge a set of outlives constraints. A trivially-satisfied stub
@@ -448,10 +480,39 @@ impl<'tcx> CompileCtx<'tcx> {
         self.cur_type_params = params.iter().map(|p| (p.name.clone(), p.id)).collect();
     }
 
-    /// Clear the current in-scope type parameters (see
-    /// [`Self::begin_type_params`]).
+    /// Allocate the region parameters for a generic declaration and make them
+    /// the current in-scope set, so that [`Self::resolve_region`] can resolve
+    /// their names. Returns the [`RegionParam`] list to store on the
+    /// declaration. Cleared alongside type parameters by
+    /// [`Self::end_type_params`].
+    pub fn begin_region_params(&mut self, specs: &[RegionParamSpec]) -> Vec<RegionParam> {
+        let mut params = Vec::with_capacity(specs.len());
+        let mut scope = Map::new();
+        for spec in specs {
+            let rv = RegionVar(self.region_count);
+            self.region_count += 1;
+            scope.insert(spec.name.clone(), rv);
+            params.push(RegionParam {
+                name: spec.name.clone(),
+                region: rv,
+                range: spec.range,
+            });
+        }
+        self.cur_regions = scope;
+        params
+    }
+
+    /// Re-enter an already-allocated region-parameter scope (the region
+    /// counterpart of [`Self::enter_type_param_scope`]).
+    pub fn enter_region_param_scope(&mut self, params: &[RegionParam]) {
+        self.cur_regions = params.iter().map(|p| (p.name.clone(), p.region)).collect();
+    }
+
+    /// Clear the current in-scope type *and* region parameters (see
+    /// [`Self::begin_type_params`] / [`Self::begin_region_params`]).
     pub fn end_type_params(&mut self) {
         self.cur_type_params.clear();
+        self.cur_regions.clear();
     }
 
     /// Resolve a name to a type parameter in the current declaration's scope.
@@ -601,7 +662,8 @@ impl<'tcx> CompileCtx<'tcx> {
     /// Phase 1 of enum registration: allocate the `EnumRef` and record the
     /// variant *names*, with every payload initially `None`. This must run
     /// for every enum in the program before phase 2
-    /// ([`Self::set_variant_payload`]) resolves payload type annotations —
+    /// ([`Self::set_variant_payload`]) resolves payload type annotations
+    ///
     /// payloads may reference other enums (including forward / recursive
     /// references), so every `EnumRef` must already exist before any
     /// `type_` gets resolved.
@@ -610,6 +672,7 @@ impl<'tcx> CompileCtx<'tcx> {
         name: &str,
         variant_names: Vec<String>,
         type_params: Vec<TypeParam>,
+        region_params: Vec<RegionParam>,
         range: Range,
         module: ModuleRef<'tcx>,
     ) -> Result<EnumRef<'tcx>, ContextError> {
@@ -634,6 +697,7 @@ impl<'tcx> CompileCtx<'tcx> {
             src_module: module,
             id,
             type_params,
+            region_params,
             is_anonymous: false,
         };
         let er = EnumRef(self.arenas.alloc_enum(def));
@@ -731,6 +795,7 @@ impl<'tcx> CompileCtx<'tcx> {
             src_module,
             id,
             type_params: Vec::new(),
+            region_params: Vec::new(),
             is_anonymous: true,
         };
         let er = EnumRef(self.arenas.alloc_enum(def));

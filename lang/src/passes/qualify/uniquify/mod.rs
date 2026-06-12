@@ -171,6 +171,8 @@ fn uniquify_function<'tcx>(
         name: f.name,
         range: f.range,
         type_params: f.type_params.clone(),
+        region_params: f.region_params.clone(),
+        where_constraints: f.where_constraints.clone(),
         parameters,
         ret_type: f.ret_type,
         body,

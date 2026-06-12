@@ -15,7 +15,6 @@ fn qualify_rejects_duplicate_parameter_names() {
     );
 }
 
-/// Three params, all distinct — must still compile fine.
 #[test]
 fn three_distinct_params_accepted() {
     qualify(

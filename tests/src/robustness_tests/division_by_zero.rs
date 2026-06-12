@@ -32,11 +32,10 @@ fn hir_division_by_zero_does_not_panic() {
     });
     assert!(
         result.is_ok(),
-        "HIR interpreter panicked on division by zero — should return Err instead"
+        "HIR interpreter panicked on division by zero should return Err"
     );
 }
 
-/// Division by zero via a variable (not a literal) — same contract.
 #[test]
 fn mir_runtime_division_by_zero_via_variable() {
     let result = run_mir_result(

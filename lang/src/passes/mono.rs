@@ -115,6 +115,8 @@ impl<'tcx> Mono<'tcx> {
                 name: spec_fr,
                 range: f.range,
                 type_params: Vec::new(),
+                region_params: Vec::new(),
+                where_constraints: Vec::new(),
                 parameters,
                 ret_type,
                 body,
@@ -152,7 +154,14 @@ impl<'tcx> Mono<'tcx> {
         let range = base.range;
 
         let spec_er = ctx
-            .register_enum(&mangled, variant_names, Vec::new(), range, module)
+            .register_enum(
+                &mangled,
+                variant_names,
+                Vec::new(),
+                Vec::new(),
+                range,
+                module,
+            )
             .unwrap_or_else(|e| internal_bug!("mono enum registration failed: {e}"));
         // Insert before resolving payloads so recursive enums terminate.
         self.enum_instances.insert(key, spec_er);
@@ -196,8 +205,9 @@ impl<'tcx> Mono<'tcx> {
                 let spec_er = self.request_enum(ctx, base, args);
                 ctx.enum_ty(spec_er)
             }
-            // Regions have no runtime representation: erase `T @ 'r` to `T`.
-            TyKind::Region(inner, _) => self.mono_ty(ctx, *inner, mapping),
+            // Regions and shared borrows have no distinct runtime
+            // representation: erase `T @ 'r` and `&'r T` to `T`.
+            TyKind::Region(inner, _) | TyKind::Ref(_, inner) => self.mono_ty(ctx, *inner, mapping),
             _ => ty,
         }
     }
@@ -214,6 +224,7 @@ impl<'tcx> Mono<'tcx> {
             Expression::Bool(b) => Expression::Bool(*b),
             Expression::Unit => Expression::Unit,
             Expression::Var(v) => Expression::Var(*v),
+            Expression::Borrow(inner) => Expression::Borrow(self.boxed(ctx, inner, mapping)),
             Expression::If { cond, t, f } => Expression::If {
                 cond: self.boxed(ctx, cond, mapping),
                 t: self.boxed(ctx, t, mapping),
@@ -474,8 +485,8 @@ fn mangle_ty<'tcx>(ctx: &CompileCtx<'tcx>, ty: Ty<'tcx>) -> String {
             let inner: Vec<String> = elems.iter().map(|e| mangle_ty(ctx, *e)).collect();
             format!("Tup{}_{}", elems.len(), inner.join("_"))
         }
-        // regions are erased by `mono_ty` before mangling is ever reached.
-        TyKind::Param(_) | TyKind::App(..) | TyKind::Region(..) => {
+        // regions and borrows are erased by `mono_ty` before mangling.
+        TyKind::Param(_) | TyKind::App(..) | TyKind::Region(..) | TyKind::Ref(..) => {
             internal_bug!("type argument is not concrete during mangling: {ty}")
         }
     }

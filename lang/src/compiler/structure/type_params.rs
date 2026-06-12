@@ -2,6 +2,7 @@
 
 use crate::compiler::structure::Range;
 use crate::lang::types::Kind;
+use crate::lang::types::RegionVar;
 use crate::lang::types::TypeParamId;
 use crate::lang::types::Variance;
 
@@ -28,4 +29,23 @@ pub struct TypeParamSpec {
     pub range: Range,
     pub variance: Variance,
     pub kind: Kind,
+}
+
+/// A single declared region (lifetime) parameter (the `'r` in `def f<'r>(...)`
+/// or `type Ref<'r, a>`; Calculus §8.4).
+///
+/// `region` is the [`RegionVar`] allocated during AST building, scoped to this
+/// declaration; `name` and `range` are retained for diagnostics. Uses of the
+/// parameter inside a type (`&'r T`, `T @ 'r`) resolve to this `region`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct RegionParam {
+    pub name: String,
+    pub region: RegionVar,
+    pub range: Range,
+}
+
+/// A parsed region-parameter declaration before a [`RegionVar`] is assigned.
+pub struct RegionParamSpec {
+    pub name: String,
+    pub range: Range,
 }

@@ -14,6 +14,7 @@ use crate::compiler::structure::FileRef;
 use crate::compiler::structure::Map;
 use crate::compiler::structure::ModuleRef;
 use crate::compiler::structure::Range;
+use crate::compiler::structure::RegionParamSpec;
 use crate::compiler::structure::TypeParamSpec;
 use crate::compiler::structure::UriError;
 use crate::internal_bug;
@@ -63,6 +64,11 @@ pub enum AstError {
 
     #[error("unknown module '{module}' at {range}")]
     UnknownModule { module: String, range: Range },
+
+    #[error(
+        "unknown lifetime '{name}' at {range}: declare it as a region parameter, e.g. `<'{name}>`"
+    )]
+    UnknownRegion { name: String, range: Range },
 
     #[error(
         "generic type '{name}' expects {expected} type argument(s) but {found} were given at {range}"
@@ -211,14 +217,19 @@ pub fn build_program<'run>(
                     let name_pair = inner.next().missing("enum name", range)?;
                     let enum_name = name_pair.as_str().to_string();
 
-                    // optional type parameters: `type Option<T> = ...`. Allocate
-                    // their ids now so phase 1.5 can resolve `T` in payloads.
-                    let type_params =
+                    // optional type and region parameters: `type Ref<'r, T> =
+                    // ...`. Allocate them now so phase 1.5 can resolve `T` and
+                    // `'r` in payloads.
+                    let (type_params, region_params) =
                         if inner.peek().map(|p| p.as_rule()) == Some(Rule::type_params) {
                             let tp_pair = inner.next().missing("type parameters", range)?;
-                            ctx.begin_type_params(&collect_type_params(tp_pair))
+                            let type_params =
+                                ctx.begin_type_params(&collect_type_params(tp_pair.clone()));
+                            let region_params =
+                                ctx.begin_region_params(&collect_region_params(tp_pair));
+                            (type_params, region_params)
                         } else {
-                            Vec::new()
+                            (Vec::new(), Vec::new())
                         };
 
                     // enum_variant = { identifier ~ ("(" ~ type_ ~ ")")? }
@@ -239,8 +250,14 @@ pub fn build_program<'run>(
                     }
 
                     let is_generic = !type_params.is_empty();
-                    let er =
-                        ctx.register_enum(&enum_name, variant_names, type_params, range, cur_mod)?;
+                    let er = ctx.register_enum(
+                        &enum_name,
+                        variant_names,
+                        type_params,
+                        region_params,
+                        range,
+                        cur_mod,
+                    )?;
                     if is_generic {
                         generic_enums.push(er);
                     }
@@ -261,7 +278,9 @@ pub fn build_program<'run>(
     // a `T` in `type Option<T> = Some(T)` resolves to that enum's `Ty::Param`.
     for (er, idx, payload_pair) in pending_payloads {
         let params = ctx.get_enum(er).type_params.clone();
+        let region_params = ctx.get_enum(er).region_params.clone();
         ctx.enter_type_param_scope(&params);
+        ctx.enter_region_param_scope(&region_params);
         let payload_ty = build_type(ctx, payload_pair)?;
         ctx.set_variant_payload(er, idx, payload_ty);
     }
@@ -368,15 +387,18 @@ fn build_function<'run>(
         });
     }
 
-    // optional type parameters: `def f<T, U>(...)`. Scoping them here means
-    // `build_type` resolves `T`/`U` to `Ty::Param` for the rest of this
-    // function's signature and body.
-    let type_params = if inner.peek().map(|p| p.as_rule()) == Some(Rule::type_params) {
-        let tp_pair = inner.next().missing("type parameters", range)?;
-        ctx.begin_type_params(&collect_type_params(tp_pair))
-    } else {
-        ctx.begin_type_params(&[])
-    };
+    // optional type and region parameters: `def f<'r, T, U>(...)`. Scoping them
+    // here means `build_type` resolves `T`/`U` to `Ty::Param` and `'r` to its
+    // region for the rest of this function's signature and body.
+    let (type_params, region_params) =
+        if inner.peek().map(|p| p.as_rule()) == Some(Rule::type_params) {
+            let tp_pair = inner.next().missing("type parameters", range)?;
+            let type_params = ctx.begin_type_params(&collect_type_params(tp_pair.clone()));
+            let region_params = ctx.begin_region_params(&collect_region_params(tp_pair));
+            (type_params, region_params)
+        } else {
+            (ctx.begin_type_params(&[]), ctx.begin_region_params(&[]))
+        };
 
     // collect optional parameters (parameter or parameters)
     let mut parameters = Vec::new();
@@ -421,6 +443,15 @@ fn build_function<'run>(
     };
     let ret_type = build_type(ctx, ty_pair)?;
 
+    // optional `where 'r >= 's` outlives constraints (resolved while the
+    // function's region parameters are still in scope).
+    let where_constraints = if inner.peek().map(|p| p.as_rule()) == Some(Rule::where_clause) {
+        let wc_pair = inner.next().missing("where clause", range)?;
+        build_where_clause(ctx, wc_pair)?
+    } else {
+        Vec::new()
+    };
+
     // final child is the function body expression
     let body_pair = inner.next().missing("function body expression", range)?;
     let body = build_expr(ctx, body_pair, src)?;
@@ -432,10 +463,32 @@ fn build_function<'run>(
         name: ofref,
         range: Range::from(name_pair),
         type_params,
+        region_params,
+        where_constraints,
         parameters,
         ret_type,
         body,
     })
+}
+
+/// Build the outlives constraints from a `where 'r >= 's, ...` clause. Both
+/// lifetimes must already be in scope (declared region parameters or
+/// `'static`).
+fn build_where_clause(
+    ctx: &CompileCtx<'_>,
+    pair: Pair<Rule>,
+) -> Result<Vec<RegionConstraint>, AstError> {
+    assert_eq!(pair.as_rule(), Rule::where_clause);
+    pair.into_inner()
+        .map(|wc| {
+            // where_constraint = { lifetime ~ ">=" ~ lifetime }
+            let range = Range::from(&wc);
+            let mut parts = wc.into_inner();
+            let longer = resolve_lifetime(ctx, &parts.next().missing("lifetime", range)?)?;
+            let shorter = resolve_lifetime(ctx, &parts.next().missing("lifetime", range)?)?;
+            Ok(RegionConstraint { longer, shorter })
+        })
+        .collect()
 }
 
 /// Validate the declared variance of a generic enum's parameters against the
@@ -472,15 +525,19 @@ fn ty_mentions_param(ty: Ty<'_>, id: TypeParamId) -> bool {
         TyKind::Param(p) => *p == id,
         TyKind::Tuple(elems) => elems.iter().any(|e| ty_mentions_param(*e, id)),
         TyKind::App(_, args) => args.iter().any(|a| ty_mentions_param(*a, id)),
+        TyKind::Region(inner, _) | TyKind::Ref(_, inner) => ty_mentions_param(*inner, id),
         _ => false,
     }
 }
 
 /// Parse each `type_param` in a `type_params` pair, applying the default
 /// variance (`Covariant`) and kind (`Owned`) when their annotations are absent.
+/// Region parameters in the same `<...>` list are handled by
+/// [`collect_region_params`] and skipped here.
 fn collect_type_params(pair: Pair<Rule>) -> Vec<TypeParamSpec> {
     assert_eq!(pair.as_rule(), Rule::type_params);
     pair.into_inner()
+        .filter(|p| p.as_rule() == Rule::type_param)
         .map(|tp| {
             // type_param = { variance_ann? ~ identifier ~ (":" ~ kind_ann)? }
             let range = Range::from(&tp);
@@ -516,6 +573,24 @@ fn collect_type_params(pair: Pair<Rule>) -> Vec<TypeParamSpec> {
         .collect()
 }
 
+/// Parse each `region_param` (`'r`) in a `type_params` pair. Type parameters in
+/// the same `<...>` list are handled by [`collect_type_params`] and skipped.
+fn collect_region_params(pair: Pair<Rule>) -> Vec<RegionParamSpec> {
+    assert_eq!(pair.as_rule(), Rule::type_params);
+    pair.into_inner()
+        .filter(|p| p.as_rule() == Rule::region_param)
+        .map(|rp| {
+            // region_param = { lifetime }
+            let range = Range::from(&rp);
+            let lt = rp.into_inner().next();
+            let name = lt
+                .map(|l| l.as_str().trim_start_matches('\'').to_string())
+                .unwrap_or_default();
+            RegionParamSpec { name, range }
+        })
+        .collect()
+}
+
 fn build_parameter<'run>(
     ctx: &mut CompileCtx<'run>,
     pair: Pair<Rule>,
@@ -543,6 +618,19 @@ fn build_parameter<'run>(
     })
 }
 
+/// Resolve a `lifetime` token (`'r`) to its [`Region`]. The region must be in
+/// scope — `'static` always is, any other name must be a declared region
+/// parameter of the enclosing item (`def f<'r>(...)`).
+fn resolve_lifetime(ctx: &CompileCtx<'_>, lt: &Pair<Rule>) -> Result<Region, AstError> {
+    assert_eq!(lt.as_rule(), Rule::lifetime);
+    let name = lt.as_str().trim_start_matches('\'');
+    ctx.resolve_region(name)
+        .ok_or_else(|| AstError::UnknownRegion {
+            name: name.to_string(),
+            range: Range::from(lt),
+        })
+}
+
 /// Build a type, applying an optional `@ 'r` region ascription (Calculus §2.3).
 /// `type_ = { core_type ~ ("@" ~ lifetime)? }`.
 fn build_type<'run>(ctx: &mut CompileCtx<'run>, pair: Pair<Rule>) -> Result<Ty<'run>, AstError> {
@@ -552,8 +640,7 @@ fn build_type<'run>(ctx: &mut CompileCtx<'run>, pair: Pair<Rule>) -> Result<Ty<'
     let core = inner.next().missing("core type", range)?;
     let mut ty = build_core_type(ctx, core)?;
     if let Some(lt) = inner.next() {
-        assert_eq!(lt.as_rule(), Rule::lifetime);
-        let region = ctx.resolve_region(lt.as_str().trim_start_matches('\''));
+        let region = resolve_lifetime(ctx, &lt)?;
         ty = ctx.region_ty(ty, region);
     }
     Ok(ty)
@@ -577,6 +664,19 @@ fn build_core_type<'run>(
     // plain identifier / built-in keyword.
     let inner_opt = pair.clone().into_inner().next();
     match inner_opt {
+        Some(inner) if inner.as_rule() == Rule::borrow_type => {
+            // borrow_type = { "&" ~ lifetime? ~ core_type }
+            let mut parts = inner.into_inner();
+            let first = parts.next().missing("borrow target", range)?;
+            let (region, core_pair) = if first.as_rule() == Rule::lifetime {
+                let r = resolve_lifetime(ctx, &first)?;
+                (r, parts.next().missing("borrow target type", range)?)
+            } else {
+                (ctx.anon_region(), first)
+            };
+            let inner_ty = build_core_type(ctx, core_pair)?;
+            Ok(ctx.ref_ty(region, inner_ty))
+        }
         Some(inner) if inner.as_rule() == Rule::tuple_type => {
             // tuple_type = { "(" ~ type_ ~ ("," ~ type_)+ ~ ")" }
             let elem_tys = inner
@@ -787,6 +887,45 @@ fn build_statement<'run>(
                     ty,
                     val: expr,
                     range: inner_range,
+                });
+            }
+
+            // Borrow binding `let &x : T = e` (Calculus §6.4): desugar to
+            // `let x : &T = &e`, reusing the borrow-expression machinery — `e`
+            // is borrowed (not consumed) and `x` holds a shared reference.
+            if first_child.as_rule() == Rule::borrow_binding {
+                let name_pair = first_child
+                    .into_inner()
+                    .next()
+                    .missing("borrow binding name", inner_range)?;
+                let var = HirVar::Decl(ctx.new_original_variable(&name_pair, Rule::declaration)?);
+                let next = decl_inner
+                    .next()
+                    .missing("borrow declaration body", inner_range)?;
+                let (ty, expr_pair) = if next.as_rule() == Rule::type_ {
+                    let inner_ty = build_type(ctx, next)?;
+                    let region = ctx.anon_region();
+                    (
+                        Some(ctx.ref_ty(region, inner_ty)),
+                        decl_inner
+                            .next()
+                            .missing("borrow declaration expression", inner_range)?,
+                    )
+                } else {
+                    (None, next)
+                };
+                let inner_expr = build_expr(ctx, expr_pair, src)?;
+                let expr_range = inner_expr.range;
+                let borrowed = Expr {
+                    expr: Expression::Borrow(Box::new(inner_expr)),
+                    range: expr_range,
+                };
+                return Ok(Statement::Declaration {
+                    name: var,
+                    range: inner_range,
+                    ty,
+                    is_mutable: false,
+                    val: borrowed,
                 });
             }
 
@@ -1225,6 +1364,19 @@ fn build_primary<'run>(
         .next()
         .missing("inner expression", range)?;
     match inner.as_rule() {
+        Rule::borrow_expr => {
+            // borrow_expr = { "&" ~ primary }
+            let inner_range = Range::from(&inner);
+            let target = inner
+                .into_inner()
+                .next()
+                .missing("borrow target expression", inner_range)?;
+            let e = build_primary(ctx, target, src)?;
+            Ok(Expr {
+                expr: Expression::Borrow(Box::new(e)),
+                range,
+            })
+        }
         Rule::expression => build_expr(ctx, inner, src),
         Rule::ifstatement => build_if(ctx, inner, src),
         Rule::whileloop => build_while(ctx, inner, src),

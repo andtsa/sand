@@ -110,7 +110,7 @@ impl FnName {
         FnName(pair.as_str().to_string())
     }
 
-    /// Construct a name directly — used for compiler-synthesised functions such
+    /// Construct a name directly. used for compiler-synthesised functions such
     /// as monomorphised specialisations (`id$Int`).
     pub(in crate::compiler) fn synthetic(name: String) -> Self {
         FnName(name)

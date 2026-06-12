@@ -15,6 +15,9 @@ use crate::compiler::structure::EnumDef;
 pub enum Kind {
     /// A normal owned value.
     Owned,
+    /// A shared (immutable) borrow in region `'r` (Calculus §1.1). A borrowed
+    /// value may be used multiple times and is not consumed.
+    Borrowed(Region),
     /// The uninhabited kind: a diverging expression (e.g. an infinite loop)
     /// never produces a value, so it is usable where any kind is expected.
     Never,
@@ -22,18 +25,26 @@ pub enum Kind {
 
 impl Kind {
     /// Subkinding `self <: other` (Calculus §1.2): "`self` is usable where
-    /// `other` is expected". `Never` is below everything; otherwise kinds are
-    /// only subkinds of themselves (until borrow modes arrive).
+    /// `other` is expected". `Never` is the bottom; `Owned` coerces to any
+    /// `Borrowed` (`SK-OwnedBorrowed`); otherwise kinds are subkinds only of
+    /// themselves (distinct borrow regions are incomparable).
     pub fn is_subkind(self, other: Kind) -> bool {
-        self == Kind::Never || self == other
+        match (self, other) {
+            (Kind::Never, _) => true,
+            (a, b) if a == b => true,
+            (Kind::Owned, Kind::Borrowed(_)) => true,
+            _ => false,
+        }
     }
 
     /// Least upper bound of two kinds (Calculus §1.4), used to merge the kinds
-    /// of the branches of an `if`/`match`. `Never` is the identity.
+    /// of the branches of an `if`/`match`. `Never` is the identity; any two
+    /// distinct non-`Never` kinds join to `Owned` (the top).
     pub fn join(self, other: Kind) -> Kind {
         match (self, other) {
             (Kind::Never, k) | (k, Kind::Never) => k,
-            (Kind::Owned, Kind::Owned) => Kind::Owned,
+            (a, b) if a == b => a,
+            _ => Kind::Owned,
         }
     }
 }
@@ -155,6 +166,10 @@ pub enum TyKind<'tcx> {
     /// kind as its inner type. Regions have no runtime representation, so
     /// monomorphisation erases this back to the inner `T`.
     Region(Ty<'tcx>, Region),
+    /// A shared reference `&'r T` (Calculus §2.3), of kind `Borrowed 'r`.
+    /// Immutable shared borrows have no distinct runtime representation in this
+    /// phase, so monomorphisation erases `&'r T` to `T`.
+    Ref(Region, Ty<'tcx>),
 }
 
 /// A shallow, `Copy` handle to an interned [`TyKind`].
@@ -178,6 +193,8 @@ impl<'tcx> Ty<'tcx> {
         match self.kind() {
             TyKind::Int | TyKind::Bool | TyKind::Unit => true,
             TyKind::Region(t, _) => t.is_copy(),
+            // shared references are freely copyable (immutable, no ownership).
+            TyKind::Ref(..) => true,
             _ => false,
         }
     }
@@ -191,6 +208,7 @@ impl<'tcx> Ty<'tcx> {
             TyKind::Tuple(elems) => elems.iter().any(|t| t.has_param()),
             TyKind::App(_, args) => args.iter().any(|t| t.has_param()),
             TyKind::Region(t, _) => t.has_param(),
+            TyKind::Ref(_, t) => t.has_param(),
             _ => false,
         }
     }
@@ -225,6 +243,7 @@ impl<'tcx> Ty<'tcx> {
                 xs.iter().zip(*ys).all(|(x, y)| x.compatible(*y))
             }
             (TyKind::Region(a, r1), TyKind::Region(b, r2)) if r1 == r2 => a.compatible(*b),
+            (TyKind::Ref(r1, a), TyKind::Ref(r2, b)) if r1 == r2 => a.compatible(*b),
             _ => false,
         }
     }
@@ -296,6 +315,7 @@ impl fmt::Display for Ty<'_> {
                 write!(f, ">)")
             }
             TyKind::Region(t, r) => write!(f, "{t} @ {r:?}"),
+            TyKind::Ref(r, t) => write!(f, "&{r:?} {t}"),
         }
     }
 }
