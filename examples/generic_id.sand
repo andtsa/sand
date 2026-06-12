@@ -1,0 +1,8 @@
+//@TEST:{42}[]
+// generic functions monomorphise and run through LLVM codegen.
+
+def id<T>(x: T): T := x
+
+def first<A, B>(a: A, b: B): A := a
+
+def main(): Int := id(first(42, true))

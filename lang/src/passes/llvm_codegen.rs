@@ -654,7 +654,7 @@ impl<'ctx> LlvmCodegen<'ctx> {
                 let field_tys: Vec<_> = tys.iter().map(|t| self.llvm_type(ctx, *t)).collect();
                 self.context.struct_type(&field_tys, false).into()
             }
-            _ => panic!("no LLVM type for {:?}", ty),
+            _ => internal_bug!("no LLVM type for {:?}", ty),
         }
     }
 

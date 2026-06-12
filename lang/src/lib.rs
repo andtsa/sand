@@ -119,6 +119,10 @@ pub fn compile_hir<'proj>(
     let typed_program = passes::ownership::check(ctx, typed_program)
         .map_err(|e| SandLangErrorContext::with_module(e.module).wrap_err(e.error))?;
 
+    // Monomorphisation erases all type parameters, so every later pass (MIR
+    // lowering, codegen) only sees concrete types.
+    let typed_program = passes::mono::monomorphise(ctx, &typed_program);
+
     Ok(typed_program)
 }
 
