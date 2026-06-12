@@ -8,10 +8,10 @@ use crate::compiler::diagnostics::SdRelatedInfo;
 use crate::compiler::structure::FileRef;
 use crate::passes::type_ast::AstTypeError;
 
-pub fn type_error_to_diagnostic(
-    ctx: &CompileCtx,
+pub fn type_error_to_diagnostic<'tcx>(
+    ctx: &CompileCtx<'tcx>,
     file: FileRef,
-    err: &AstTypeError,
+    err: &AstTypeError<'tcx>,
 ) -> SandDiagnostics {
     use crate::passes::type_ast::AstTypeError::*;
     let mut diagnostics = SandDiagnostics::default();

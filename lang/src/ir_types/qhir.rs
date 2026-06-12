@@ -18,127 +18,127 @@ use crate::lang::ops::*;
 use crate::lang::types::*;
 
 #[derive(Debug, Clone)]
-pub struct Program {
-    pub functions: Map<FunRef, Function>,
+pub struct Program<'tcx> {
+    pub functions: Map<FunRef<'tcx>, Function<'tcx>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Parameter {
-    pub name: UniqVar,
-    pub ty: Ty,
+pub struct Parameter<'tcx> {
+    pub name: UniqVar<'tcx>,
+    pub ty: Ty<'tcx>,
     pub range: Range,
     pub is_mutable: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Function {
-    pub name: FunRef,
+pub struct Function<'tcx> {
+    pub name: FunRef<'tcx>,
     pub range: Range,
-    pub parameters: Vec<Parameter>,
-    pub ret_type: Ty,
-    pub body: Expr,
-    pub src_module: ModuleRef,
+    pub parameters: Vec<Parameter<'tcx>>,
+    pub ret_type: Ty<'tcx>,
+    pub body: Expr<'tcx>,
+    pub src_module: ModuleRef<'tcx>,
 }
 
 #[derive(Debug, Clone, PartialOrd, Ord)]
-pub enum Statement {
+pub enum Statement<'tcx> {
     Declaration {
-        name: UniqVar,
+        name: UniqVar<'tcx>,
         range: Range,
-        ty: Option<Ty>,
+        ty: Option<Ty<'tcx>>,
         is_mutable: bool,
-        val: Expr,
+        val: Expr<'tcx>,
     },
 
     /// Flat tuple-pattern binding after uniquification.
     LetTuple {
-        elems: Vec<(UniqVar, bool, Range)>,
-        ty: Option<Ty>,
-        val: Expr,
+        elems: Vec<(UniqVar<'tcx>, bool, Range)>,
+        ty: Option<Ty<'tcx>>,
+        val: Expr<'tcx>,
         range: Range,
     },
 
     /// Constructor-pattern binding: `let E#V(payload) = expr else fallback`.
     LetPattern {
-        pattern: QPattern,
-        ty: Option<Ty>,
-        val: Expr,
-        else_branch: Expr,
+        pattern: QPattern<'tcx>,
+        ty: Option<Ty<'tcx>>,
+        val: Expr<'tcx>,
+        else_branch: Expr<'tcx>,
         range: Range,
     },
 
     Assignment {
-        name: UniqVar,
+        name: UniqVar<'tcx>,
         range: Range,
-        val: Expr,
+        val: Expr<'tcx>,
     },
 
-    Expr(Expr),
+    Expr(Expr<'tcx>),
 }
 
-/// `Expr` wraps an `Expression` and carries start/end positions (line,col)
+/// `Expr` wraps an `Expression` and carries start/end positions (line,col).
 #[derive(Debug, Clone, PartialOrd, Ord)]
-pub struct Expr {
-    pub expr: Expression,
+pub struct Expr<'tcx> {
+    pub expr: Expression<'tcx>,
     pub range: Range,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum Expression {
+pub enum Expression<'tcx> {
     If {
-        cond: Box<Expr>,
-        t: Box<Expr>,
-        f: Option<Box<Expr>>,
+        cond: Box<Expr<'tcx>>,
+        t: Box<Expr<'tcx>>,
+        f: Option<Box<Expr<'tcx>>>,
     },
     While {
-        cond: Box<Expr>,
-        body: Box<Expr>,
+        cond: Box<Expr<'tcx>>,
+        body: Box<Expr<'tcx>>,
     },
     BinOp {
-        left: Box<Expr>,
+        left: Box<Expr<'tcx>>,
         op: Bop,
-        right: Box<Expr>,
+        right: Box<Expr<'tcx>>,
     },
     UnOp {
         op: Uop,
-        right: Box<Expr>,
+        right: Box<Expr<'tcx>>,
     },
     Call {
-        fn_name: FunRef,
-        args: Vec<Expr>,
+        fn_name: FunRef<'tcx>,
+        args: Vec<Expr<'tcx>>,
     },
     IntrinsicCall {
         fn_name: Intrinsic,
-        args: Vec<Expr>,
+        args: Vec<Expr<'tcx>>,
     },
-    Var(UniqVar),
+    Var(UniqVar<'tcx>),
     Int(i64),
     Bool(bool),
     Unit,
     Block {
-        statements: Vec<Statement>,
-        expr: Option<Box<Expr>>,
+        statements: Vec<Statement<'tcx>>,
+        expr: Option<Box<Expr<'tcx>>>,
     },
     Constructor {
-        enum_ref: EnumRef,
+        enum_ref: EnumRef<'tcx>,
         variant_idx: usize,
-        payload: Option<Box<Expr>>,
+        payload: Option<Box<Expr<'tcx>>>,
     },
     Tag {
         variant: String,
-        payload: Option<Box<Expr>>,
+        payload: Option<Box<Expr<'tcx>>>,
     },
     Match {
-        scrutinee: Box<Expr>,
-        arms: Vec<QMatchArm>,
+        scrutinee: Box<Expr<'tcx>>,
+        arms: Vec<QMatchArm<'tcx>>,
     },
-    Tuple(Vec<Expr>),
+    Tuple(Vec<Expr<'tcx>>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct QMatchArm {
-    pub pattern: QPattern,
-    pub body: Expr,
+pub struct QMatchArm<'tcx> {
+    pub pattern: QPattern<'tcx>,
+    pub body: Expr<'tcx>,
     pub range: Range,
 }
 
@@ -147,33 +147,33 @@ pub struct QMatchArm {
 /// tag patterns keep their string name for resolution by the type checker,
 /// wildcards are left as-is.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum QPattern {
+pub enum QPattern<'tcx> {
     /// fully resolved enum variant: `T::A` -> (EnumRef, 0)
     Variant {
-        enum_ref: EnumRef,
+        enum_ref: EnumRef<'tcx>,
         variant_idx: usize,
-        payload: Option<Box<QPattern>>,
+        payload: Option<Box<QPattern<'tcx>>>,
     },
     /// Bare tag `#tag`, resolved by the type checker
     Tag {
         variant: String,
-        payload: Option<Box<QPattern>>,
+        payload: Option<Box<QPattern<'tcx>>>,
     },
     /// Tuple destructuring `(p1, p2, ...)`
-    Tuple(Vec<QPattern>),
+    Tuple(Vec<QPattern<'tcx>>),
     /// integer literal in pattern position: `42` or `-7`.
     IntLit(i64),
     /// boolean literal in pattern position: `true` or `false`.
     BoolLit(bool),
     /// a variable binding (already uniquified — `var` is a `UniqVar`)
-    Binding { var: UniqVar, range: Range },
+    Binding { var: UniqVar<'tcx>, range: Range },
     /// Wildcard `_`
     Wildcard,
 }
 
-impl Eq for Statement {}
+impl<'tcx> Eq for Statement<'tcx> {}
 
-impl Hash for Statement {
+impl<'tcx> Hash for Statement<'tcx> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         use Statement::*;
         std::mem::discriminant(self).hash(state);
@@ -211,7 +211,7 @@ impl Hash for Statement {
     }
 }
 
-impl PartialEq for Statement {
+impl<'tcx> PartialEq for Statement<'tcx> {
     fn eq(&self, other: &Self) -> bool {
         use Statement::*;
         match (self, other) {
@@ -275,16 +275,16 @@ impl PartialEq for Statement {
     }
 }
 
-impl PartialEq for Expr {
+impl<'tcx> PartialEq for Expr<'tcx> {
     fn eq(&self, other: &Self) -> bool {
         self.expr == other.expr
     }
 }
 
-impl Hash for Expr {
+impl<'tcx> Hash for Expr<'tcx> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.expr.hash(state);
     }
 }
 
-impl Eq for Expr {}
+impl<'tcx> Eq for Expr<'tcx> {}

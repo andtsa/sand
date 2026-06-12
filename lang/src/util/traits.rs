@@ -3,13 +3,13 @@ use std::fmt;
 use crate::ir_types::hhir::*;
 use crate::lang::ops::*;
 
-impl fmt::Display for Expr {
+impl fmt::Display for Expr<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.expr)
     }
 }
 
-impl fmt::Display for Expression {
+impl fmt::Display for Expression<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Expression::Int(n) => {
@@ -158,7 +158,7 @@ impl fmt::Display for Expression {
     }
 }
 
-impl fmt::Display for Statement {
+impl fmt::Display for Statement<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Statement::Declaration { name, ty, val, .. } => match ty {

@@ -9,10 +9,10 @@ use crate::compiler::diagnostics::convert::uniquify::uniquify_error_to_diagnosti
 use crate::compiler::structure::FileRef;
 use crate::passes::qualify::error::QualifyError;
 
-pub fn qualify_error_to_diagnostics(
-    ctx: &CompileCtx,
+pub fn qualify_error_to_diagnostics<'tcx>(
+    ctx: &CompileCtx<'tcx>,
     file: FileRef,
-    err: &QualifyError,
+    err: &QualifyError<'tcx>,
 ) -> SandDiagnostics {
     let mut diagnostics = SandDiagnostics::default();
     match err {

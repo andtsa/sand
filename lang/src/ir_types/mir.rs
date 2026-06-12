@@ -15,63 +15,63 @@ pub struct BlockId(pub usize);
 pub struct LocalId(pub usize);
 
 #[derive(Debug, Clone)]
-pub struct MirProgram {
-    pub functions: Map<FunRef, MirFunction>,
+pub struct MirProgram<'tcx> {
+    pub functions: Map<FunRef<'tcx>, MirFunction<'tcx>>,
 }
 
 #[derive(Debug, Clone)]
-pub struct MirFunction {
-    pub name: FunRef,
+pub struct MirFunction<'tcx> {
+    pub name: FunRef<'tcx>,
     pub range: Range,
-    pub params: Vec<MirParam>,
-    pub ret_type: Ty,
+    pub params: Vec<MirParam<'tcx>>,
+    pub ret_type: Ty<'tcx>,
 
-    pub locals: Vec<LocalDecl>,
-    pub blocks: Vec<BasicBlock>,
+    pub locals: Vec<LocalDecl<'tcx>>,
+    pub blocks: Vec<BasicBlock<'tcx>>,
     pub entry: BlockId,
 }
 
 #[derive(Debug, Clone)]
-pub struct MirParam {
+pub struct MirParam<'tcx> {
     pub local: LocalId,
-    pub name: UniqVar,
-    pub ty: Ty,
+    pub name: UniqVar<'tcx>,
+    pub ty: Ty<'tcx>,
     pub range: Range,
 }
 
 #[derive(Debug, Clone)]
-pub enum LocalName {
+pub enum LocalName<'tcx> {
     /// traceable back to source via CompileCtx
-    User(UniqVar),
+    User(UniqVar<'tcx>),
     /// index for uniqueness, hint for readability
     Temp(usize, &'static str),
 }
 
 #[derive(Debug, Clone)]
-pub struct LocalDecl {
+pub struct LocalDecl<'tcx> {
     pub id: LocalId,
-    pub name: LocalName,
-    pub ty: Ty,
+    pub name: LocalName<'tcx>,
+    pub ty: Ty<'tcx>,
     pub range: Range,
 }
 
 #[derive(Debug, Clone)]
-pub struct BasicBlock {
+pub struct BasicBlock<'tcx> {
     pub id: BlockId,
-    pub statements: Vec<Statement>,
+    pub statements: Vec<Statement<'tcx>>,
     pub terminator: Terminator,
 }
 
 #[derive(Debug, Clone)]
-pub enum Statement {
+pub enum Statement<'tcx> {
     Assign {
         dst: Place,
-        value: RValue,
+        value: RValue<'tcx>,
         range: Range,
     },
 
     /// expression statements with side effects
-    Eval { value: RValue, range: Range },
+    Eval { value: RValue<'tcx>, range: Range },
 }
 
 #[derive(Debug, Clone)]
@@ -119,7 +119,7 @@ pub enum Constant {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum RValue {
+pub enum RValue<'tcx> {
     Use(Operand),
 
     /// Build an aggregate (enum variant or tuple) from a flat list of field
@@ -168,7 +168,7 @@ pub enum RValue {
     },
 
     Call {
-        fn_name: FunRef,
+        fn_name: FunRef<'tcx>,
         args: Vec<Operand>,
     },
 

@@ -1,6 +1,9 @@
-//! function management
+//! Function management.
 
+use std::cmp::Ordering;
 use std::fmt::Display;
+use std::hash::Hash;
+use std::hash::Hasher;
 
 use pest::iterators::Pair;
 
@@ -14,40 +17,73 @@ use crate::passes::parse::Rule;
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct FnName(String);
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct FunRef(pub(in crate::compiler) usize);
+/// A `Copy` handle to an arena-allocated [`OriginalFun`].
+///
+/// Equality and hashing are by pointer identity (each `register_function`
+/// allocates a distinct `OriginalFun`); ordering is by the monotonic
+/// registration `id`, preserving source/registration order for deterministic
+/// iteration over `BTreeMap<FunRef, _>`.
+#[derive(Copy, Clone)]
+pub struct FunRef<'tcx>(pub(in crate::compiler) &'tcx OriginalFun<'tcx>);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct OriginalFun {
-    pub name: FnName,
-    pub declaration: Range,
-    pub module: ModuleRef,
-    pub(in crate::compiler) index: FunRef,
+impl PartialEq for FunRef<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self.0, other.0)
+    }
+}
+impl Eq for FunRef<'_> {}
+impl Hash for FunRef<'_> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        (self.0 as *const OriginalFun<'_>).hash(state);
+    }
+}
+impl PartialOrd for FunRef<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for FunRef<'_> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.0.id.cmp(&other.0.id)
+    }
+}
+impl std::fmt::Debug for FunRef<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "FunRef({}, {})", self.0.id, self.0.name.0)
+    }
 }
 
-impl OriginalFun {
+#[derive(Debug, Clone)]
+pub struct OriginalFun<'tcx> {
+    pub name: FnName,
+    pub declaration: Range,
+    pub module: ModuleRef<'tcx>,
+    pub(in crate::compiler) id: usize,
+}
+
+impl<'tcx> OriginalFun<'tcx> {
     pub(in crate::compiler) fn create(
         pair: &Pair<'_, Rule>,
-        index: FunRef,
-        module: ModuleRef,
+        id: usize,
+        module: ModuleRef<'tcx>,
     ) -> Self {
         OriginalFun {
             name: FnName::from_pair(pair),
             declaration: Range::from(pair),
             module,
-            index,
+            id,
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct FunSig {
-    pub args: Vec<(UniqVar, Ty)>,
-    pub ret_ty: Ty,
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct FunSig<'tcx> {
+    pub args: Vec<(UniqVar<'tcx>, Ty<'tcx>)>,
+    pub ret_ty: Ty<'tcx>,
 }
 
-impl FunSig {
-    pub fn with(args: &[crate::ir_types::qhir::Parameter], ret_ty: Ty) -> Self {
+impl<'tcx> FunSig<'tcx> {
+    pub fn with(args: &[crate::ir_types::qhir::Parameter<'tcx>], ret_ty: Ty<'tcx>) -> Self {
         Self {
             args: args.iter().map(|a| (a.name, a.ty)).collect(),
             ret_ty,

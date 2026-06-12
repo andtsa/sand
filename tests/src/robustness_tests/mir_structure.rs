@@ -10,15 +10,18 @@ use lang::compiler::structure::Map;
 use lang::ir_types::mir::MirProgram;
 use lang::ir_types::mir::Terminator;
 
-fn lower(src: &str) -> (MirProgram, CompileCtx<'static>) {
+fn lower(src: &str) -> (MirProgram<'static>, CompileCtx<'static>) {
     let mut ctx = CompileCtx::initial();
     let fr = ctx.stub_file();
     let code = Map::from([(fr, src)]);
     let ast = compile_hir(code, &mut ctx).unwrap_or_else(|e| panic!("compile failed:\n  {e}"));
-    (MirProgram::from_typed_program(&ast), ctx)
+    (MirProgram::from_typed_program(&ast, &ctx), ctx)
 }
 
-fn find_main<'a>(mir: &'a MirProgram, ctx: &CompileCtx) -> &'a lang::ir_types::mir::MirFunction {
+fn find_main<'a>(
+    mir: &'a MirProgram<'static>,
+    ctx: &CompileCtx<'static>,
+) -> &'a lang::ir_types::mir::MirFunction<'static> {
     mir.functions
         .values()
         .find(|f| ctx.original_fun_name(f.name) == "main")

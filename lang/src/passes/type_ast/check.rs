@@ -13,6 +13,10 @@ pub use crate::passes::type_ast::errors::AstTypeError;
 use crate::passes::type_ast::infer::infer;
 use crate::passes::type_ast::infer::infer_statement;
 
+/// Variable bindings introduced by a pattern: each is the uniquified variable,
+/// the type bound to it, and its declaration range.
+type PatternBindings<'tcx> = Vec<(UniqVar<'tcx>, Ty<'tcx>, Range)>;
+
 /// type-check a list of match arms against a scrutinee of type `scrutinee_ty`.
 ///
 /// `scrutinee_ty` may be an enum type (tag-coverage exhaustiveness, the
@@ -27,25 +31,24 @@ use crate::passes::type_ast::infer::infer_statement;
 /// it
 ///
 /// returns the list of typed match arms on success
-pub(super) fn type_check_match_arms(
-    ctx: &mut CompileCtx,
-    env: &TypeEnv,
-    arms: &[qhir::QMatchArm],
-    scrutinee_ty: Ty,
-    forced_expected: Option<Ty>,
+pub(super) fn type_check_match_arms<'tcx>(
+    ctx: &mut CompileCtx<'tcx>,
+    env: &TypeEnv<'tcx>,
+    arms: &[qhir::QMatchArm<'tcx>],
+    scrutinee_ty: Ty<'tcx>,
+    forced_expected: Option<Ty<'tcx>>,
     range: Range,
-) -> Result<Vec<typed_hir::TypedMatchArm>, AstTypeError> {
+) -> Result<Vec<typed_hir::TypedMatchArm<'tcx>>, AstTypeError<'tcx>> {
     // classify the scrutinee type up front — copy out of the borrow before
-    // taking `&mut ctx` again (mirrors the existing `match ctx.ty_kind(..) {
-    // TyKind::Enum(er) => *er, ... }` idiom used elsewhere in this module)
-    enum ScrutKind {
-        Enum(EnumRef),
+    // taking `&mut ctx` again
+    enum ScrutKind<'tcx> {
+        Enum(EnumRef<'tcx>),
         Tuple,
         Int,
         Bool,
         Other,
     }
-    let kind = match ctx.ty_kind(scrutinee_ty) {
+    let kind = match scrutinee_ty.kind() {
         TyKind::Enum(er) => ScrutKind::Enum(*er),
         TyKind::Tuple(_) => ScrutKind::Tuple,
         TyKind::Int => ScrutKind::Int,
@@ -79,15 +82,15 @@ pub(super) fn type_check_match_arms(
 /// exhaustiveness + `Variant`/`Tag` patterns) and `None` for tuple scrutinees
 /// (where only irrefutable patterns are legal at all, so exhaustiveness is
 /// trivial — see decision D1 in the design doc).
-fn type_check_match_arms_inner(
-    ctx: &mut CompileCtx,
-    env: &TypeEnv,
-    arms: &[qhir::QMatchArm],
-    scrutinee_ty: Ty,
-    enum_ref: Option<EnumRef>,
-    forced_expected: Option<Ty>,
+fn type_check_match_arms_inner<'tcx>(
+    ctx: &mut CompileCtx<'tcx>,
+    env: &TypeEnv<'tcx>,
+    arms: &[qhir::QMatchArm<'tcx>],
+    scrutinee_ty: Ty<'tcx>,
+    enum_ref: Option<EnumRef<'tcx>>,
+    forced_expected: Option<Ty<'tcx>>,
     range: Range,
-) -> Result<Vec<typed_hir::TypedMatchArm>, AstTypeError> {
+) -> Result<Vec<typed_hir::TypedMatchArm<'tcx>>, AstTypeError<'tcx>> {
     let mut covered_variants: std::collections::BTreeSet<usize> = Default::default();
     // duplicate-detection set for Int literal patterns (BTreeSet<i64> because
     // `covered_variants` is `usize` and can't represent negative integers).
@@ -100,7 +103,7 @@ fn type_check_match_arms_inner(
     // value = (inner EnumRef, set of covered inner variant_idx)
     let mut nested_enum_coverage: std::collections::BTreeMap<
         usize,
-        (EnumRef, std::collections::BTreeSet<usize>),
+        (EnumRef<'tcx>, std::collections::BTreeSet<usize>),
     > = Default::default();
     // an "irrefutable pattern" is one that is statically guaranteed to match
     // any value of the scrutinee's type — `Wildcard`, `Binding`, or (for
@@ -111,14 +114,14 @@ fn type_check_match_arms_inner(
     let mut irrefutable_seen = false;
     let mut typed_arms: Vec<typed_hir::TypedMatchArm> = Vec::with_capacity(arms.len());
     // the type all arm bodies must produce
-    let mut result_ty: Option<Ty> = forced_expected;
+    let mut result_ty: Option<Ty<'tcx>> = forced_expected;
 
     for arm in arms {
         if irrefutable_seen {
             return Err(AstTypeError::UnreachableMatchArm { range: arm.range });
         }
 
-        let mut bindings: Vec<(UniqVar, Ty, Range)> = Vec::new();
+        let mut bindings: PatternBindings<'tcx> = Vec::new();
 
         // validate & translate the pattern (always at "top level" — the
         // pattern is being matched directly against the scrutinee)
@@ -238,7 +241,7 @@ fn type_check_match_arms_inner(
             }
             qhir::QPattern::IntLit(n) => {
                 // Int literal patterns are only valid against an Int scrutinee.
-                if !matches!(ctx.ty_kind(scrutinee_ty), TyKind::Int) {
+                if !matches!(scrutinee_ty.kind(), TyKind::Int) {
                     return Err(AstTypeError::PatternTypeMismatch {
                         message: format!(
                             "integer literal pattern used against non-Int type {}",
@@ -260,7 +263,7 @@ fn type_check_match_arms_inner(
             }
             qhir::QPattern::BoolLit(b) => {
                 // Bool literal patterns are only valid against a Bool scrutinee.
-                if !matches!(ctx.ty_kind(scrutinee_ty), TyKind::Bool) {
+                if !matches!(scrutinee_ty.kind(), TyKind::Bool) {
                     return Err(AstTypeError::PatternTypeMismatch {
                         message: format!(
                             "boolean literal pattern used against non-Bool type {}",
@@ -363,20 +366,23 @@ fn type_check_match_arms_inner(
 ///
 /// On a duplicate inner variant (same (outer_vi, inner_vi) pair already
 /// recorded), returns an error.
-fn record_nested_enum_coverage(
-    ctx: &CompileCtx,
-    outer_er: EnumRef,
+fn record_nested_enum_coverage<'tcx>(
+    ctx: &CompileCtx<'tcx>,
+    outer_er: EnumRef<'tcx>,
     outer_vi: usize,
-    payload: Option<&qhir::QPattern>,
+    payload: Option<&qhir::QPattern<'tcx>>,
     arm_range: Range,
-    nested: &mut std::collections::BTreeMap<usize, (EnumRef, std::collections::BTreeSet<usize>)>,
-) -> Result<(), AstTypeError> {
+    nested: &mut std::collections::BTreeMap<
+        usize,
+        (EnumRef<'tcx>, std::collections::BTreeSet<usize>),
+    >,
+) -> Result<(), AstTypeError<'tcx>> {
     // The outer variant's declared payload type must be a direct enum.
-    let outer_payload_ty = ctx.get_enum(outer_er).variants[outer_vi].payload;
+    let outer_payload_ty = ctx.get_enum(outer_er).variants[outer_vi].payload.get();
     let Some(payload_ty) = outer_payload_ty else {
         return Ok(());
     };
-    let inner_er = match ctx.ty_kind(payload_ty) {
+    let inner_er = match payload_ty.kind() {
         TyKind::Enum(er) => *er,
         _ => return Ok(()), // payload is not an enum — nothing to track
     };
@@ -431,14 +437,14 @@ fn record_nested_enum_coverage(
 /// - `enum_ref = None`, `scrutinee_ty = Int`: exhaustive iff `has_irrefutable`
 ///   (Int is unbounded; literal arms alone can never cover all values).
 /// - `enum_ref = None`, otherwise (Tuple etc.): trivially exhaustive.
-fn check_exhaustiveness(
-    ctx: &CompileCtx,
-    scrutinee_ty: Ty,
-    enum_ref: Option<EnumRef>,
+fn check_exhaustiveness<'tcx>(
+    ctx: &CompileCtx<'tcx>,
+    scrutinee_ty: Ty<'tcx>,
+    enum_ref: Option<EnumRef<'tcx>>,
     covered: &std::collections::BTreeSet<usize>,
     has_irrefutable: bool,
     range: Range,
-) -> Result<(), AstTypeError> {
+) -> Result<(), AstTypeError<'tcx>> {
     if has_irrefutable {
         return Ok(());
     }
@@ -462,7 +468,7 @@ fn check_exhaustiveness(
     // required). Int — literal arms alone cannot be exhaustive; a wildcard or
     // binding is required. Bool — exhaustive iff both false (0) and true (1)
     // are covered.
-    match ctx.ty_kind(scrutinee_ty) {
+    match scrutinee_ty.kind() {
         TyKind::Bool => {
             if covered.contains(&0) && covered.contains(&1) {
                 Ok(())
@@ -498,15 +504,15 @@ fn check_exhaustiveness(
 /// `Variant`/`Tag` pattern, against the variant's declared payload type.
 /// returns the typed sub-pattern (or `None` for nullary variants / patterns
 /// that don't destructure).
-fn check_variant_payload_pattern(
-    ctx: &mut CompileCtx,
-    enum_ref: EnumRef,
+fn check_variant_payload_pattern<'tcx>(
+    ctx: &mut CompileCtx<'tcx>,
+    enum_ref: EnumRef<'tcx>,
     variant_idx: usize,
-    payload_pattern: Option<&qhir::QPattern>,
+    payload_pattern: Option<&qhir::QPattern<'tcx>>,
     arm_range: Range,
-    bindings: &mut Vec<(UniqVar, Ty, Range)>,
-) -> Result<Option<(Ty, Box<typed_hir::MatchPattern>)>, AstTypeError> {
-    let declared_payload = ctx.get_enum(enum_ref).variants[variant_idx].payload;
+    bindings: &mut PatternBindings<'tcx>,
+) -> Result<Option<(Ty<'tcx>, Box<typed_hir::MatchPattern<'tcx>>)>, AstTypeError<'tcx>> {
+    let declared_payload = ctx.get_enum(enum_ref).variants[variant_idx].payload.get();
     match (declared_payload, payload_pattern) {
         (None, None) => Ok(None),
         (Some(payload_ty), Some(sub)) => {
@@ -528,15 +534,15 @@ fn check_variant_payload_pattern(
 
 /// validate & translate a tuple pattern `(p1, p2, ...)` against `scrutinee_ty`
 /// (which must be a tuple type of matching arity).
-fn check_tuple_pattern(
-    ctx: &mut CompileCtx,
-    sub_patterns: &[qhir::QPattern],
-    scrutinee_ty: Ty,
+fn check_tuple_pattern<'tcx>(
+    ctx: &mut CompileCtx<'tcx>,
+    sub_patterns: &[qhir::QPattern<'tcx>],
+    scrutinee_ty: Ty<'tcx>,
     arm_range: Range,
-    bindings: &mut Vec<(UniqVar, Ty, Range)>,
-) -> Result<typed_hir::MatchPattern, AstTypeError> {
-    let elem_tys = match ctx.ty_kind(scrutinee_ty) {
-        TyKind::Tuple(tys) => tys.clone(),
+    bindings: &mut PatternBindings<'tcx>,
+) -> Result<typed_hir::MatchPattern<'tcx>, AstTypeError<'tcx>> {
+    let elem_tys = match scrutinee_ty.kind() {
+        TyKind::Tuple(tys) => *tys,
         _ => {
             return Err(AstTypeError::PatternTypeMismatch {
                 message: format!(
@@ -569,7 +575,7 @@ fn check_tuple_pattern(
 /// i.e. it is **refutable**.  `Wildcard` and `Binding` are irrefutable;
 /// `Variant`, `Tag`, `IntLit`, `BoolLit` are refutable.  `Tuple` is refutable
 /// iff *any* of its elements is refutable (recursive).
-fn qpattern_is_refutable(pattern: &qhir::QPattern) -> bool {
+fn qpattern_is_refutable<'tcx>(pattern: &qhir::QPattern<'tcx>) -> bool {
     match pattern {
         qhir::QPattern::Variant { .. }
         | qhir::QPattern::Tag { .. }
@@ -581,7 +587,7 @@ fn qpattern_is_refutable(pattern: &qhir::QPattern) -> bool {
 }
 
 /// Convenience wrapper: is the *payload* of a variant pattern refutable?
-fn qpattern_payload_is_refutable(payload: Option<&qhir::QPattern>) -> bool {
+fn qpattern_payload_is_refutable<'tcx>(payload: Option<&qhir::QPattern<'tcx>>) -> bool {
     payload.is_some_and(qpattern_is_refutable)
 }
 
@@ -598,13 +604,13 @@ fn qpattern_payload_is_refutable(payload: Option<&qhir::QPattern>) -> bool {
 /// Still rejected: integer/boolean literal patterns (`IntLit`, `BoolLit`) —
 /// these cannot be nested because Int is unbounded and exhaustiveness for Bool
 /// at an arbitrary nesting depth is not yet tracked.
-fn check_subpattern(
-    ctx: &mut CompileCtx,
-    pattern: &qhir::QPattern,
-    expected_ty: Ty,
+fn check_subpattern<'tcx>(
+    ctx: &mut CompileCtx<'tcx>,
+    pattern: &qhir::QPattern<'tcx>,
+    expected_ty: Ty<'tcx>,
     arm_range: Range,
-    bindings: &mut Vec<(UniqVar, Ty, Range)>,
-) -> Result<typed_hir::MatchPattern, AstTypeError> {
+    bindings: &mut PatternBindings<'tcx>,
+) -> Result<typed_hir::MatchPattern<'tcx>, AstTypeError<'tcx>> {
     match pattern {
         qhir::QPattern::Variant {
             enum_ref: pat_er,
@@ -612,7 +618,7 @@ fn check_subpattern(
             payload,
         } => {
             // The expected type must be the same enum that the pattern names.
-            match ctx.ty_kind(expected_ty) {
+            match expected_ty.kind() {
                 TyKind::Enum(er) if *er == *pat_er => {}
                 _ => {
                     return Err(AstTypeError::PatternTypeMismatch {
@@ -642,7 +648,7 @@ fn check_subpattern(
         }
         qhir::QPattern::Tag { variant, payload } => {
             // Resolve the expected type to an enum, then look up the variant.
-            let enum_ref = match ctx.ty_kind(expected_ty) {
+            let enum_ref = match expected_ty.kind() {
                 TyKind::Enum(er) => *er,
                 _ => {
                     return Err(AstTypeError::PatternTypeMismatch {
@@ -704,16 +710,16 @@ fn check_subpattern(
 /// Bidirectional type checking: verify that `expr` has type `expected`,
 /// propagating the expected type into sub-expressions where useful (primarily
 /// bare `#Tag` expressions and the trailing expression of if-else / blocks).
-pub(super) fn check(
-    ctx: &mut CompileCtx,
-    env: &TypeEnv,
-    expr: &qhir::Expr,
-    expected: Ty,
-) -> Result<typed_hir::Expr, AstTypeError> {
+pub(super) fn check<'tcx>(
+    ctx: &mut CompileCtx<'tcx>,
+    env: &TypeEnv<'tcx>,
+    expr: &qhir::Expr<'tcx>,
+    expected: Ty<'tcx>,
+) -> Result<typed_hir::Expr<'tcx>, AstTypeError<'tcx>> {
     match &expr.expr {
         // Resolve a bare #Tag (optionally with payload) against the expected enum type.
         qhir::Expression::Tag { variant, payload } => {
-            let er = match ctx.ty_kind(expected) {
+            let er = match expected.kind() {
                 TyKind::Enum(er) => *er,
                 _ => {
                     return Err(AstTypeError::TagInNonEnumContext {
@@ -730,7 +736,7 @@ pub(super) fn check(
                         range: expr.range,
                     })?;
             // `declared_payload_ty` is `Copy` so the immutable borrow of ctx ends here.
-            let declared_payload_ty = ctx.get_enum(er).variants[variant_idx].payload;
+            let declared_payload_ty = ctx.get_enum(er).variants[variant_idx].payload.get();
             let typed_payload = match (payload.as_deref(), declared_payload_ty) {
                 (None, None) => None,
                 (None, Some(_)) => {
@@ -768,10 +774,10 @@ pub(super) fn check(
             f: Some(f),
         } => {
             let cond_expr = infer(ctx, env, cond)?;
-            if cond_expr.ty != Ty::BOOL {
+            if cond_expr.ty != ctx.types.bool {
                 return Err(AstTypeError::TypeError {
                     message: format!("condition of 'if' must be Bool, found {}", cond_expr.ty),
-                    expected: Ty::BOOL,
+                    expected: ctx.types.bool,
                     found: cond_expr.ty,
                     range: cond.range,
                 });
@@ -831,10 +837,10 @@ pub(super) fn check(
         // bare tags inside it (`(#red, 5)`) resolve against the declared
         // element types, the same way Tag resolution works at top level.
         qhir::Expression::Tuple(elems) => {
-            if let TyKind::Tuple(expected_tys) = ctx.ty_kind(expected)
+            if let TyKind::Tuple(expected_tys) = expected.kind()
                 && expected_tys.len() == elems.len()
             {
-                let expected_tys = expected_tys.clone();
+                let expected_tys = *expected_tys;
                 let typed_elems = elems
                     .iter()
                     .zip(expected_tys.iter())
@@ -847,7 +853,7 @@ pub(super) fn check(
                 });
             }
             let e = infer(ctx, env, expr)?;
-            if e.ty.type_neq(&expected) {
+            if e.ty.type_neq(expected) {
                 return Err(AstTypeError::TypeError {
                     message: format!("expected type {} but found {}", expected, e.ty),
                     expected,
@@ -861,7 +867,7 @@ pub(super) fn check(
         // everything else: infer, then verify type matches expected.
         _ => {
             let e = infer(ctx, env, expr)?;
-            if e.ty.type_neq(&expected) {
+            if e.ty.type_neq(expected) {
                 return Err(AstTypeError::TypeError {
                     message: format!("expected type {} but found {}", expected, e.ty),
                     expected,
@@ -887,24 +893,24 @@ pub(super) fn check(
 /// - `NestedVariantInLetPattern` if the sub-pattern contains a refutable
 ///   variant
 /// - `PatternPayloadMismatch` / `PatternArityMismatch` if arity doesn't match
-pub(super) fn check_let_pattern(
-    ctx: &mut CompileCtx,
-    pattern: &qhir::QPattern,
-    scrutinee_ty: Ty,
+pub(super) fn check_let_pattern<'tcx>(
+    ctx: &mut CompileCtx<'tcx>,
+    pattern: &qhir::QPattern<'tcx>,
+    scrutinee_ty: Ty<'tcx>,
     range: Range,
-) -> Result<(typed_hir::MatchPattern, Vec<(UniqVar, Ty, Range)>), AstTypeError> {
-    let mut bindings: Vec<(UniqVar, Ty, Range)> = Vec::new();
+) -> Result<(typed_hir::MatchPattern<'tcx>, PatternBindings<'tcx>), AstTypeError<'tcx>> {
+    let mut bindings: PatternBindings<'tcx> = Vec::new();
     let typed_pattern = check_let_pattern_inner(ctx, pattern, scrutinee_ty, range, &mut bindings)?;
     Ok((typed_pattern, bindings))
 }
 
-fn check_let_pattern_inner(
-    ctx: &mut CompileCtx,
-    pattern: &qhir::QPattern,
-    expected_ty: Ty,
+fn check_let_pattern_inner<'tcx>(
+    ctx: &mut CompileCtx<'tcx>,
+    pattern: &qhir::QPattern<'tcx>,
+    expected_ty: Ty<'tcx>,
     range: Range,
-    bindings: &mut Vec<(UniqVar, Ty, Range)>,
-) -> Result<typed_hir::MatchPattern, AstTypeError> {
+    bindings: &mut PatternBindings<'tcx>,
+) -> Result<typed_hir::MatchPattern<'tcx>, AstTypeError<'tcx>> {
     match pattern {
         qhir::QPattern::Variant {
             enum_ref,
@@ -912,7 +918,7 @@ fn check_let_pattern_inner(
             payload,
         } => {
             // The expected type must be this enum.
-            match ctx.ty_kind(expected_ty) {
+            match expected_ty.kind() {
                 TyKind::Enum(er) if *er == *enum_ref => {}
                 _ => {
                     return Err(AstTypeError::PatternTypeMismatch {
@@ -927,16 +933,16 @@ fn check_let_pattern_inner(
                 }
             }
             // The sub-pattern must be irrefutable (no nested variant/tag/literal).
-            if let Some(sub) = payload.as_deref() {
-                if matches!(
+            if let Some(sub) = payload.as_deref()
+                && matches!(
                     sub,
                     qhir::QPattern::Variant { .. }
                         | qhir::QPattern::Tag { .. }
                         | qhir::QPattern::IntLit(_)
                         | qhir::QPattern::BoolLit(_)
-                ) {
-                    return Err(AstTypeError::NestedVariantInLetPattern { range });
-                }
+                )
+            {
+                return Err(AstTypeError::NestedVariantInLetPattern { range });
             }
             let typed_payload = check_variant_payload_pattern(
                 ctx,

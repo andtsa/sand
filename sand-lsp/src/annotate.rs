@@ -38,7 +38,7 @@ impl Backend {
     pub async fn annotate_reused_expressions<'run, 'lsp>(
         &'run self,
         ctx: &'run CompileCtx<'lsp>,
-        ast: &TypedProgram,
+        ast: &TypedProgram<'lsp>,
     ) -> LspDiagnostics {
         self.log(
             MessageType::LOG,

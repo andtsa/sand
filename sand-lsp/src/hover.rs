@@ -21,11 +21,11 @@ use tower_lsp::lsp_types::Url;
 
 use crate::util::pos_from_lsp_position;
 
-pub fn hover_at_position(
+pub fn hover_at_position<'tcx>(
     lsp_pos: Position,
     uri: &Url,
-    ctx: &CompileCtx,
-    ast: &TypedProgram,
+    ctx: &CompileCtx<'tcx>,
+    ast: &TypedProgram<'tcx>,
     project: &Project,
 ) -> Option<Hover> {
     let file_ref: FileRef = project.is_tracked(uri)?;
@@ -59,7 +59,11 @@ pub fn hover_at_position(
     None
 }
 
-fn format_function_hover(fun: &TypedFunction, ctx: &CompileCtx, ast: &TypedProgram) -> Hover {
+fn format_function_hover<'tcx>(
+    fun: &TypedFunction<'tcx>,
+    ctx: &CompileCtx<'tcx>,
+    ast: &TypedProgram<'tcx>,
+) -> Hover {
     let name = ctx.original_fun_name(fun.name);
     let sig = ctx.fun_sig(&fun.name);
     let args = fmt_sig_args(&sig.args, ctx);
@@ -90,7 +94,7 @@ fn format_function_hover(fun: &TypedFunction, ctx: &CompileCtx, ast: &TypedProgr
     }
 }
 
-fn fmt_expr_val(val: &Expression, ctx: &CompileCtx) -> String {
+fn fmt_expr_val<'tcx>(val: &Expression<'tcx>, ctx: &CompileCtx<'tcx>) -> String {
     match val {
         Expression::Int(n) => n.to_string(),
         Expression::Bool(b) => b.to_string(),
@@ -123,7 +127,7 @@ fn range_contains(range: LangRange, pos: Pos) -> bool {
     p >= (range.start.line, range.start.col) && p <= (range.end.line, range.end.col)
 }
 
-fn find_in_expr(expr: &Expr, pos: Pos) -> Option<&Expr> {
+fn find_in_expr<'a, 'tcx>(expr: &'a Expr<'tcx>, pos: Pos) -> Option<&'a Expr<'tcx>> {
     if !range_contains(expr.range, pos) {
         return None;
     }
@@ -156,7 +160,7 @@ fn find_in_expr(expr: &Expr, pos: Pos) -> Option<&Expr> {
     child.or(Some(expr))
 }
 
-fn find_in_stmt(stmt: &Statement, pos: Pos) -> Option<&Expr> {
+fn find_in_stmt<'a, 'tcx>(stmt: &'a Statement<'tcx>, pos: Pos) -> Option<&'a Expr<'tcx>> {
     match stmt {
         Statement::Declaration { range, val, .. } => {
             if range_contains(*range, pos) {
@@ -183,7 +187,7 @@ fn find_in_stmt(stmt: &Statement, pos: Pos) -> Option<&Expr> {
     }
 }
 
-fn format_hover(expr: &Expr, ctx: &CompileCtx) -> Hover {
+fn format_hover<'tcx>(expr: &Expr<'tcx>, ctx: &CompileCtx<'tcx>) -> Hover {
     let content = match &expr.expr {
         Expression::Var(uv) => {
             let name = ctx.uniq_variable_name(uv);
@@ -212,17 +216,17 @@ fn format_hover(expr: &Expr, ctx: &CompileCtx) -> Hover {
         }
         Expression::IntrinsicCall { fn_name, .. } => {
             if let Some((_, sig)) = INTRINSICS.get(fn_name) {
-                let args = sig
-                    .args
+                let (resolved_args, resolved_ret) = sig.resolve(&ctx.types);
+                let args = resolved_args
                     .iter()
-                    .map(|t| fmt_ty(ctx, *t).to_string())
+                    .map(|&t| fmt_ty(ctx, t).to_string())
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!(
                     "**{}({}) → {}**\nBuilt-in intrinsic",
                     fn_name,
                     args,
-                    fmt_ty(ctx, sig.ret_ty)
+                    fmt_ty(ctx, resolved_ret)
                 )
             } else {
                 format!("**intrinsic {}**", fn_name)
@@ -233,14 +237,17 @@ fn format_hover(expr: &Expr, ctx: &CompileCtx) -> Hover {
     make_hover(content)
 }
 
-fn fmt_sig_args(args: &[(lang::compiler::structure::UniqVar, Ty)], ctx: &CompileCtx) -> String {
+fn fmt_sig_args<'tcx>(
+    args: &[(lang::compiler::structure::UniqVar<'tcx>, Ty<'tcx>)],
+    ctx: &CompileCtx<'tcx>,
+) -> String {
     args.iter()
         .map(|(uv, ty)| format!("{}: {}", ctx.uniq_variable_name(uv), fmt_ty(ctx, *ty)))
         .collect::<Vec<_>>()
         .join(", ")
 }
 
-fn fmt_ty(ctx: &CompileCtx, ty: Ty) -> String {
+fn fmt_ty<'tcx>(ctx: &CompileCtx<'tcx>, ty: Ty<'tcx>) -> String {
     ctx.display_ty(ty).to_string()
 }
 

@@ -20,13 +20,16 @@ use crate::compiler::diagnostics::convert::typecheck::type_error_to_diagnostic;
 use crate::internal_bug;
 
 impl SandDiagnostic {
-    pub fn from_compiler_error(ctx: &CompileCtx, error: &SandLangError) -> SandDiagnostics {
+    pub fn from_compiler_error<'tcx>(
+        ctx: &CompileCtx<'tcx>,
+        error: &SandLangError<'tcx>,
+    ) -> SandDiagnostics {
         let source_file = error
             .context
             .file
             .or_else(|| error.context.module.map(|mr| ctx.file_of_module(mr)))
             .unwrap_or_else(|| internal_bug!("error with no source context"));
-        match &error.source {
+        match &error.kind {
             SandLangErrorSource::AstParseError(err) => {
                 ast_error_to_diagnostics(ctx, source_file, err)
             }

@@ -7,11 +7,13 @@ use lang::compile_hir;
 use lang::compiler::context::CompileCtx;
 use lang::compiler::structure::Map;
 
-fn compile_err(src: &str) -> lang::SandLangError {
+fn compile_err(src: &str) -> lang::SandLangError<'static> {
     let mut ctx = CompileCtx::initial();
     let fr = ctx.stub_file();
     let code = Map::from([(fr, src)]);
-    compile_hir(code, &mut ctx).expect_err("expected a compile error")
+    let err = compile_hir(code, &mut ctx).expect_err("expected a compile error");
+    std::mem::forget(ctx);
+    err
 }
 
 #[test]

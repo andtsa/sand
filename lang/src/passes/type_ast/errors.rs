@@ -7,13 +7,13 @@ use crate::compiler::structure::Range;
 use crate::lang::types::Ty;
 
 #[derive(Debug)]
-pub struct TypeError {
-    pub error: AstTypeError,
-    pub module: ModuleRef,
+pub struct TypeError<'tcx> {
+    pub error: AstTypeError<'tcx>,
+    pub module: ModuleRef<'tcx>,
 }
 
 #[derive(Debug, Error)]
-pub enum AstTypeError {
+pub enum AstTypeError<'tcx> {
     #[error("unbound variable '{name}' at {range}")]
     UnboundVariable { name: String, range: Range },
     #[error("cannot assign to immutable variable '{name}' at {range}")]
@@ -23,8 +23,8 @@ pub enum AstTypeError {
     #[error("type error at {range}: {message} (expected {expected}, found {found})")]
     TypeError {
         message: String,
-        expected: Ty,
-        found: Ty,
+        expected: Ty<'tcx>,
+        found: Ty<'tcx>,
         range: Range,
     },
     #[error(
@@ -32,8 +32,8 @@ pub enum AstTypeError {
     )]
     FunctionCallTypeError {
         message: String,
-        expected: Vec<Ty>,
-        found: Vec<Ty>,
+        expected: Vec<Ty<'tcx>>,
+        found: Vec<Ty<'tcx>>,
         range: Range,
     },
     #[error("bare tag '#{variant}' used without an expected type context at {range}")]
@@ -53,7 +53,7 @@ pub enum AstTypeError {
     #[error(
         "match scrutinee has type {ty} but match requires an enum, tuple, Int, or Bool type at {range}"
     )]
-    MatchNonAggregateScrutinee { ty: Ty, range: Range },
+    MatchNonAggregateScrutinee { ty: Ty<'tcx>, range: Range },
     #[error(
         "match on enum '{enum_name}' is not exhaustive at {range}; uncovered variants: {uncovered:?}"
     )]

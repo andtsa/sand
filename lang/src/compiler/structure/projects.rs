@@ -1,6 +1,9 @@
 //! types relating to projects and their structure
 
+use std::cmp::Ordering;
 use std::fmt::Display;
+use std::hash::Hash;
+use std::hash::Hasher;
 use std::path::Path;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -11,20 +14,49 @@ use url::Url;
 use crate::util::fs::FileOperations;
 use crate::util::fs::expand_to_files;
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct ModuleRef(pub(in crate::compiler) usize);
+/// A `Copy` handle to an arena-allocated [`CodeModule`]. Equality/hashing by
+/// pointer identity, ordering by the monotonic registration `id`.
+#[derive(Copy, Clone)]
+pub struct ModuleRef<'tcx>(pub(in crate::compiler) &'tcx CodeModule);
+
+impl PartialEq for ModuleRef<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self.0, other.0)
+    }
+}
+impl Eq for ModuleRef<'_> {}
+impl Hash for ModuleRef<'_> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        (self.0 as *const CodeModule).hash(state);
+    }
+}
+impl PartialOrd for ModuleRef<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for ModuleRef<'_> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.0.id.cmp(&other.0.id)
+    }
+}
+impl std::fmt::Debug for ModuleRef<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ModuleRef({}, {})", self.0.id, self.0.name)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct CodeModule {
     pub(in crate::compiler) name: String,
     pub(in crate::compiler) from_file: FileRef,
-    pub(in crate::compiler) index: ModuleRef,
+    pub(in crate::compiler) id: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct ModuleInfo {
+pub struct ModuleInfo<'tcx> {
     pub name: String,
-    pub index: ModuleRef,
+    pub index: ModuleRef<'tcx>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -33,7 +65,6 @@ pub struct CodeFile {
     pub(in crate::compiler) uri: url::Url,
     pub(in crate::compiler) name: FileName,
     pub(in crate::compiler) index: FileRef,
-    pub(in crate::compiler) default_module: Option<ModuleRef>,
 }
 
 impl CodeFile {
@@ -180,7 +211,7 @@ impl UriError {
     }
 }
 
-impl Display for ModuleInfo {
+impl Display for ModuleInfo<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.name)
     }

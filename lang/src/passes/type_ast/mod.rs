@@ -19,16 +19,20 @@ pub use crate::passes::type_ast::errors::AstTypeError;
 use crate::passes::type_ast::errors::TypeError;
 use crate::passes::type_ast::infer::infer_function;
 
-type TypeEnv = im::HashMap<UniqVar, (Ty, bool)>; // (type, is_mutable)
+type TypeEnv<'tcx> = im::HashMap<UniqVar<'tcx>, (Ty<'tcx>, bool)>; // (type, is_mutable)
 
-impl typed_hir::TypedProgram {
-    pub fn from_ast_program(ctx: &mut CompileCtx, ast: qhir::Program) -> Result<Self, TypeError> {
+impl<'tcx> typed_hir::TypedProgram<'tcx> {
+    pub fn from_ast_program(
+        ctx: &mut CompileCtx<'tcx>,
+        ast: qhir::Program<'tcx>,
+    ) -> Result<Self, TypeError<'tcx>> {
         // sequential loop (rather than `.map`) because `infer_function` needs
         // `&mut CompileCtx` (type checking interns fresh `TyKind::Tuple`s as
         // it encounters tuple literals, so the interner must be writable
         // while the pass runs — see the interior-mutability note in
         // ENUM_PAYLOADS_TUPLES.todo.md §1).
-        let mut fn_list: Vec<(FunRef, TypedFunction)> = Vec::with_capacity(ast.functions.len());
+        let mut fn_list: Vec<(FunRef<'tcx>, TypedFunction<'tcx>)> =
+            Vec::with_capacity(ast.functions.len());
         for f in ast.functions.values() {
             fn_list.push(infer_function(ctx, f)?);
         }

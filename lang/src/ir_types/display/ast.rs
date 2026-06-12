@@ -6,8 +6,8 @@ use crate::compiler::context::CompileCtx;
 use crate::ir_types::display::INDENT;
 use crate::ir_types::typed_hir::*;
 
-impl TypedProgram {
-    pub fn dump(&self, ctx: &CompileCtx) -> String {
+impl<'tcx> TypedProgram<'tcx> {
+    pub fn dump(&self, ctx: &CompileCtx<'tcx>) -> String {
         let mut out = String::new();
         for func in self.functions.values() {
             if ctx.is_core_module(ctx.file_of_module(func.src_module)) {
@@ -21,8 +21,8 @@ impl TypedProgram {
     }
 }
 
-impl TypedFunction {
-    pub fn dump(&self, ctx: &CompileCtx) -> String {
+impl<'tcx> TypedFunction<'tcx> {
+    pub fn dump(&self, ctx: &CompileCtx<'tcx>) -> String {
         let mut out = String::new();
 
         let params: Vec<String> = self
@@ -57,7 +57,7 @@ fn indent(out: &mut String, level: usize) {
     }
 }
 
-fn dump_expr(out: &mut String, expr: &Expr, ctx: &CompileCtx, level: usize) {
+fn dump_expr<'tcx>(out: &mut String, expr: &Expr<'tcx>, ctx: &CompileCtx<'tcx>, level: usize) {
     indent(out, level);
     let _ = write!(out, "[{}] ", ctx.display_ty(expr.ty));
 
@@ -152,7 +152,7 @@ fn dump_expr(out: &mut String, expr: &Expr, ctx: &CompileCtx, level: usize) {
 
 /// recursively render a `MatchPattern` as source-like syntax, e.g.
 /// `Shape#Circle(r)`, `(a, b)`, `Wrap((x, y))`, `_`.
-fn dump_match_pattern(pattern: &MatchPattern, ctx: &CompileCtx) -> String {
+fn dump_match_pattern<'tcx>(pattern: &MatchPattern<'tcx>, ctx: &CompileCtx<'tcx>) -> String {
     match pattern {
         MatchPattern::Variant {
             enum_ref,
@@ -181,7 +181,12 @@ fn dump_match_pattern(pattern: &MatchPattern, ctx: &CompileCtx) -> String {
     }
 }
 
-fn dump_statement(out: &mut String, stmt: &Statement, ctx: &CompileCtx, level: usize) {
+fn dump_statement<'tcx>(
+    out: &mut String,
+    stmt: &Statement<'tcx>,
+    ctx: &CompileCtx<'tcx>,
+    level: usize,
+) {
     match stmt {
         Statement::Declaration { name, ty, val, .. } => {
             indent(out, level);

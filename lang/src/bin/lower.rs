@@ -14,7 +14,7 @@ fn main() -> anyhow::Result<()> {
 
     let proj = Project::from_paths(&args[1..].iter().map(PathBuf::from).collect::<Vec<_>>())?.ok();
     let (ctx, ast) = proj.check().result()?;
-    let mir = MirProgram::from_typed_program(&ast);
+    let mir = MirProgram::from_typed_program(&ast, &ctx);
 
     print!("{}", mir.dump(&ctx));
 

@@ -18,40 +18,41 @@ fn enum_declaration_compiles() {
     );
 }
 
-/// A qualified constructor returns the correct variant.
+/// A qualified constructor returns the correct variant, and two variants of
+/// the same enum share one `EnumRef`.
+///
+/// `EnumRef` is an arena handle with pointer identity, so the two variants
+/// must be produced by a **single** compilation for their handles to be
+/// comparable — hence the tuple-returning program rather than two `run_mir`
+/// calls.
 #[test]
 fn qualified_constructor_first_variant() {
-    let er = {
-        // We need the EnumRef: compile and recover it from the MirValue.
-        let val = run_mir(
-            "type Light = Red | Yellow | Green
-             def main(): Light := Light#Red",
-        );
-        match val {
-            MirValue::EnumVariant {
-                enum_ref,
-                variant_idx,
-                ..
-            } => {
-                assert_eq!(variant_idx, 0, "Red should be variant index 0");
-                enum_ref
-            }
-            other => panic!("expected EnumVariant, got {:?}", other),
-        }
-    };
-    // Confirm the second variant gets index 1.
-    let val2 = run_mir(
+    let val = run_mir(
         "type Light = Red | Yellow | Green
-         def main(): Light := Light#Yellow",
+         def main(): (Light, Light) := (Light#Red, Light#Yellow)",
     );
-    match val2 {
+    let MirValue::Tuple(elems) = val else {
+        panic!("expected Tuple, got {:?}", val);
+    };
+    let er = match &elems[0] {
         MirValue::EnumVariant {
             enum_ref,
             variant_idx,
             ..
         } => {
-            assert_eq!(variant_idx, 1, "Yellow should be variant index 1");
-            assert_eq!(enum_ref, er, "Both come from the same enum type");
+            assert_eq!(*variant_idx, 0, "Red should be variant index 0");
+            *enum_ref
+        }
+        other => panic!("expected EnumVariant, got {:?}", other),
+    };
+    match &elems[1] {
+        MirValue::EnumVariant {
+            enum_ref,
+            variant_idx,
+            ..
+        } => {
+            assert_eq!(*variant_idx, 1, "Yellow should be variant index 1");
+            assert_eq!(*enum_ref, er, "Both come from the same enum type");
         }
         other => panic!("expected EnumVariant, got {:?}", other),
     }

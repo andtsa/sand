@@ -29,18 +29,18 @@ pub enum InterpError {
     Runtime(String),
 }
 
-type Env = Map<UniqVar, Expression>;
+type Env<'tcx> = Map<UniqVar<'tcx>, Expression<'tcx>>;
 
-impl TypedProgram {
-    pub fn interpret(&self, ctx: &CompileCtx) -> Result<Expression, InterpError> {
+impl<'tcx> TypedProgram<'tcx> {
+    pub fn interpret(&self, ctx: &CompileCtx<'tcx>) -> Result<Expression<'tcx>, InterpError> {
         self.interpret_with_output(ctx, &mut std::io::stdout())
     }
 
     pub fn interpret_with_output(
         &self,
-        ctx: &CompileCtx,
+        ctx: &CompileCtx<'tcx>,
         output: &mut dyn std::io::Write,
-    ) -> Result<Expression, InterpError> {
+    ) -> Result<Expression<'tcx>, InterpError> {
         let (_, main_fn) = self
             .functions
             .iter()
@@ -52,11 +52,11 @@ impl TypedProgram {
 
     fn eval_expr(
         &self,
-        expr: &Expression,
-        env: &mut Env,
-        ctx: &CompileCtx,
+        expr: &Expression<'tcx>,
+        env: &mut Env<'tcx>,
+        ctx: &CompileCtx<'tcx>,
         output: &mut dyn std::io::Write,
-    ) -> Result<Expression, InterpError> {
+    ) -> Result<Expression<'tcx>, InterpError> {
         match expr {
             Expression::Int(n) => Ok(Expression::Int(*n)),
             Expression::Bool(b) => Ok(Expression::Bool(*b)),
@@ -191,7 +191,11 @@ impl TypedProgram {
 /// bindings, wildcards, and recursive tuple-destructuring are allowed in
 /// sub-pattern position, so once the top-level tag matches every sub-pattern
 /// is guaranteed to match too).
-fn bind_pattern(pattern: &MatchPattern, value: &Expression, env: &mut Env) -> bool {
+fn bind_pattern<'tcx>(
+    pattern: &MatchPattern<'tcx>,
+    value: &Expression<'tcx>,
+    env: &mut Env<'tcx>,
+) -> bool {
     match pattern {
         MatchPattern::Wildcard => true,
         MatchPattern::Binding { var, .. } => {
@@ -236,11 +240,11 @@ fn bind_pattern(pattern: &MatchPattern, value: &Expression, env: &mut Env) -> bo
     }
 }
 
-fn eval_stmt(
-    prog: &TypedProgram,
-    stmt: &Statement,
-    env: &mut Env,
-    ctx: &CompileCtx,
+fn eval_stmt<'tcx>(
+    prog: &TypedProgram<'tcx>,
+    stmt: &Statement<'tcx>,
+    env: &mut Env<'tcx>,
+    ctx: &CompileCtx<'tcx>,
     output: &mut dyn std::io::Write,
 ) -> Result<(), InterpError> {
     match stmt {
@@ -303,12 +307,12 @@ fn eval_stmt(
     Ok(())
 }
 
-fn eval_binop(
+fn eval_binop<'tcx>(
     op: Bop,
-    l: Expression,
-    r: Expression,
-    ctx: &CompileCtx,
-) -> Result<Expression, InterpError> {
+    l: Expression<'tcx>,
+    r: Expression<'tcx>,
+    ctx: &CompileCtx<'tcx>,
+) -> Result<Expression<'tcx>, InterpError> {
     match (l, r, op) {
         (Expression::Int(l), Expression::Int(r), Bop::Plus) => {
             Ok(Expression::Int(l.overflowing_add(r).0))
@@ -415,7 +419,11 @@ fn eval_binop(
     }
 }
 
-fn eval_unop(op: Uop, v: Expression, ctx: &CompileCtx) -> Result<Expression, InterpError> {
+fn eval_unop<'tcx>(
+    op: Uop,
+    v: Expression<'tcx>,
+    ctx: &CompileCtx<'tcx>,
+) -> Result<Expression<'tcx>, InterpError> {
     match (v, op) {
         (Expression::Bool(b), Uop::Not) => Ok(Expression::Bool(!b)),
         (Expression::Int(n), Uop::Not) => Ok(Expression::Int(!n)),
@@ -424,13 +432,13 @@ fn eval_unop(op: Uop, v: Expression, ctx: &CompileCtx) -> Result<Expression, Int
     }
 }
 
-fn eval_intrinsic(
+fn eval_intrinsic<'tcx>(
     fn_name: Intrinsic,
-    vals: Vec<Expression>,
-    ctx: &CompileCtx,
+    vals: Vec<Expression<'tcx>>,
+    ctx: &CompileCtx<'tcx>,
     output: &mut dyn std::io::Write,
-) -> Result<Expression, InterpError> {
-    let fmt = |val: &Expression| val.fmt_inline(ctx);
+) -> Result<Expression<'tcx>, InterpError> {
+    let fmt = |val: &Expression<'tcx>| val.fmt_inline(ctx);
     match fn_name {
         Intrinsic::Println => {
             let line: Vec<String> = vals.iter().map(fmt).collect();

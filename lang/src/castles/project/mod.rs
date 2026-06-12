@@ -142,11 +142,11 @@ impl Project {
 pub enum CheckResult {
     Success {
         ctx: CompileCtx<'static>,
-        ast: TypedProgram,
+        ast: TypedProgram<'static>,
     },
     Failure {
         ctx: CompileCtx<'static>,
-        error: SandLangError,
+        error: SandLangError<'static>,
     },
 }
 
@@ -159,21 +159,23 @@ impl CheckResult {
         matches!(self, CheckResult::Failure { .. })
     }
 
-    pub fn ctx_err(self) -> Option<(CompileCtx<'static>, SandLangError)> {
+    pub fn ctx_err(self) -> Option<(CompileCtx<'static>, SandLangError<'static>)> {
         match self {
             CheckResult::Success { .. } => None,
             CheckResult::Failure { ctx, error } => Some((ctx, error)),
         }
     }
 
-    pub fn err(self) -> Option<SandLangError> {
-        self.ctx_err().map(|(_, e)| e)
-    }
-
-    pub fn result(self) -> Result<(CompileCtx<'static>, TypedProgram), SandLangError> {
+    pub fn result(
+        self,
+    ) -> Result<(CompileCtx<'static>, TypedProgram<'static>), SandLangError<'static>> {
         match self {
             CheckResult::Success { ctx, ast } => Ok((ctx, ast)),
-            CheckResult::Failure { ctx: _, error } => Err(error),
+            CheckResult::Failure { ctx, error } => {
+                // See `err`: leak `ctx` so the arena outlives the borrowed error.
+                std::mem::forget(ctx);
+                Err(error)
+            }
         }
     }
 

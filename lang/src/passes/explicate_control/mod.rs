@@ -3,24 +3,28 @@
 
 pub mod context;
 
+use crate::compiler::context::CompileCtx;
 use crate::ir_types::mir::*;
 use crate::ir_types::typed_hir as th;
 use crate::passes::explicate_control::context::FnCx;
 
-impl MirProgram {
-    pub fn from_typed_program(prog: &th::TypedProgram) -> Self {
+impl<'tcx> MirProgram<'tcx> {
+    pub fn from_typed_program(prog: &th::TypedProgram<'tcx>, ctx: &CompileCtx<'tcx>) -> Self {
         let functions = prog
             .functions
             .iter()
-            .map(|(name, func)| (*name, lower_function(func)))
+            .map(|(name, func)| (*name, lower_function(func, ctx)))
             .collect();
 
         Self { functions }
     }
 }
 
-fn lower_function(func: &th::TypedFunction) -> MirFunction {
-    let mut cx = FnCx::new(func.name, func.range, func.ret_type);
+fn lower_function<'tcx>(
+    func: &th::TypedFunction<'tcx>,
+    ctx: &CompileCtx<'tcx>,
+) -> MirFunction<'tcx> {
+    let mut cx = FnCx::new(func.name, func.range, func.ret_type, ctx.types);
 
     let params = func
         .parameters
@@ -77,7 +81,7 @@ fn fix_terminator_ids(term: &mut Terminator, n: usize) {
     }
 }
 
-fn collect_locals(cx: &mut FnCx, expr: &th::Expr) {
+fn collect_locals<'tcx>(cx: &mut FnCx<'tcx>, expr: &th::Expr<'tcx>) {
     match &expr.expr {
         th::Expression::Block { statements, expr } => {
             for stmt in statements {
@@ -105,7 +109,7 @@ fn collect_locals(cx: &mut FnCx, expr: &th::Expr) {
                         ..
                     } => {
                         // Register locals for all bindings introduced by the pattern.
-                        declare_pattern_locals(cx, pattern, val.range);
+                        declare_pattern_locals(cx, pattern);
                         collect_locals(cx, val);
                         collect_locals(cx, else_branch);
                     }
@@ -159,11 +163,7 @@ fn collect_locals(cx: &mut FnCx, expr: &th::Expr) {
 }
 
 /// Recursively declare MIR locals for every variable bound in a `LetPattern`.
-fn declare_pattern_locals(
-    cx: &mut FnCx,
-    pattern: &th::MatchPattern,
-    range: crate::compiler::structure::Range,
-) {
+fn declare_pattern_locals<'tcx>(cx: &mut FnCx<'tcx>, pattern: &th::MatchPattern<'tcx>) {
     match pattern {
         th::MatchPattern::Binding {
             var,
@@ -174,12 +174,12 @@ fn declare_pattern_locals(
         }
         th::MatchPattern::Tuple { elems, .. } => {
             for e in elems {
-                declare_pattern_locals(cx, e, range);
+                declare_pattern_locals(cx, e);
             }
         }
         th::MatchPattern::Variant { payload, .. } => {
             if let Some((_, sub)) = payload {
-                declare_pattern_locals(cx, sub, range);
+                declare_pattern_locals(cx, sub);
             }
         }
         th::MatchPattern::Wildcard | th::MatchPattern::IntLit(_) | th::MatchPattern::BoolLit(_) => {

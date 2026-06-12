@@ -13,16 +13,16 @@ use crate::lang::types::Ty;
 use crate::lang::types::TyKind;
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum MirValue {
+pub enum MirValue<'tcx> {
     Int(i64),
     Bool(bool),
     Unit,
     EnumVariant {
-        enum_ref: EnumRef,
+        enum_ref: EnumRef<'tcx>,
         variant_idx: usize,
-        payload: Option<Box<MirValue>>,
+        payload: Option<Box<MirValue<'tcx>>>,
     },
-    Tuple(Vec<MirValue>),
+    Tuple(Vec<MirValue<'tcx>>),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -39,8 +39,8 @@ pub enum MirInterpError {
     Runtime(String),
 }
 
-impl MirProgram {
-    pub fn interpret(&self, ctx: &CompileCtx) -> Result<MirValue, MirInterpError> {
+impl<'tcx> MirProgram<'tcx> {
+    pub fn interpret(&self, ctx: &CompileCtx<'tcx>) -> Result<MirValue<'tcx>, MirInterpError> {
         // find the main function
         let (main_ref, _main_fn) = self
             .functions
@@ -54,13 +54,13 @@ impl MirProgram {
     fn call_function(
         &self,
         fun: FunRef,
-        args: &[MirValue],
-        ctx: &CompileCtx,
-    ) -> Result<MirValue, MirInterpError> {
+        args: &[MirValue<'tcx>],
+        ctx: &CompileCtx<'tcx>,
+    ) -> Result<MirValue<'tcx>, MirInterpError> {
         let func = &self.functions[&fun];
 
         // initialise locals: all unset to start
-        let mut locals: Vec<Option<MirValue>> = vec![None; func.locals.len()];
+        let mut locals: Vec<Option<MirValue<'tcx>>> = vec![None; func.locals.len()];
 
         // bind parameters
         for (param, val) in func.params.iter().zip(args.iter()) {
@@ -103,12 +103,12 @@ impl MirProgram {
     }
 }
 
-fn execute_statement(
+fn execute_statement<'tcx>(
     stmt: &Statement,
-    locals: &mut [Option<MirValue>],
-    local_decls: &[LocalDecl],
-    prog: &MirProgram,
-    ctx: &CompileCtx,
+    locals: &mut [Option<MirValue<'tcx>>],
+    local_decls: &[LocalDecl<'tcx>],
+    prog: &MirProgram<'tcx>,
+    ctx: &CompileCtx<'tcx>,
 ) -> Result<(), MirInterpError> {
     match stmt {
         Statement::Assign { dst, value, .. } => {
@@ -120,19 +120,19 @@ fn execute_statement(
         Statement::Eval { value, .. } => {
             // Eval is only for side-effecting calls — Aggregate/Field never
             // appear here, so the result_ty is irrelevant; use UNIT as dummy.
-            eval_rvalue(value, Ty::UNIT, locals, prog, ctx)?;
+            eval_rvalue(value, ctx.types.unit, locals, prog, ctx)?;
             Ok(())
         }
     }
 }
 
-fn eval_rvalue(
+fn eval_rvalue<'tcx>(
     rv: &RValue,
-    result_ty: Ty,
-    locals: &mut [Option<MirValue>],
-    prog: &MirProgram,
-    ctx: &CompileCtx,
-) -> Result<MirValue, MirInterpError> {
+    result_ty: Ty<'tcx>,
+    locals: &mut [Option<MirValue<'tcx>>],
+    prog: &MirProgram<'tcx>,
+    ctx: &CompileCtx<'tcx>,
+) -> Result<MirValue<'tcx>, MirInterpError> {
     match rv {
         RValue::Use(op) => eval_operand(op, locals),
 
@@ -164,14 +164,14 @@ fn eval_rvalue(
         }
 
         RValue::Aggregate(fields) => {
-            let vals: Vec<MirValue> = fields
+            let vals: Vec<MirValue<'tcx>> = fields
                 .iter()
                 .map(|f| eval_operand(f, locals))
                 .collect::<Result<_, _>>()?;
 
             // Recover semantic type from the destination local's type (passed
             // in as `result_ty`) to reconstruct a rich `MirValue` for display.
-            match ctx.ty_kind(result_ty) {
+            match result_ty.kind() {
                 TyKind::Enum(enum_ref) => {
                     // field 0 = discriminant (Int), field 1 = payload (if any)
                     let MirValue::Int(disc) = vals[0] else {
@@ -224,7 +224,10 @@ fn eval_rvalue(
     }
 }
 
-fn eval_operand(op: &Operand, locals: &[Option<MirValue>]) -> Result<MirValue, MirInterpError> {
+fn eval_operand<'tcx>(
+    op: &Operand,
+    locals: &[Option<MirValue<'tcx>>],
+) -> Result<MirValue<'tcx>, MirInterpError> {
     match op {
         Operand::Const(c) => Ok(match c {
             Constant::Int(i) => MirValue::Int(*i),
@@ -237,7 +240,11 @@ fn eval_operand(op: &Operand, locals: &[Option<MirValue>]) -> Result<MirValue, M
     }
 }
 
-fn eval_binop(op: Bop, l: MirValue, r: MirValue) -> Result<MirValue, MirInterpError> {
+fn eval_binop<'tcx>(
+    op: Bop,
+    l: MirValue<'tcx>,
+    r: MirValue<'tcx>,
+) -> Result<MirValue<'tcx>, MirInterpError> {
     match (op, l, r) {
         (Bop::Plus, MirValue::Int(a), MirValue::Int(b)) => {
             Ok(MirValue::Int(a.overflowing_add(b).0))
@@ -312,7 +319,7 @@ fn eval_binop(op: Bop, l: MirValue, r: MirValue) -> Result<MirValue, MirInterpEr
     }
 }
 
-fn eval_unop(op: Uop, v: MirValue) -> Result<MirValue, MirInterpError> {
+fn eval_unop<'tcx>(op: Uop, v: MirValue<'tcx>) -> Result<MirValue<'tcx>, MirInterpError> {
     match (op, v) {
         (Uop::Neg, MirValue::Int(i)) => Ok(MirValue::Int(-i)),
         (Uop::Not, MirValue::Bool(b)) => Ok(MirValue::Bool(!b)),
@@ -321,11 +328,11 @@ fn eval_unop(op: Uop, v: MirValue) -> Result<MirValue, MirInterpError> {
     }
 }
 
-fn eval_intrinsic(
+fn eval_intrinsic<'tcx>(
     fn_name: Intrinsic,
-    args: Vec<MirValue>,
-    ctx: &CompileCtx,
-) -> Result<MirValue, MirInterpError> {
+    args: Vec<MirValue<'tcx>>,
+    ctx: &CompileCtx<'tcx>,
+) -> Result<MirValue<'tcx>, MirInterpError> {
     match fn_name {
         Intrinsic::Println => {
             for arg in &args {
@@ -388,7 +395,7 @@ fn eval_intrinsic(
     }
 }
 
-fn fmt_value(v: &MirValue, ctx: &CompileCtx) -> String {
+fn fmt_value<'tcx>(v: &MirValue<'tcx>, ctx: &CompileCtx<'tcx>) -> String {
     match v {
         MirValue::Int(i) => i.to_string(),
         MirValue::Bool(b) => b.to_string(),

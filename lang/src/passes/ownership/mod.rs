@@ -31,7 +31,10 @@ use crate::compiler::structure::ModuleRef;
 use crate::ir_types::typed_hir as th;
 use crate::ir_types::typed_hir::TypedProgram;
 
-pub fn check(ctx: &CompileCtx, program: TypedProgram) -> Result<TypedProgram, OwnershipCheckError> {
+pub fn check<'tcx>(
+    ctx: &CompileCtx<'tcx>,
+    program: TypedProgram<'tcx>,
+) -> Result<TypedProgram<'tcx>, OwnershipCheckError<'tcx>> {
     for func in program.functions.values() {
         let checker = OwnershipChecker {
             ctx,
@@ -48,13 +51,13 @@ pub fn check(ctx: &CompileCtx, program: TypedProgram) -> Result<TypedProgram, Ow
     Ok(program)
 }
 
-struct OwnershipChecker<'ctx> {
-    ctx: &'ctx CompileCtx<'ctx>,
-    module: ModuleRef,
+struct OwnershipChecker<'a, 'tcx> {
+    ctx: &'a CompileCtx<'tcx>,
+    module: ModuleRef<'tcx>,
 }
 
-impl<'ctx> OwnershipChecker<'ctx> {
-    fn err(&self, error: OwnershipError) -> OwnershipCheckError {
+impl<'tcx> OwnershipChecker<'_, 'tcx> {
+    fn err(&self, error: OwnershipError) -> OwnershipCheckError<'tcx> {
         OwnershipCheckError {
             error,
             module: self.module,
@@ -63,9 +66,9 @@ impl<'ctx> OwnershipChecker<'ctx> {
 
     fn check_statement(
         &self,
-        stmt: &th::Statement,
-        env: &mut OwnershipEnv,
-    ) -> Result<(), OwnershipCheckError> {
+        stmt: &th::Statement<'tcx>,
+        env: &mut OwnershipEnv<'tcx>,
+    ) -> Result<(), OwnershipCheckError<'tcx>> {
         match stmt {
             th::Statement::Declaration { name, val, .. } => {
                 // check RHS first (it may move other variables)
@@ -111,9 +114,9 @@ impl<'ctx> OwnershipChecker<'ctx> {
 
     fn check_expr(
         &self,
-        expr: &th::Expr,
-        env: &mut OwnershipEnv,
-    ) -> Result<(), OwnershipCheckError> {
+        expr: &th::Expr<'tcx>,
+        env: &mut OwnershipEnv<'tcx>,
+    ) -> Result<(), OwnershipCheckError<'tcx>> {
         match &expr.expr {
             th::Expression::Int(_) | th::Expression::Bool(_) | th::Expression::Unit => Ok(()),
 
@@ -237,7 +240,7 @@ impl<'ctx> OwnershipChecker<'ctx> {
                         arm_env.restrict_to(&pre_arm_vars);
                         Ok(arm_env)
                     })
-                    .collect::<Result<Vec<_>, OwnershipCheckError>>()?;
+                    .collect::<Result<Vec<_>, OwnershipCheckError<'tcx>>>()?;
 
                 if let Some((first, rest)) = arm_envs.split_first() {
                     *env = rest
@@ -251,7 +254,7 @@ impl<'ctx> OwnershipChecker<'ctx> {
 
     /// recursively declare every variable bound by `pattern` as freshly
     /// `Owned` in `env` (decision D3 — see `Match` arm handling above).
-    fn declare_pattern_bindings(pattern: &th::MatchPattern, env: &mut OwnershipEnv) {
+    fn declare_pattern_bindings(pattern: &th::MatchPattern<'tcx>, env: &mut OwnershipEnv<'tcx>) {
         match pattern {
             th::MatchPattern::Wildcard
             | th::MatchPattern::IntLit(_)
@@ -272,9 +275,9 @@ impl<'ctx> OwnershipChecker<'ctx> {
 
     fn check_exprs(
         &self,
-        exprs: &[th::Expr],
-        env: &mut OwnershipEnv,
-    ) -> Result<(), OwnershipCheckError> {
+        exprs: &[th::Expr<'tcx>],
+        env: &mut OwnershipEnv<'tcx>,
+    ) -> Result<(), OwnershipCheckError<'tcx>> {
         for e in exprs {
             self.check_expr(e, env)?;
         }
