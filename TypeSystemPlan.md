@@ -15,6 +15,11 @@ from a later step, even if it seems natural to do so.
 
 - **No step breaks existing tests.** Every step ends with `cargo test
   --workspace` passing. Regressions must be fixed before moving on.
+- **Keep code cleanly documented.** Documentation should be there to
+  add something only when the code does not explain itself. Keep the
+  style consistent, and avoid implementation comments and remarks
+  relating to the implementation process itself, unless they will be
+  explicitly useful later.
 - **Monomorphisation sits between TypedHIR and MIR.** MIR and LLVM
   codegen always see fully concrete types. No generics leak past the
   mono pass.
@@ -33,7 +38,38 @@ from a later step, even if it seems natural to do so.
 
 ---
 
-## Step 0 — Harden the Index Types
+## Step 0 — Harden the Index Types ✅
+
+**Status**: Complete. `TyKind`/`Ty(usize)` split and all typed newtypes
+were already in place. `TyKind::Bottom`/`Ty::BOTTOM` removed as dead
+code; `TyKind::Top`/`Ty::TOP` retained for polymorphic intrinsics.
+All 391 tests pass.
+
+**Follow-up (arena migration), complete**: the index newtypes are now
+*arena references* rather than `usize` indices, matching the rustc
+"`'tcx` everywhere" model:
+- `Ty<'tcx>` = `&'tcx TyKind<'tcx>` (bumpalo arena; `Copy`, equality by
+  pointer identity via structural interning).
+- `FunRef<'tcx>`, `ModuleRef<'tcx>`, `EnumRef<'tcx>`,
+  `OriginalVarRef<'tcx>` are `Copy` newtypes over `&'tcx` data allocated
+  in per-type `typed_arena::Arena`s (destructor-running, for the
+  `String`/`Vec`-owning structs). `UniqVar<'tcx>` carries an
+  `OriginalVarRef<'tcx>`. Equality/hash by pointer identity; ordering by
+  a stored monotonic registration `id` for deterministic `BTreeMap`
+  iteration.
+- `EnumDef` payloads use `Cell<Option<Ty>>` for the two-phase
+  (register → resolve) registration of recursive enums, with a
+  justified `unsafe impl Sync`.
+- The arena lives in `Arenas`, owned by `CompileCtx` and abstracted away
+  from every other module. `CompileCtx::initial()` owns the arena and
+  frees it on `Drop`, fixing the LSP's unbounded per-keystroke arena
+  leak; terminal compile-error paths and test helpers `mem::forget` the
+  ctx to keep `'static`-typed borrowed results valid.
+
+**Semantic note for later steps**: arena handles have *pointer
+identity*, so a given enum/function compiled in two *separate*
+`CompileCtx`s yields *different* handles. Comparisons that span
+compilations (some tests did) must share one compilation.
 
 **Goal**: Replace `usize` phantom indices with typed newtypes so that
 mixing `EnumRef`, `FunRef`, `UniqVar`, and `Ty` indices is a compile

@@ -1,95 +1,189 @@
-/// Opaque index into the compiler's enum-definition registry.
-/// Freely `Copy`, comparable, hashable — same pattern as `FunRef`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct EnumRef(pub usize);
+use std::cmp::Ordering;
+use std::fmt;
+use std::hash::Hash;
+use std::hash::Hasher;
 
-/// the actual (recursive, non-`Copy`) signature of a type.
+use crate::compiler::structure::EnumDef;
+
+/// A `Copy` handle to an arena-allocated [`EnumDef`].
 ///
-/// interned into a registry on [`crate::compiler::context::CompileCtx`];
-/// referred to elsewhere via the cheap, `Copy` [`Ty`] index.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum TyKind {
+/// Equality and hashing are by pointer identity: each distinct enum (named
+/// enums deduplicated by name, anonymous tag-unions by tag set) is allocated
+/// exactly once, so identical enum ↔ identical pointer. Ordering is by the
+/// monotonic registration `id` for deterministic iteration.
+#[derive(Copy, Clone)]
+pub struct EnumRef<'tcx>(pub(crate) &'tcx EnumDef<'tcx>);
+
+impl<'tcx> EnumRef<'tcx> {
+    /// Access the underlying enum definition.
+    #[inline]
+    pub fn def(self) -> &'tcx EnumDef<'tcx> {
+        self.0
+    }
+}
+
+impl PartialEq for EnumRef<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self.0, other.0)
+    }
+}
+impl Eq for EnumRef<'_> {}
+impl Hash for EnumRef<'_> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        (self.0 as *const EnumDef<'_>).hash(state);
+    }
+}
+impl PartialOrd for EnumRef<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for EnumRef<'_> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.0.id.cmp(&other.0.id)
+    }
+}
+impl fmt::Debug for EnumRef<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "EnumRef({}, {})", self.0.id, self.0.name)
+    }
+}
+
+/// The structural signature of a type.
+///
+/// `'tcx` is the lifetime of the arena backing all type allocations. All
+/// variants are `Copy`: unit-like discriminants, `Copy` scalars, or
+/// arena-backed fat-pointer references.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum TyKind<'tcx> {
     Int,
     Bool,
     Unit,
-    Top,    // the any type. used for error reporting when type inference fails
-    Bottom, // the never type, for when an expression can never produce a value
-    Enum(EnumRef),
-    /// product type, arity >= 2 (arity 0 is `Unit`, arity 1 is just grouping).
-    /// holds interned handles (not `TyKind`s) so `Ty` stays `Copy` and
-    /// hash-consing/dedup keeps working; recursion is bounded to one level
-    /// per interner lookup.
-    Tuple(Vec<Ty>),
+    /// Placeholder "any" type for polymorphic intrinsics (e.g. `println`).
+    /// Will be retired in Step 10 once a `Display` typeclass is available.
+    Top,
+    Enum(EnumRef<'tcx>),
+    /// Product type, arity >= 2 (arity-0 is `Unit`, arity-1 is plain grouping).
+    /// The element slice is arena-allocated so `TyKind` stays `Copy`.
+    Tuple(&'tcx [Ty<'tcx>]),
 }
 
-/// opaque, interned index into the compiler's [`TyKind`] registry.
-/// freely `Copy`, comparable, hashable — same pattern as [`EnumRef`].
+/// A shallow, `Copy` handle to an interned [`TyKind`].
 ///
-/// the five primitive kinds are interned at fixed indices (see the
-/// associated constants below) by
-/// [`crate::compiler::context::CompileCtx::initial`], so they can be
-/// constructed and compared without access to the context.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Ty(pub usize);
+/// Equality and hashing are by pointer identity — sound because interning
+/// guarantees that structurally equal types share the same arena allocation,
+/// so identical structure ↔ identical pointer.
+#[derive(Copy, Clone)]
+pub struct Ty<'tcx>(pub(crate) &'tcx TyKind<'tcx>);
 
-impl Ty {
-    pub const INT: Ty = Ty(0);
-    pub const BOOL: Ty = Ty(1);
-    pub const UNIT: Ty = Ty(2);
-    pub const TOP: Ty = Ty(3);
-    pub const BOTTOM: Ty = Ty(4);
-
-    /// true for types that are implicitly copied on use (Int, Bool, Unit).
-    ///
-    /// Enum types are *not* Copy, and are subject to move semantics.
-    pub fn is_copy(&self) -> bool {
-        matches!(*self, Ty::INT | Ty::BOOL | Ty::UNIT)
+impl<'tcx> Ty<'tcx> {
+    /// Access the structural signature of this type.
+    #[inline]
+    pub fn kind(self) -> &'tcx TyKind<'tcx> {
+        self.0
     }
 
-    /// sound because interning is structural: equal `TyKind`s always
-    /// produce the same `Ty` index, so equality of the underlying kinds
-    /// (other than the Top/Bottom subtyping rules below) reduces to index
-    /// equality.
-    pub fn type_eq(&self, other: &Self) -> bool {
-        match (*self, *other) {
-            (Ty::BOTTOM, Ty::BOTTOM) => true,
-            (Ty::TOP, Ty::BOTTOM) | (Ty::BOTTOM, Ty::TOP) => false,
-            (Ty::TOP, _) | (_, Ty::TOP) => true,
-            (a, b) => a == b,
+    /// `true` for types that are implicitly copied on use (Int, Bool, Unit).
+    /// Enum types are *not* Copy and are subject to move semantics.
+    pub fn is_copy(self) -> bool {
+        matches!(self.kind(), TyKind::Int | TyKind::Bool | TyKind::Unit)
+    }
+
+    /// Equality that treats `Top` as compatible with any type.
+    pub fn type_eq(self, other: Ty<'tcx>) -> bool {
+        if std::ptr::eq(self.0, other.0) {
+            return true;
         }
+        matches!(
+            (self.kind(), other.kind()),
+            (TyKind::Top, _) | (_, TyKind::Top)
+        )
     }
 
-    pub fn type_neq(&self, other: &Self) -> bool {
+    pub fn type_neq(self, other: Ty<'tcx>) -> bool {
         !self.type_eq(other)
     }
 
-    /// like [`type_eq`](Ty::type_eq), but also looks *through* `Tuple` handles
-    /// so that `Top`/`Bottom` error-recovery types are recognised when they
-    /// appear nested inside a composite type (e.g. inferring `(Int, Top)`
-    /// against `(Int, Bool)` during recovery). requires `&CompileCtx`
-    /// because tuples are interned handles, not inline data.
-    pub fn compatible(&self, ctx: &crate::compiler::context::CompileCtx, other: &Self) -> bool {
+    /// Like [`type_eq`](Ty::type_eq), but also looks through `Tuple` handles
+    /// so that `Top` error-recovery types are recognised when nested in a
+    /// composite type (e.g. `(Int, Top)` vs `(Int, Bool)` during recovery).
+    pub fn compatible(self, other: Ty<'tcx>) -> bool {
         if self.type_eq(other) {
             return true;
         }
-        match (ctx.ty_kind(*self), ctx.ty_kind(*other)) {
+        match (self.kind(), other.kind()) {
             (TyKind::Tuple(xs), TyKind::Tuple(ys)) if xs.len() == ys.len() => {
-                xs.iter().zip(ys.iter()).all(|(x, y)| x.compatible(ctx, y))
+                xs.iter().zip(*ys).all(|(x, y)| x.compatible(*y))
             }
             _ => false,
         }
     }
 }
 
-impl std::fmt::Display for Ty {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match *self {
-            Ty::INT => write!(f, "Int"),
-            Ty::BOOL => write!(f, "Bool"),
-            Ty::UNIT => write!(f, "Unit"),
-            Ty::TOP => write!(f, "Top"),
-            Ty::BOTTOM => write!(f, "Bottom"),
-            Ty(n) => write!(f, "Ty({n})"),
+impl PartialEq for Ty<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self.0, other.0)
+    }
+}
+
+impl Eq for Ty<'_> {}
+
+impl PartialOrd for Ty<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// Ordered by arena pointer address — consistent within a single compilation
+/// context, where all pointers are stable after allocation.
+impl Ord for Ty<'_> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        (self.0 as *const TyKind<'_>).cmp(&(other.0 as *const TyKind<'_>))
+    }
+}
+
+impl Hash for Ty<'_> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        (self.0 as *const TyKind<'_>).hash(state);
+    }
+}
+
+impl fmt::Debug for Ty<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{self}")
+    }
+}
+
+/// Displays primitive types by name and composites structurally.
+/// For enum types, use [`CompileCtx::display_ty`] to resolve the type name.
+impl fmt::Display for Ty<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.kind() {
+            TyKind::Int => write!(f, "Int"),
+            TyKind::Bool => write!(f, "Bool"),
+            TyKind::Unit => write!(f, "Unit"),
+            TyKind::Top => write!(f, "Top"),
+            TyKind::Enum(er) => write!(f, "Enum({:?})", er),
+            TyKind::Tuple(ts) => {
+                write!(f, "(")?;
+                for (i, t) in ts.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{t}")?;
+                }
+                write!(f, ")")
+            }
         }
     }
+}
+
+/// Pre-interned handles for the four primitive types, available on every
+/// [`CompileCtx`](crate::compiler::context::CompileCtx) as `ctx.types`.
+#[derive(Copy, Clone)]
+pub struct CommonTypes<'tcx> {
+    pub int: Ty<'tcx>,
+    pub bool: Ty<'tcx>,
+    pub unit: Ty<'tcx>,
+    pub top: Ty<'tcx>,
 }

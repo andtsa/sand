@@ -87,12 +87,12 @@ impl<T> AstExt<T> for Option<T> {
     }
 }
 
-impl ProgramModule {
-    pub fn parse_source_file<'run>(
+impl<'run> ProgramModule<'run> {
+    pub fn parse_source_file(
         ctx: &mut CompileCtx<'run>,
         src: &str,
         file: FileRef,
-    ) -> Result<Vec<Self>, AstError> {
+    ) -> Result<Vec<ProgramModule<'run>>, AstError> {
         let mut pairs = LangParser::parse(Rule::program, src).map_err(Box::new)?;
 
         let program_pair = match pairs.next() {
@@ -117,7 +117,7 @@ impl ProgramModule {
             .collect::<Vec<_>>())
     }
 
-    pub fn parse_stub<'run>(ctx: &mut CompileCtx<'run>, src: &str) -> Result<Self, AstError> {
+    pub fn parse_stub(ctx: &mut CompileCtx<'run>, src: &str) -> Result<Self, AstError> {
         let fr = ctx.stub_file();
         let modules = Self::parse_source_file(ctx, src, fr)?;
         if modules.len() == 1 {
@@ -138,9 +138,9 @@ pub fn build_program<'run>(
     ctx: &mut CompileCtx<'run>,
     pair: Pair<Rule>,
     src: &str,
-    default_module: ModuleRef,
+    default_module: ModuleRef<'run>,
     file: FileRef,
-) -> Result<Map<ModuleRef, Vec<Function>>, AstError> {
+) -> Result<Map<ModuleRef<'run>, Vec<Function<'run>>>, AstError> {
     assert_eq!(pair.as_rule(), Rule::program);
 
     // Collect all top-level children so we can do two passes.
@@ -273,8 +273,8 @@ fn build_function<'run>(
     ctx: &mut CompileCtx<'run>,
     pair: Pair<Rule>,
     src: &str,
-    cur_module: &ModuleRef,
-) -> Result<Function, AstError> {
+    cur_module: &ModuleRef<'run>,
+) -> Result<Function<'run>, AstError> {
     // keep the build-module hint up to date so that anonymous tag-union types
     // declared in `build_type` are attributed to the right module.
     ctx.set_build_module(*cur_module);
@@ -371,7 +371,7 @@ fn build_function<'run>(
 fn build_parameter<'run>(
     ctx: &mut CompileCtx<'run>,
     pair: Pair<Rule>,
-) -> Result<Parameter, AstError> {
+) -> Result<Parameter<'run>, AstError> {
     let rule = pair.as_rule();
     assert_eq!(rule, Rule::parameter);
     // capture span before into_inner
@@ -395,7 +395,7 @@ fn build_parameter<'run>(
     })
 }
 
-fn build_type<'run>(ctx: &mut CompileCtx<'run>, pair: Pair<Rule>) -> Result<Ty, AstError> {
+fn build_type<'run>(ctx: &mut CompileCtx<'run>, pair: Pair<Rule>) -> Result<Ty<'run>, AstError> {
     tracing::trace!("build_type called with {:?}", pair.as_str());
     assert_eq!(
         pair.as_rule(),
@@ -415,7 +415,7 @@ fn build_type<'run>(ctx: &mut CompileCtx<'run>, pair: Pair<Rule>) -> Result<Ty, 
             let elem_tys = inner
                 .into_inner()
                 .map(|p| build_type(ctx, p))
-                .collect::<Result<Vec<Ty>, _>>()?;
+                .collect::<Result<Vec<Ty<'run>>, _>>()?;
             Ok(ctx.intern_tuple(elem_tys))
         }
         Some(inner) if inner.as_rule() == Rule::tag_type => {
@@ -457,9 +457,9 @@ fn build_type<'run>(ctx: &mut CompileCtx<'run>, pair: Pair<Rule>) -> Result<Ty, 
                 .map(|p| p.as_str().to_string())
                 .unwrap_or_else(|| pair.as_str().to_string());
             match name.as_str() {
-                "Int" => Ok(Ty::INT),
-                "Bool" => Ok(Ty::BOOL),
-                "Unit" => Ok(Ty::UNIT),
+                "Int" => Ok(ctx.types.int),
+                "Bool" => Ok(ctx.types.bool),
+                "Unit" => Ok(ctx.types.unit),
                 other => ctx
                     .lookup_enum_by_name(other)
                     .map(|er| ctx.enum_ty(er))
@@ -478,7 +478,7 @@ fn build_statement<'run>(
     ctx: &mut CompileCtx<'run>,
     pair: Pair<Rule>,
     src: &str,
-) -> Result<Statement, AstError> {
+) -> Result<Statement<'run>, AstError> {
     assert_eq!(pair.as_rule(), Rule::statement);
     // statement = ((declaration | assignment | expression) ~ ";")
     // capture pair span before moving
@@ -645,7 +645,7 @@ fn build_expr<'run>(
     ctx: &mut CompileCtx<'run>,
     pair: Pair<Rule>,
     src: &str,
-) -> Result<Expr, AstError> {
+) -> Result<Expr<'run>, AstError> {
     let range = Range::from(&pair);
     match pair.as_rule() {
         Rule::expression => {
@@ -678,9 +678,9 @@ fn binop_fold<'run, F>(
     mut next_level: F,
     src: &str,
     parent_range: Range,
-) -> Result<Expr, AstError>
+) -> Result<Expr<'run>, AstError>
 where
-    F: FnMut(&mut CompileCtx<'run>, Pair<Rule>, &str) -> Result<Expr, AstError>,
+    F: FnMut(&mut CompileCtx<'run>, Pair<Rule>, &str) -> Result<Expr<'run>, AstError>,
 {
     let first_pair = inner.next().missing("left operand", parent_range)?;
     let mut expr = next_level(ctx, first_pair, src)?;
@@ -719,7 +719,7 @@ fn build_logic_or<'run>(
     ctx: &mut CompileCtx<'run>,
     pair: Pair<Rule>,
     src: &str,
-) -> Result<Expr, AstError> {
+) -> Result<Expr<'run>, AstError> {
     let range = Range::from(&pair);
     let inner = pair.into_inner();
     binop_fold(ctx, inner, build_logic_xor, src, range)
@@ -730,7 +730,7 @@ fn build_logic_xor<'run>(
     ctx: &mut CompileCtx<'run>,
     pair: Pair<Rule>,
     src: &str,
-) -> Result<Expr, AstError> {
+) -> Result<Expr<'run>, AstError> {
     let range = Range::from(&pair);
     let inner = pair.into_inner();
     binop_fold(ctx, inner, build_logic_and, src, range)
@@ -741,7 +741,7 @@ fn build_logic_and<'run>(
     ctx: &mut CompileCtx<'run>,
     pair: Pair<Rule>,
     src: &str,
-) -> Result<Expr, AstError> {
+) -> Result<Expr<'run>, AstError> {
     let range = Range::from(&pair);
     let inner = pair.into_inner();
     binop_fold(ctx, inner, build_equality, src, range)
@@ -752,7 +752,7 @@ fn build_equality<'run>(
     ctx: &mut CompileCtx<'run>,
     pair: Pair<Rule>,
     src: &str,
-) -> Result<Expr, AstError> {
+) -> Result<Expr<'run>, AstError> {
     let range = Range::from(&pair);
     let mut inner = pair.into_inner();
 
@@ -785,7 +785,7 @@ fn build_comparison<'run>(
     ctx: &mut CompileCtx<'run>,
     pair: Pair<Rule>,
     src: &str,
-) -> Result<Expr, AstError> {
+) -> Result<Expr<'run>, AstError> {
     let range = Range::from(&pair);
     let mut inner = pair.into_inner();
 
@@ -820,7 +820,7 @@ fn build_add_sub<'run>(
     ctx: &mut CompileCtx<'run>,
     pair: Pair<Rule>,
     src: &str,
-) -> Result<Expr, AstError> {
+) -> Result<Expr<'run>, AstError> {
     let range = Range::from(&pair);
     let mut inner = pair.into_inner();
 
@@ -853,7 +853,7 @@ fn build_mul_div<'run>(
     ctx: &mut CompileCtx<'run>,
     pair: Pair<Rule>,
     src: &str,
-) -> Result<Expr, AstError> {
+) -> Result<Expr<'run>, AstError> {
     let range = Range::from(&pair);
     let mut inner = pair.into_inner();
 
@@ -886,7 +886,7 @@ fn build_power<'run>(
     ctx: &mut CompileCtx<'run>,
     pair: Pair<Rule>,
     src: &str,
-) -> Result<Expr, AstError> {
+) -> Result<Expr<'run>, AstError> {
     let range = Range::from(&pair);
     let mut inner = pair.into_inner();
 
@@ -914,7 +914,7 @@ fn build_unary<'run>(
     ctx: &mut CompileCtx<'run>,
     pair: Pair<Rule>,
     src: &str,
-) -> Result<Expr, AstError> {
+) -> Result<Expr<'run>, AstError> {
     assert_eq!(pair.as_rule(), Rule::unary);
     let range = Range::from(&pair);
 
@@ -974,7 +974,7 @@ fn build_primary<'run>(
     ctx: &mut CompileCtx<'run>,
     pair: Pair<Rule>,
     src: &str,
-) -> Result<Expr, AstError> {
+) -> Result<Expr<'run>, AstError> {
     assert_eq!(pair.as_rule(), Rule::primary);
     let range = Range::from(&pair);
 
@@ -1150,7 +1150,7 @@ fn build_if<'run>(
     ctx: &mut CompileCtx<'run>,
     pair: Pair<Rule>,
     src: &str,
-) -> Result<Expr, AstError> {
+) -> Result<Expr<'run>, AstError> {
     assert_eq!(pair.as_rule(), Rule::ifstatement);
     let range = Range::from(&pair);
 
@@ -1180,7 +1180,7 @@ fn build_while<'run>(
     ctx: &mut CompileCtx<'run>,
     pair: Pair<Rule>,
     src: &str,
-) -> Result<Expr, AstError> {
+) -> Result<Expr<'run>, AstError> {
     assert_eq!(pair.as_rule(), Rule::whileloop);
     let range = Range::from(&pair);
 
@@ -1204,7 +1204,7 @@ fn build_match<'run>(
     ctx: &mut CompileCtx<'run>,
     pair: Pair<Rule>,
     src: &str,
-) -> Result<Expr, AstError> {
+) -> Result<Expr<'run>, AstError> {
     assert_eq!(pair.as_rule(), Rule::match_expr);
     let range = Range::from(&pair);
 
@@ -1246,7 +1246,7 @@ fn build_match<'run>(
 fn build_let_constructor<'run>(
     ctx: &mut CompileCtx<'run>,
     pair: Pair<Rule>,
-) -> Result<HirPattern, AstError> {
+) -> Result<HirPattern<'run>, AstError> {
     assert_eq!(pair.as_rule(), Rule::let_constructor);
     let range = Range::from(&pair);
     let mut parts = pair.into_inner();
@@ -1282,7 +1282,7 @@ fn build_let_constructor<'run>(
 fn build_let_destructure<'run>(
     ctx: &mut CompileCtx<'run>,
     pair: Pair<Rule>,
-) -> Result<HirPattern, AstError> {
+) -> Result<HirPattern<'run>, AstError> {
     assert_eq!(pair.as_rule(), Rule::let_destructure);
     let range = Range::from(&pair);
     let inner = pair
@@ -1350,7 +1350,7 @@ fn build_let_destructure<'run>(
 fn build_pattern<'run>(
     ctx: &mut CompileCtx<'run>,
     pair: Pair<Rule>,
-) -> Result<HirPattern, AstError> {
+) -> Result<HirPattern<'run>, AstError> {
     assert_eq!(pair.as_rule(), Rule::pattern);
     let range = Range::from(&pair);
     let inner = pair.into_inner().next().missing("pattern body", range)?;
@@ -1446,7 +1446,7 @@ fn build_call<'run>(
     ctx: &mut CompileCtx<'run>,
     pair: Pair<Rule>,
     src: &str,
-) -> Result<Expr, AstError> {
+) -> Result<Expr<'run>, AstError> {
     let rule = pair.as_rule();
     assert!(matches!(
         rule,

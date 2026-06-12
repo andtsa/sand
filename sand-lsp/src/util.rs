@@ -53,7 +53,11 @@ pub(super) fn pos_from_lsp_position(text: &str, pos: Position) -> Pos {
     }
 }
 
-pub fn url_of_module(module: ModuleRef, ctx: &CompileCtx, project: &Project) -> Option<Url> {
+pub fn url_of_module<'tcx>(
+    module: ModuleRef<'tcx>,
+    ctx: &CompileCtx<'tcx>,
+    project: &Project,
+) -> Option<Url> {
     let file_ref = ctx.file_of_module(module);
     project
         .file_contents

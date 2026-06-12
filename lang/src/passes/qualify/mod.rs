@@ -26,7 +26,7 @@ pub mod error;
 pub mod uniquify;
 
 struct QualfiyCtx<'qual, 'run> {
-    available_functions: Map<ModuleRef, Set<FunRef>>,
+    available_functions: Map<ModuleRef<'run>, Set<FunRef<'run>>>,
 
     compile_ctx: &'qual mut CompileCtx<'run>,
 }
@@ -42,10 +42,10 @@ impl<'qual, 'run> QualfiyCtx<'qual, 'run> {
     fn get_function_by_name(
         &self,
         name: &str,
-        in_mod: &ModuleRef,
+        in_mod: &ModuleRef<'run>,
         caller: Range,
-        caller_module: &ModuleRef,
-    ) -> Result<FunRef, QualifyError> {
+        caller_module: &ModuleRef<'run>,
+    ) -> Result<FunRef<'run>, QualifyError<'run>> {
         if let Some(fn_ref_set) = self.available_functions.get(in_mod) {
             for fr in fn_ref_set {
                 if name == self.compile_ctx.original_fun_name(*fr) {
@@ -70,7 +70,7 @@ impl<'qual, 'run> QualfiyCtx<'qual, 'run> {
 
     /// search all modules for a function with the given name
     /// (used for global/unqualified lookup)
-    fn find_function_globally(&self, name: &str) -> Option<FunRef> {
+    fn find_function_globally(&self, name: &str) -> Option<FunRef<'run>> {
         for fn_ref_set in self.available_functions.values() {
             for fr in fn_ref_set {
                 if name == self.compile_ctx.original_fun_name(*fr) {
@@ -84,9 +84,9 @@ impl<'qual, 'run> QualfiyCtx<'qual, 'run> {
     fn get_module_by_name(
         &self,
         name: &str,
-        from_module: ModuleRef,
+        from_module: ModuleRef<'run>,
         range: Range,
-    ) -> Result<ModuleRef, QualifyError> {
+    ) -> Result<ModuleRef<'run>, QualifyError<'run>> {
         self.compile_ctx
             .get_mod_by_name(name)
             .ok_or_else(|| QualifyError::ModuleNotFound {
@@ -105,12 +105,12 @@ impl<'qual, 'run> QualfiyCtx<'qual, 'run> {
     /// `EnumRef` is found* — is the only thing duplicated.
     fn resolve_variant_idx(
         &self,
-        enum_ref: EnumRef,
+        enum_ref: EnumRef<'run>,
         display_name: &str,
         variant: &str,
         range: Range,
-        module_name: &ModuleRef,
-    ) -> Result<usize, QualifyError> {
+        module_name: &ModuleRef<'run>,
+    ) -> Result<usize, QualifyError<'run>> {
         self.compile_ctx
             .lookup_variant(enum_ref, variant)
             .ok_or_else(|| QualifyError::UnknownVariant {
@@ -153,9 +153,9 @@ impl<'qual, 'run> QualfiyCtx<'qual, 'run> {
         type_name: &str,
         variant: &str,
         range: Range,
-        module_name: &ModuleRef,
-        not_found: impl FnOnce(String, Range, ModuleInfo) -> QualifyError,
-    ) -> Result<(EnumRef, usize), QualifyError> {
+        module_name: &ModuleRef<'run>,
+        not_found: impl FnOnce(String, Range, ModuleInfo<'run>) -> QualifyError<'run>,
+    ) -> Result<(EnumRef<'run>, usize), QualifyError<'run>> {
         let enum_ref = self
             .compile_ctx
             .lookup_enum_by_name(type_name)
@@ -179,8 +179,8 @@ impl<'qual, 'run> QualfiyCtx<'qual, 'run> {
         type_name: &str,
         variant: &str,
         range: Range,
-        module_name: &ModuleRef,
-    ) -> Result<(EnumRef, usize), QualifyError> {
+        module_name: &ModuleRef<'run>,
+    ) -> Result<(EnumRef<'run>, usize), QualifyError<'run>> {
         self.resolve_enum_and_variant(
             type_name,
             variant,
@@ -207,8 +207,8 @@ impl<'qual, 'run> QualfiyCtx<'qual, 'run> {
         type_name: &str,
         variant: &str,
         range: Range,
-        module_name: &ModuleRef,
-    ) -> Result<(EnumRef, usize), QualifyError> {
+        module_name: &ModuleRef<'run>,
+    ) -> Result<(EnumRef<'run>, usize), QualifyError<'run>> {
         let mod_ref = self.get_module_by_name(mod_name, *module_name, range)?;
         let display_name = format!("{mod_name}::{type_name}");
         let enum_ref = self
@@ -225,11 +225,11 @@ impl<'qual, 'run> QualfiyCtx<'qual, 'run> {
     }
 }
 
-impl Program {
-    pub fn combine<'qual, 'run>(
-        ctx: &'qual mut CompileCtx<'run>,
-        modules: Vec<ProgramModule>,
-    ) -> Result<Self, QualifyError> {
+impl<'tcx> Program<'tcx> {
+    pub fn combine<'qual>(
+        ctx: &'qual mut CompileCtx<'tcx>,
+        modules: Vec<ProgramModule<'tcx>>,
+    ) -> Result<Self, QualifyError<'tcx>> {
         let mut q = QualfiyCtx::new(ctx);
 
         let mut main = None;
@@ -294,11 +294,11 @@ impl Program {
     }
 }
 
-fn qualify_function(
-    q: &mut QualfiyCtx<'_, '_>,
-    module_name: &ModuleRef,
-    func: hhir::Function,
-) -> Result<qhir::Function, QualifyError> {
+fn qualify_function<'tcx>(
+    q: &mut QualfiyCtx<'_, 'tcx>,
+    module_name: &ModuleRef<'tcx>,
+    func: hhir::Function<'tcx>,
+) -> Result<qhir::Function<'tcx>, QualifyError<'tcx>> {
     let parameters = func
         .parameters
         .into_iter()
@@ -317,7 +317,10 @@ fn qualify_function(
     })
 }
 
-fn qualify_parameter(_q: &mut QualfiyCtx<'_, '_>, param: hhir::Parameter) -> qhir::Parameter {
+fn qualify_parameter<'tcx>(
+    _q: &mut QualfiyCtx<'_, 'tcx>,
+    param: hhir::Parameter<'tcx>,
+) -> qhir::Parameter<'tcx> {
     qhir::Parameter {
         name: UniqPrism::expect(
             param.name,
@@ -329,11 +332,11 @@ fn qualify_parameter(_q: &mut QualfiyCtx<'_, '_>, param: hhir::Parameter) -> qhi
     }
 }
 
-fn qualify_expr(
-    q: &mut QualfiyCtx<'_, '_>,
-    module_name: &ModuleRef,
-    expr: hhir::Expr,
-) -> Result<qhir::Expr, QualifyError> {
+fn qualify_expr<'tcx>(
+    q: &mut QualfiyCtx<'_, 'tcx>,
+    module_name: &ModuleRef<'tcx>,
+    expr: hhir::Expr<'tcx>,
+) -> Result<qhir::Expr<'tcx>, QualifyError<'tcx>> {
     let expression = match expr.expr {
         hhir::Expression::Bool(b) => qhir::Expression::Bool(b),
         hhir::Expression::Int(i) => qhir::Expression::Int(i),
@@ -354,7 +357,7 @@ fn qualify_expr(
             statements: statements
                 .into_iter()
                 .map(|stmt| qualify_statement(q, module_name, stmt))
-                .collect::<Result<Vec<_>, QualifyError>>()?,
+                .collect::<Result<Vec<_>, QualifyError<'tcx>>>()?,
             expr: {
                 if let Some(e) = expr {
                     Some(Box::new(qualify_expr(q, module_name, *e)?))
@@ -426,7 +429,7 @@ fn qualify_expr(
             elems
                 .into_iter()
                 .map(|e| qualify_expr(q, module_name, e))
-                .collect::<Result<Vec<_>, QualifyError>>()?,
+                .collect::<Result<Vec<_>, QualifyError<'tcx>>>()?,
         ),
         hhir::Expression::Match { scrutinee, arms } => {
             let q_scrutinee = qualify_expr(q, module_name, *scrutinee)?;
@@ -441,7 +444,7 @@ fn qualify_expr(
                         range: arm.range,
                     })
                 })
-                .collect::<Result<Vec<_>, QualifyError>>()?;
+                .collect::<Result<Vec<_>, QualifyError<'tcx>>>()?;
             qhir::Expression::Match {
                 scrutinee: Box::new(q_scrutinee),
                 arms: q_arms,
@@ -451,7 +454,7 @@ fn qualify_expr(
             let qargs = args
                 .into_iter()
                 .map(|a| qualify_expr(q, module_name, a))
-                .collect::<Result<Vec<_>, QualifyError>>()?;
+                .collect::<Result<Vec<_>, QualifyError<'tcx>>>()?;
             match fn_name {
                 HirFnCall::Local(name) => {
                     if let Ok(intrinsic) = Intrinsic::try_from(name.as_str()) {
@@ -499,12 +502,12 @@ fn qualify_expr(
     })
 }
 
-fn qualify_pattern(
-    q: &mut QualfiyCtx<'_, '_>,
-    module_name: &ModuleRef,
-    pattern: hhir::HirPattern,
+fn qualify_pattern<'tcx>(
+    q: &mut QualfiyCtx<'_, 'tcx>,
+    module_name: &ModuleRef<'tcx>,
+    pattern: hhir::HirPattern<'tcx>,
     range: Range,
-) -> Result<qhir::QPattern, QualifyError> {
+) -> Result<qhir::QPattern<'tcx>, QualifyError<'tcx>> {
     match pattern {
         hhir::HirPattern::Constructor {
             type_name,
@@ -543,7 +546,7 @@ fn qualify_pattern(
             elems
                 .into_iter()
                 .map(|p| qualify_pattern(q, module_name, p, range))
-                .collect::<Result<Vec<_>, QualifyError>>()?,
+                .collect::<Result<Vec<_>, QualifyError<'tcx>>>()?,
         )),
         hhir::HirPattern::Binding { var, range: brange } => {
             let uv = UniqPrism::expect(var, "unqualified variable in pattern after uniquify");
@@ -558,11 +561,11 @@ fn qualify_pattern(
     }
 }
 
-fn qualify_statement(
-    q: &mut QualfiyCtx<'_, '_>,
-    module_name: &ModuleRef,
-    stmt: hhir::Statement,
-) -> Result<qhir::Statement, QualifyError> {
+fn qualify_statement<'tcx>(
+    q: &mut QualfiyCtx<'_, 'tcx>,
+    module_name: &ModuleRef<'tcx>,
+    stmt: hhir::Statement<'tcx>,
+) -> Result<qhir::Statement<'tcx>, QualifyError<'tcx>> {
     match stmt {
         hhir::Statement::Assignment { name, range, val } => {
             let uv = UniqPrism::expect(name, "unqualified variable in assignment after uniquify");

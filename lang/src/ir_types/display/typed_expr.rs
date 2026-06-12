@@ -9,7 +9,7 @@ use crate::ir_types::typed_hir::*;
 /// `Shape#Circle(r)`, `(a, b)`, `Wrap((x, y))`, `_` — mirrors the
 /// `Tag(payload)` / `(e1, e2, ...)` conventions used for `Constructor`/`Tuple`
 /// expression display elsewhere in this formatter.
-fn fmt_match_pattern(pattern: &MatchPattern, ctx: &CompileCtx) -> String {
+fn fmt_match_pattern<'tcx>(pattern: &MatchPattern<'tcx>, ctx: &CompileCtx<'tcx>) -> String {
     match pattern {
         MatchPattern::Variant {
             enum_ref,
@@ -38,13 +38,10 @@ fn fmt_match_pattern(pattern: &MatchPattern, ctx: &CompileCtx) -> String {
     }
 }
 
-impl Expression {
-    pub fn format<'fmt, 'run>(
-        &'fmt self,
-        ctx: &'fmt CompileCtx<'run>,
-    ) -> TypedExprFormatter<'fmt, 'run>
+impl<'tcx> Expression<'tcx> {
+    pub fn format<'fmt>(&'fmt self, ctx: &'fmt CompileCtx<'tcx>) -> TypedExprFormatter<'fmt, 'tcx>
     where
-        'run: 'fmt,
+        'tcx: 'fmt,
     {
         TypedExprFormatter {
             stack: vec![Either::Exp(self)],
@@ -52,7 +49,7 @@ impl Expression {
         }
     }
 
-    pub fn fmt_inline(&self, ctx: &CompileCtx) -> String {
+    pub fn fmt_inline(&self, ctx: &CompileCtx<'tcx>) -> String {
         let mut out = String::new();
         for (token, opt) in self.format(ctx) {
             out.push_str(&token);
@@ -66,25 +63,22 @@ impl Expression {
     }
 }
 
-impl Expr {
-    pub fn format<'fmt, 'run>(
-        &'fmt self,
-        ctx: &'fmt CompileCtx<'run>,
-    ) -> TypedExprFormatter<'fmt, 'run>
+impl<'tcx> Expr<'tcx> {
+    pub fn format<'fmt>(&'fmt self, ctx: &'fmt CompileCtx<'tcx>) -> TypedExprFormatter<'fmt, 'tcx>
     where
-        'run: 'fmt,
+        'tcx: 'fmt,
     {
         self.expr.format(ctx)
     }
 
-    pub fn fmt_inline(&self, ctx: &CompileCtx) -> String {
+    pub fn fmt_inline(&self, ctx: &CompileCtx<'tcx>) -> String {
         self.expr.fmt_inline(ctx)
     }
 }
 
-enum Either<'fmt> {
-    Exp(&'fmt Expression),
-    Stm(&'fmt Statement),
+enum Either<'fmt, 'tcx> {
+    Exp(&'fmt Expression<'tcx>),
+    Stm(&'fmt Statement<'tcx>),
     /// a pure spacing signal with no text; the consumer applies the
     /// [`FormatOpt`] and emits nothing for the token itself. used to inject
     /// spacing between sub-expressions whose last/first tokens can't know
@@ -129,12 +123,12 @@ pub enum Indent {
 /// an iterator over the expression's tokens,
 /// each paired with a [`FormatOpt`] hinting what the consumer should place
 /// after it.
-pub struct TypedExprFormatter<'fmt, 'run> {
-    stack: Vec<Either<'fmt>>,
-    ctx: &'fmt CompileCtx<'run>,
+pub struct TypedExprFormatter<'fmt, 'tcx> {
+    stack: Vec<Either<'fmt, 'tcx>>,
+    ctx: &'fmt CompileCtx<'tcx>,
 }
 
-impl<'fmt, 'run> Iterator for TypedExprFormatter<'fmt, 'run> {
+impl<'fmt, 'tcx> Iterator for TypedExprFormatter<'fmt, 'tcx> {
     type Item = (String, FormatOpt);
 
     fn next(&mut self) -> Option<Self::Item> {

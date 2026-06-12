@@ -30,13 +30,13 @@ pub struct LlvmCodegen<'ctx> {
 
 /// per-function state,
 /// thrown away after each function & rebuilt fresh for the next one.
-struct FnCtx<'a, 'ctx> {
+struct FnCtx<'a, 'ctx, 'tcx> {
     /// LocalId  ->  alloca'd stack slot
     locals: Map<LocalId, llvm::PointerValue<'ctx>>,
-    local_tys: Map<LocalId, Ty>,
+    local_tys: Map<LocalId, Ty<'tcx>>,
     /// BlockId  ->  LLVM BasicBlock (pre-created so forward jumps work)
     blocks: Map<BlockId, LLVMBasicBlock<'ctx>>,
-    compile_ctx: &'a CompileCtx<'a>,
+    compile_ctx: &'a CompileCtx<'tcx>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -62,7 +62,11 @@ impl<'ctx> LlvmCodegen<'ctx> {
 
     // public entry point
 
-    pub fn emit_program(&self, program: &MirProgram, ctx: &CompileCtx) -> Result<(), CodegenError> {
+    pub fn emit_program<'tcx>(
+        &self,
+        program: &MirProgram<'tcx>,
+        ctx: &CompileCtx<'tcx>,
+    ) -> Result<(), CodegenError> {
         // Pass 1: declare every function signature (handles forward calls)
         let fns: Map<FunRef, llvm::FunctionValue<'ctx>> = program
             .functions
@@ -79,16 +83,21 @@ impl<'ctx> LlvmCodegen<'ctx> {
     }
 
     /// declare functions without bodies (for now)
-    fn declare_function(&self, f: &MirFunction, ctx: &CompileCtx) -> llvm::FunctionValue<'ctx> {
+    fn declare_function<'tcx>(
+        &self,
+        f: &MirFunction<'tcx>,
+        ctx: &CompileCtx<'tcx>,
+    ) -> llvm::FunctionValue<'ctx> {
         let param_types: Vec<_> = f
             .params
             .iter()
             .map(|p| self.llvm_type(ctx, p.ty).into())
             .collect();
 
-        let fn_type = match f.ret_type {
-            Ty::UNIT => self.context.void_type().fn_type(&param_types, false),
-            ty => self.llvm_type(ctx, ty).fn_type(&param_types, false),
+        let fn_type = if matches!(f.ret_type.kind(), TyKind::Unit) {
+            self.context.void_type().fn_type(&param_types, false)
+        } else {
+            self.llvm_type(ctx, f.ret_type).fn_type(&param_types, false)
         };
 
         let name = ctx.original_fun_name(f.name);
@@ -96,12 +105,12 @@ impl<'ctx> LlvmCodegen<'ctx> {
     }
 
     /// emit one function body
-    fn emit_function(
+    fn emit_function<'tcx>(
         &self,
-        f: &MirFunction,
+        f: &MirFunction<'tcx>,
         llvm_fn: llvm::FunctionValue<'ctx>,
-        fns: &Map<FunRef, llvm::FunctionValue<'ctx>>,
-        ctx: &CompileCtx,
+        fns: &Map<FunRef<'tcx>, llvm::FunctionValue<'ctx>>,
+        ctx: &CompileCtx<'tcx>,
     ) -> Result<(), CodegenError> {
         // 1. entry block for allocas
         let entry_bb = self.context.append_basic_block(llvm_fn, "entry");
@@ -120,7 +129,7 @@ impl<'ctx> LlvmCodegen<'ctx> {
             })
             .collect::<Result<Map<LocalId, llvm::PointerValue<'ctx>>, inkwell::builder::BuilderError>>()
             ?;
-        let local_tys: Map<LocalId, Ty> = f.locals.iter().map(|d| (d.id, d.ty)).collect();
+        let local_tys: Map<LocalId, Ty<'tcx>> = f.locals.iter().map(|d| (d.id, d.ty)).collect();
 
         // 3. store incoming params into their alloca'd slots
         for (param, llvm_arg) in f.params.iter().zip(llvm_fn.get_params()) {
@@ -156,11 +165,11 @@ impl<'ctx> LlvmCodegen<'ctx> {
     }
 
     /// one basic block
-    fn emit_block(
+    fn emit_block<'tcx>(
         &self,
-        bb: &BasicBlock,
-        fn_ctx: &FnCtx<'_, 'ctx>,
-        fns: &Map<FunRef, llvm::FunctionValue<'ctx>>,
+        bb: &BasicBlock<'tcx>,
+        fn_ctx: &FnCtx<'_, 'ctx, 'tcx>,
+        fns: &Map<FunRef<'tcx>, llvm::FunctionValue<'ctx>>,
     ) -> Result<(), CodegenError> {
         self.builder.position_at_end(fn_ctx.blocks[&bb.id]);
 
@@ -174,11 +183,11 @@ impl<'ctx> LlvmCodegen<'ctx> {
     }
 
     /// statements
-    fn emit_statement(
+    fn emit_statement<'tcx>(
         &self,
-        stmt: &Statement,
-        fn_ctx: &FnCtx<'_, 'ctx>,
-        fns: &Map<FunRef, llvm::FunctionValue<'ctx>>,
+        stmt: &Statement<'tcx>,
+        fn_ctx: &FnCtx<'_, 'ctx, 'tcx>,
+        fns: &Map<FunRef<'tcx>, llvm::FunctionValue<'ctx>>,
     ) -> Result<(), CodegenError> {
         match stmt {
             Statement::Assign { dst, value, .. } => {
@@ -188,8 +197,8 @@ impl<'ctx> LlvmCodegen<'ctx> {
             }
             Statement::Eval { value, .. } => {
                 // Side-effecting call only; Aggregate/Field never appear here,
-                // so dst_ty is irrelevant — use UNIT as a dummy.
-                self.emit_rvalue(value, Ty::UNIT, fn_ctx, fns)?;
+                // so dst_ty is irrelevant — use unit as a dummy.
+                self.emit_rvalue(value, fn_ctx.compile_ctx.types.unit, fn_ctx, fns)?;
             }
         }
 
@@ -200,12 +209,12 @@ impl<'ctx> LlvmCodegen<'ctx> {
     /// `dst_ty` is the Sand type of the destination local — needed by
     /// `Aggregate` (to distinguish enum from tuple) and `Field` (to know
     /// what type to load).
-    fn emit_rvalue(
+    fn emit_rvalue<'tcx>(
         &self,
-        rv: &RValue,
-        dst_ty: Ty,
-        fn_ctx: &FnCtx<'_, 'ctx>,
-        fns: &Map<FunRef, llvm::FunctionValue<'ctx>>,
+        rv: &RValue<'tcx>,
+        dst_ty: Ty<'tcx>,
+        fn_ctx: &FnCtx<'_, 'ctx, 'tcx>,
+        fns: &Map<FunRef<'tcx>, llvm::FunctionValue<'ctx>>,
     ) -> Result<llvm::BasicValueEnum<'ctx>, CodegenError> {
         match rv {
             RValue::Use(op) => self.emit_operand(op, fn_ctx),
@@ -270,7 +279,7 @@ impl<'ctx> LlvmCodegen<'ctx> {
     fn emit_operand(
         &self,
         op: &Operand,
-        fn_ctx: &FnCtx<'_, 'ctx>,
+        fn_ctx: &FnCtx<'_, 'ctx, '_>,
     ) -> Result<llvm::BasicValueEnum<'ctx>, CodegenError> {
         match op {
             Operand::Copy(Place { local }) => {
@@ -339,7 +348,7 @@ impl<'ctx> LlvmCodegen<'ctx> {
     fn emit_terminator(
         &self,
         term: &Terminator,
-        fn_ctx: &FnCtx<'_, 'ctx>,
+        fn_ctx: &FnCtx<'_, 'ctx, '_>,
         _fns: &Map<FunRef, llvm::FunctionValue<'ctx>>,
     ) -> Result<(), CodegenError> {
         match term {
@@ -378,7 +387,7 @@ impl<'ctx> LlvmCodegen<'ctx> {
         &self,
         fn_name: Intrinsic,
         args: &[Operand],
-        fn_ctx: &FnCtx<'_, 'ctx>,
+        fn_ctx: &FnCtx<'_, 'ctx, '_>,
     ) -> Result<llvm::BasicValueEnum<'ctx>, CodegenError> {
         let printf = self.get_or_declare_printf();
 
@@ -403,7 +412,7 @@ impl<'ctx> LlvmCodegen<'ctx> {
         &self,
         fn_name: Intrinsic,
         args: &[Operand],
-        fn_ctx: &FnCtx<'_, 'ctx>,
+        fn_ctx: &FnCtx<'_, 'ctx, '_>,
     ) -> Result<llvm::BasicValueEnum<'ctx>, CodegenError> {
         let i64_ty = self.context.i64_type();
         match fn_name {
@@ -459,24 +468,24 @@ impl<'ctx> LlvmCodegen<'ctx> {
     }
 
     /// Derive the MIR `Ty` of an operand without a type-check pass.
-    fn operand_ty(op: &Operand, fn_ctx: &FnCtx) -> Ty {
+    fn operand_ty<'tcx>(op: &Operand, fn_ctx: &FnCtx<'_, '_, 'tcx>) -> Ty<'tcx> {
         match op {
             Operand::Copy(Place { local }) => fn_ctx.local_tys[local],
-            Operand::Const(Constant::Int(_)) => Ty::INT,
-            Operand::Const(Constant::Bool(_)) => Ty::BOOL,
-            Operand::Const(Constant::Unit) => Ty::UNIT,
+            Operand::Const(Constant::Int(_)) => fn_ctx.compile_ctx.types.int,
+            Operand::Const(Constant::Bool(_)) => fn_ctx.compile_ctx.types.bool,
+            Operand::Const(Constant::Unit) => fn_ctx.compile_ctx.types.unit,
         }
     }
 
     /// Return a global `[N x ptr]` constant whose elements point to
     /// null-terminated variant-name strings for the given enum.
     /// The global is named `__enum_<idx>_variants` and is created only once.
-    fn get_or_create_variant_table(
+    fn get_or_create_variant_table<'tcx>(
         &self,
-        er: crate::lang::types::EnumRef,
-        ctx: &CompileCtx,
+        er: crate::lang::types::EnumRef<'tcx>,
+        ctx: &CompileCtx<'tcx>,
     ) -> llvm::GlobalValue<'ctx> {
-        let global_name = format!("__enum_{}_variants", er.0);
+        let global_name = format!("__enum_{}_variants", er.0.id);
 
         // Reuse if already emitted (e.g. the same enum printed in multiple places).
         if let Some(g) = self.module.get_global(&global_name) {
@@ -495,7 +504,7 @@ impl<'ctx> LlvmCodegen<'ctx> {
             .iter()
             .enumerate()
             .map(|(i, name)| {
-                let str_global_name = format!("__enum_{}_variant_{}_name", er.0, i);
+                let str_global_name = format!("__enum_{}_variant_{}_name", er.0.id, i);
                 // build_global_string_ptr caches by content, not by name, so use
                 // add_global + set_initializer directly to guarantee our own name.
                 let display = format!("{prefix}{}", name.name);
@@ -601,11 +610,11 @@ impl<'ctx> LlvmCodegen<'ctx> {
     /// Enums where at least one variant has a payload are heap-allocated:
     /// every value is a `ptr` to a `{ i64, ptr }` cell (field 0 = discriminant,
     /// field 1 = separately-malloc'd payload, or null for nullary variants).
-    fn enum_has_payload(ctx: &CompileCtx, er: EnumRef) -> bool {
+    fn enum_has_payload<'tcx>(ctx: &CompileCtx<'tcx>, er: EnumRef<'tcx>) -> bool {
         ctx.get_enum(er)
             .variants
             .iter()
-            .any(|v| v.payload.is_some())
+            .any(|v| v.payload.get().is_some())
     }
 
     /// LLVM struct type for a heap-allocated enum cell: `{ i64, ptr }`.
@@ -624,8 +633,12 @@ impl<'ctx> LlvmCodegen<'ctx> {
 
     // type helpers
 
-    fn llvm_type(&self, ctx: &CompileCtx, ty: Ty) -> inkwell::types::BasicTypeEnum<'ctx> {
-        match ctx.ty_kind(ty) {
+    fn llvm_type<'tcx>(
+        &self,
+        ctx: &CompileCtx<'tcx>,
+        ty: Ty<'tcx>,
+    ) -> inkwell::types::BasicTypeEnum<'ctx> {
+        match ty.kind() {
             TyKind::Int => self.context.i64_type().into(),
             TyKind::Bool => self.context.bool_type().into(),
             TyKind::Unit => self.context.struct_type(&[], false).into(),
@@ -637,7 +650,7 @@ impl<'ctx> LlvmCodegen<'ctx> {
             }
             TyKind::Enum(_) => self.context.i64_type().into(),
             TyKind::Tuple(tys) => {
-                let tys = tys.clone();
+                let tys = *tys;
                 let field_tys: Vec<_> = tys.iter().map(|t| self.llvm_type(ctx, *t)).collect();
                 self.context.struct_type(&field_tys, false).into()
             }
@@ -654,14 +667,14 @@ impl<'ctx> LlvmCodegen<'ctx> {
     ///   i64, ptr }` cell, store the discriminant in field 0 and (optionally)
     ///   the malloc'd payload ptr in field 1 (null if nullary).
     /// - **Tuple**: fields = [elem0, …] → build a stack-allocated struct value.
-    fn emit_aggregate(
+    fn emit_aggregate<'tcx>(
         &self,
         fields: &[Operand],
-        dst_ty: Ty,
-        fn_ctx: &FnCtx<'_, 'ctx>,
+        dst_ty: Ty<'tcx>,
+        fn_ctx: &FnCtx<'_, 'ctx, 'tcx>,
     ) -> Result<llvm::BasicValueEnum<'ctx>, CodegenError> {
         let ctx = fn_ctx.compile_ctx;
-        match ctx.ty_kind(dst_ty) {
+        match dst_ty.kind() {
             TyKind::Enum(er) => {
                 let er = *er;
                 // fields[0] is always Const::Int(variant_idx)
@@ -723,7 +736,7 @@ impl<'ctx> LlvmCodegen<'ctx> {
             }
 
             TyKind::Tuple(tys) => {
-                let tys = tys.clone();
+                let tys = *tys;
                 let field_tys: Vec<_> = tys.iter().map(|t| self.llvm_type(ctx, *t)).collect();
                 let struct_ty = self.context.struct_type(&field_tys, false);
 
@@ -758,18 +771,18 @@ impl<'ctx> LlvmCodegen<'ctx> {
     /// - **Enum (all-nullary)**: base is the `i64` discriminant; only field 0
     ///   is valid.
     /// - **Tuple**: base is a struct value; extract element at `index`.
-    fn emit_field(
+    fn emit_field<'tcx>(
         &self,
         base: &Operand,
         index: usize,
-        dst_ty: Ty,
-        fn_ctx: &FnCtx<'_, 'ctx>,
+        dst_ty: Ty<'tcx>,
+        fn_ctx: &FnCtx<'_, 'ctx, 'tcx>,
     ) -> Result<llvm::BasicValueEnum<'ctx>, CodegenError> {
         let ctx = fn_ctx.compile_ctx;
         let base_sand_ty = Self::operand_ty(base, fn_ctx);
         let base_val = self.emit_operand(base, fn_ctx)?;
 
-        match ctx.ty_kind(base_sand_ty) {
+        match base_sand_ty.kind() {
             TyKind::Enum(er) if Self::enum_has_payload(ctx, *er) => {
                 let cell_ty = self.enum_cell_type();
                 let cell_ptr = base_val.into_pointer_value();
@@ -813,7 +826,7 @@ impl<'ctx> LlvmCodegen<'ctx> {
             }
 
             TyKind::Tuple(tys) => {
-                let tys = tys.clone();
+                let tys = *tys;
                 let field_tys: Vec<_> = tys.iter().map(|t| self.llvm_type(ctx, *t)).collect();
                 // build_extract_value needs to know the struct type so LLVM
                 // can verify the index; we rebuild it here (it's the same
@@ -841,15 +854,15 @@ impl<'ctx> LlvmCodegen<'ctx> {
     /// - `Enum` (all-nullary) → `%s ` (variant name)
     /// - `Enum` (payload)     → `%s ` (variant name; payload is not printed)
     /// - `Tuple` → each element printed in declaration order, space-separated
-    fn emit_print_value(
+    fn emit_print_value<'tcx>(
         &self,
         val: llvm::BasicValueEnum<'ctx>,
-        ty: Ty,
+        ty: Ty<'tcx>,
         printf: llvm::FunctionValue<'ctx>,
-        fn_ctx: &FnCtx<'_, 'ctx>,
+        fn_ctx: &FnCtx<'_, 'ctx, 'tcx>,
     ) -> Result<(), CodegenError> {
         let ctx = fn_ctx.compile_ctx;
-        match ctx.ty_kind(ty) {
+        match ty.kind() {
             TyKind::Int => {
                 let fmt = self
                     .builder
@@ -914,7 +927,7 @@ impl<'ctx> LlvmCodegen<'ctx> {
                     .build_call(printf, &[fmt.into(), loaded.into()], "")?;
             }
             TyKind::Tuple(tys) => {
-                let tys = tys.clone();
+                let tys = *tys;
                 let struct_val = val.into_struct_value();
                 for (i, &field_ty) in tys.iter().enumerate() {
                     let field_val =
@@ -923,7 +936,7 @@ impl<'ctx> LlvmCodegen<'ctx> {
                     self.emit_print_value(field_val, field_ty, printf, fn_ctx)?;
                 }
             }
-            _ => {} // Top/Bottom don't appear at runtime
+            _ => {} // Top doesn't appear at runtime
         }
         Ok(())
     }

@@ -12,14 +12,12 @@
 
 use lang::ir_types::typed_hir::Expression;
 
-use crate::common::run_hir;
-use crate::common::run_mir;
+use crate::common::run_hir_and_mir;
 
-/// Run `src` through both interpreters, assert they agree, and return the
-/// result.
-fn run_both(src: &str) -> Expression {
-    let hir = run_hir(src);
-    let mir = crate::common::mir_value_to_expr(run_mir(src));
+/// Run `src` through both interpreters (sharing one compilation, so enum
+/// handles are comparable), assert they agree, and return the result.
+fn run_both(src: &str) -> Expression<'static> {
+    let (hir, mir) = run_hir_and_mir(src);
     assert_eq!(hir, mir, "HIR and MIR interpreters disagree for:\n  {src}");
     hir
 }

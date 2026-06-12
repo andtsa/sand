@@ -1,11 +1,12 @@
-//! intrinsics are functions that the compiler substitutes with non-language
-//! machine code, in order to implement interactions with the OS
+//! Intrinsics are compiler-known functions that map to non-language machine
+//! code, implementing interactions with the OS.
 
 use std::fmt::Display;
 use std::sync::LazyLock;
 
 use crate::compiler::structure::FnName;
 use crate::compiler::structure::Map;
+use crate::lang::types::CommonTypes;
 use crate::lang::types::Ty;
 
 pub static INTRINSICS: LazyLock<Map<Intrinsic, (FnName, IntrinsicSig)>> = LazyLock::new(intrinsics);
@@ -24,10 +25,46 @@ pub enum Intrinsic {
     Exit,
 }
 
+/// Lifetime-free type tag used in the [`INTRINSICS`] static. Resolve to a
+/// concrete [`Ty<'tcx>`] via [`TyTag::to_ty`].
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum TyTag {
+    Int,
+    Bool,
+    Unit,
+    Top,
+}
+
+impl TyTag {
+    /// Resolve this tag to the concrete interned type from the given context.
+    pub fn to_ty<'tcx>(self, types: &CommonTypes<'tcx>) -> Ty<'tcx> {
+        match self {
+            TyTag::Int => types.int,
+            TyTag::Bool => types.bool,
+            TyTag::Unit => types.unit,
+            TyTag::Top => types.top,
+        }
+    }
+}
+
+/// The signature of an intrinsic function, stored in the [`INTRINSICS`] static.
+/// Argument and return types are represented as [`TyTag`]s rather than
+/// `Ty<'tcx>` so the static can be `'static`.
+///
+/// Use [`IntrinsicSig::resolve`] to obtain concrete `Ty<'tcx>` handles.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct IntrinsicSig {
-    pub args: Vec<Ty>,
-    pub ret_ty: Ty,
+    pub args: Vec<TyTag>,
+    pub ret_ty: TyTag,
+}
+
+impl IntrinsicSig {
+    /// Resolve the tag-based signature to concrete type handles.
+    pub fn resolve<'tcx>(&self, types: &CommonTypes<'tcx>) -> (Vec<Ty<'tcx>>, Ty<'tcx>) {
+        let args = self.args.iter().map(|t| t.to_ty(types)).collect();
+        let ret_ty = self.ret_ty.to_ty(types);
+        (args, ret_ty)
+    }
 }
 
 fn intrinsics() -> Map<Intrinsic, (FnName, IntrinsicSig)> {
@@ -35,50 +72,50 @@ fn intrinsics() -> Map<Intrinsic, (FnName, IntrinsicSig)> {
         (
             Intrinsic::Print,
             IntrinsicSig {
-                args: vec![Ty::TOP],
-                ret_ty: Ty::UNIT,
+                args: vec![TyTag::Top],
+                ret_ty: TyTag::Unit,
             },
         ),
         (
             Intrinsic::Println,
             IntrinsicSig {
-                args: vec![Ty::TOP],
-                ret_ty: Ty::UNIT,
+                args: vec![TyTag::Top],
+                ret_ty: TyTag::Unit,
             },
         ),
         (
             Intrinsic::Abs,
             IntrinsicSig {
-                args: vec![Ty::INT],
-                ret_ty: Ty::INT,
+                args: vec![TyTag::Int],
+                ret_ty: TyTag::Int,
             },
         ),
         (
             Intrinsic::Min,
             IntrinsicSig {
-                args: vec![Ty::INT, Ty::INT],
-                ret_ty: Ty::INT,
+                args: vec![TyTag::Int, TyTag::Int],
+                ret_ty: TyTag::Int,
             },
         ),
         (
             Intrinsic::Max,
             IntrinsicSig {
-                args: vec![Ty::INT, Ty::INT],
-                ret_ty: Ty::INT,
+                args: vec![TyTag::Int, TyTag::Int],
+                ret_ty: TyTag::Int,
             },
         ),
         (
             Intrinsic::ReadInt,
             IntrinsicSig {
                 args: vec![],
-                ret_ty: Ty::INT,
+                ret_ty: TyTag::Int,
             },
         ),
         (
             Intrinsic::Exit,
             IntrinsicSig {
-                args: vec![Ty::INT],
-                ret_ty: Ty::UNIT,
+                args: vec![TyTag::Int],
+                ret_ty: TyTag::Unit,
             },
         ),
     ]

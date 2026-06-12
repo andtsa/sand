@@ -11,8 +11,8 @@ impl std::fmt::Display for BlockId {
     }
 }
 
-impl MirProgram {
-    pub fn dump(&self, ctx: &CompileCtx) -> String {
+impl<'tcx> MirProgram<'tcx> {
+    pub fn dump(&self, ctx: &CompileCtx<'tcx>) -> String {
         let mut out = String::new();
         for func in self.functions.values() {
             out.push_str(&func.dump(ctx));
@@ -22,8 +22,8 @@ impl MirProgram {
     }
 }
 
-impl MirFunction {
-    pub fn dump(&self, ctx: &CompileCtx) -> String {
+impl<'tcx> MirFunction<'tcx> {
+    pub fn dump(&self, ctx: &CompileCtx<'tcx>) -> String {
         let mut out = String::new();
 
         writeln!(
@@ -83,7 +83,7 @@ fn fmt_operand(o: &Operand) -> String {
     }
 }
 
-fn fmt_rvalue(rv: &RValue, ctx: &CompileCtx) -> String {
+fn fmt_rvalue<'tcx>(rv: &RValue<'tcx>, ctx: &CompileCtx<'tcx>) -> String {
     match rv {
         RValue::Use(o) => fmt_operand(o),
         RValue::BinaryOp { op, left, right } => {
@@ -108,7 +108,7 @@ fn fmt_rvalue(rv: &RValue, ctx: &CompileCtx) -> String {
     }
 }
 
-fn fmt_statement(stmt: &Statement, ctx: &CompileCtx) -> String {
+fn fmt_statement<'tcx>(stmt: &Statement<'tcx>, ctx: &CompileCtx<'tcx>) -> String {
     match stmt {
         Statement::Assign { dst, value, .. } => {
             format!("{} = {}", fmt_place(dst), fmt_rvalue(value, ctx))

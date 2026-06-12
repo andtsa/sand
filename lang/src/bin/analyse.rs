@@ -39,14 +39,14 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-type OccurenceMap<'a> = HashMap<&'a Expr, HashSet<Range>>;
+type OccurenceMap<'a, 'tcx> = HashMap<&'a Expr<'tcx>, HashSet<Range>>;
 
-fn visualise_annotations(
-    ctx: &CompileCtx,
+fn visualise_annotations<'tcx>(
+    ctx: &CompileCtx<'tcx>,
     proj: &Project,
-    annotations: ProgramAnnotations,
+    annotations: ProgramAnnotations<'tcx>,
 ) -> String {
-    let mut files: HashMap<FileRef, OccurenceMap<'_>> = HashMap::new();
+    let mut files: HashMap<FileRef, OccurenceMap<'_, 'tcx>> = HashMap::new();
     for (mr, hm) in flipped_occurence_map(&annotations.expr_occurrences) {
         files
             .entry(ctx.file_of_module(mr))
@@ -72,7 +72,10 @@ fn visualise_annotations(
     out
 }
 
-fn visualise_for_file(text: &str, repeated_expressions: &OccurenceMap) -> String {
+// `Expr` keys reach an enum payload `Cell` through arena references but hash by
+// structural/pointer identity that never reads it, so the keys are stable.
+#[allow(clippy::mutable_key_type)]
+fn visualise_for_file(text: &str, repeated_expressions: &OccurenceMap<'_, '_>) -> String {
     // collect lines preserving newline characters
     let lines_inclusive: Vec<&str> = text.split_inclusive('\n').collect();
 

@@ -7,13 +7,16 @@ use crate::ir_types::typed_hir::MatchPattern;
 use crate::ir_types::typed_hir::Statement;
 
 /// Collect all variable names bound by a `LetPattern`'s match pattern.
-pub fn collect_let_pattern_bindings(pattern: &MatchPattern) -> HashSet<UniqVar> {
+pub fn collect_let_pattern_bindings<'tcx>(pattern: &MatchPattern<'tcx>) -> HashSet<UniqVar<'tcx>> {
     let mut set = HashSet::new();
     collect_match_pattern_bindings(pattern, &mut set);
     set
 }
 
-fn collect_match_pattern_bindings(pattern: &MatchPattern, set: &mut HashSet<UniqVar>) {
+fn collect_match_pattern_bindings<'tcx>(
+    pattern: &MatchPattern<'tcx>,
+    set: &mut HashSet<UniqVar<'tcx>>,
+) {
     match pattern {
         MatchPattern::Binding { var, .. } => {
             set.insert(*var);
@@ -32,13 +35,16 @@ fn collect_match_pattern_bindings(pattern: &MatchPattern, set: &mut HashSet<Uniq
     }
 }
 
-pub fn get_dependencies(expr: &Expr) -> HashSet<UniqVar> {
+pub fn get_dependencies<'tcx>(expr: &Expr<'tcx>) -> HashSet<UniqVar<'tcx>> {
     let mut dependencies = HashSet::new();
     collect_dependencies(&expr.expr, &mut dependencies);
     dependencies
 }
 
-pub fn collect_dependencies(expr: &Expression, dependencies: &mut HashSet<UniqVar>) {
+pub fn collect_dependencies<'tcx>(
+    expr: &Expression<'tcx>,
+    dependencies: &mut HashSet<UniqVar<'tcx>>,
+) {
     match expr {
         Expression::Var(name) => {
             dependencies.insert(*name);
@@ -105,7 +111,7 @@ pub fn collect_dependencies(expr: &Expression, dependencies: &mut HashSet<UniqVa
     }
 }
 
-pub fn get_mutations_stmt(stmt: &Statement) -> HashSet<UniqVar> {
+pub fn get_mutations_stmt<'tcx>(stmt: &Statement<'tcx>) -> HashSet<UniqVar<'tcx>> {
     match stmt {
         Statement::Declaration { name, .. } => HashSet::from([*name]),
         Statement::Assignment { name, .. } => HashSet::from([*name]),
@@ -115,13 +121,13 @@ pub fn get_mutations_stmt(stmt: &Statement) -> HashSet<UniqVar> {
     }
 }
 
-pub fn get_mutations_expr(expr: &Expr) -> HashSet<UniqVar> {
+pub fn get_mutations_expr<'tcx>(expr: &Expr<'tcx>) -> HashSet<UniqVar<'tcx>> {
     let mut mutations = HashSet::new();
     collect_mutations(&expr.expr, &mut mutations);
     mutations
 }
 
-fn collect_mutations(expr: &Expression, mutations: &mut HashSet<UniqVar>) {
+fn collect_mutations<'tcx>(expr: &Expression<'tcx>, mutations: &mut HashSet<UniqVar<'tcx>>) {
     match expr {
         Expression::Block { statements, expr } => {
             for stmt in statements {

@@ -15,11 +15,11 @@ use crate::passes::type_ast::check::type_check_match_arms;
 pub use crate::passes::type_ast::errors::AstTypeError;
 use crate::passes::type_ast::errors::TypeError;
 
-pub(super) fn infer_function(
-    ctx: &mut CompileCtx,
-    func: &qhir::Function,
-) -> Result<(FunRef, TypedFunction), TypeError> {
-    let env: TypeEnv = func
+pub(super) fn infer_function<'tcx>(
+    ctx: &mut CompileCtx<'tcx>,
+    func: &qhir::Function<'tcx>,
+) -> Result<(FunRef<'tcx>, TypedFunction<'tcx>), TypeError<'tcx>> {
+    let env: TypeEnv<'tcx> = func
         .parameters
         .iter()
         .map(|p| (p.name, (p.ty, p.is_mutable)))
@@ -45,11 +45,11 @@ pub(super) fn infer_function(
     ))
 }
 
-pub(super) fn infer_statement(
-    ctx: &mut CompileCtx,
-    env: &mut TypeEnv,
-    stmt: &qhir::Statement,
-) -> Result<typed_hir::Statement, AstTypeError> {
+pub(super) fn infer_statement<'tcx>(
+    ctx: &mut CompileCtx<'tcx>,
+    env: &mut TypeEnv<'tcx>,
+    stmt: &qhir::Statement<'tcx>,
+) -> Result<typed_hir::Statement<'tcx>, AstTypeError<'tcx>> {
     match stmt {
         qhir::Statement::Declaration {
             name,
@@ -112,8 +112,8 @@ pub(super) fn infer_statement(
                 Some(declared_ty) => check(ctx, env, val, *declared_ty)?,
                 None => infer(ctx, env, val)?,
             };
-            let elem_tys = match ctx.ty_kind(val_expr.ty) {
-                TyKind::Tuple(tys) => tys.clone(),
+            let elem_tys = match val_expr.ty.kind() {
+                TyKind::Tuple(tys) => *tys,
                 _ => {
                     return Err(AstTypeError::PatternTypeMismatch {
                         message: format!(
@@ -211,26 +211,26 @@ pub(super) fn infer_statement(
     }
 }
 
-pub(super) fn infer(
-    ctx: &mut CompileCtx,
-    env: &TypeEnv,
-    expr: &qhir::Expr,
-) -> Result<typed_hir::Expr, AstTypeError> {
+pub(super) fn infer<'tcx>(
+    ctx: &mut CompileCtx<'tcx>,
+    env: &TypeEnv<'tcx>,
+    expr: &qhir::Expr<'tcx>,
+) -> Result<typed_hir::Expr<'tcx>, AstTypeError<'tcx>> {
     match &expr.expr {
         qhir::Expression::Int(x) => Ok(typed_hir::Expr {
             expr: typed_hir::Expression::Int(*x),
             range: expr.range,
-            ty: Ty::INT,
+            ty: ctx.types.int,
         }),
         qhir::Expression::Bool(x) => Ok(typed_hir::Expr {
             expr: typed_hir::Expression::Bool(*x),
             range: expr.range,
-            ty: Ty::BOOL,
+            ty: ctx.types.bool,
         }),
         qhir::Expression::Unit => Ok(typed_hir::Expr {
             expr: typed_hir::Expression::Unit,
             range: expr.range,
-            ty: Ty::UNIT,
+            ty: ctx.types.unit,
         }),
         qhir::Expression::Var(x) => {
             let (ty, _) = env
@@ -251,7 +251,7 @@ pub(super) fn infer(
             variant_idx,
             payload,
         } => {
-            let declared_payload = ctx.get_enum(*enum_ref).variants[*variant_idx].payload;
+            let declared_payload = ctx.get_enum(*enum_ref).variants[*variant_idx].payload.get();
             let typed_payload = match (declared_payload, payload) {
                 (None, None) => None,
                 (Some(declared_ty), Some(p)) => Some(Box::new(check(ctx, env, p, declared_ty)?)),
@@ -293,7 +293,7 @@ pub(super) fn infer(
                 .iter()
                 .map(|e| infer(ctx, env, e))
                 .collect::<Result<Vec<_>, _>>()?;
-            let elem_tys: Vec<Ty> = typed_elems.iter().map(|e| e.ty).collect();
+            let elem_tys: Vec<Ty<'tcx>> = typed_elems.iter().map(|e| e.ty).collect();
             let ty = ctx.intern_tuple(elem_tys);
             Ok(typed_hir::Expr {
                 expr: typed_hir::Expression::Tuple(typed_elems),
@@ -320,7 +320,7 @@ pub(super) fn infer(
             };
 
             let ty = op
-                .accepts_types(left_expr.ty, right_expr.ty)
+                .accepts_types(&ctx.types, left_expr.ty, right_expr.ty)
                 .map_err(|expected_ty| AstTypeError::TypeError {
                     message: format!(
                         "operator '{:?}' does not accept types {} and {}",
@@ -344,17 +344,14 @@ pub(super) fn infer(
         qhir::Expression::UnOp { op, right } => {
             let right_expr = infer(ctx, env, right)?;
 
-            let ty =
-                op.accepts_type(right_expr.ty)
-                    .map_err(|expected_ty| AstTypeError::TypeError {
-                        message: format!(
-                            "operator '{:?}' does not accept type {}",
-                            op, right_expr.ty
-                        ),
-                        expected: expected_ty,
-                        found: right_expr.ty,
-                        range: expr.range,
-                    })?;
+            let ty = op
+                .accepts_type(&ctx.types, right_expr.ty)
+                .map_err(|expected_ty| AstTypeError::TypeError {
+                    message: format!("operator '{:?}' does not accept type {}", op, right_expr.ty),
+                    expected: expected_ty,
+                    found: right_expr.ty,
+                    range: expr.range,
+                })?;
 
             Ok(typed_hir::Expr {
                 expr: typed_hir::Expression::UnOp {
@@ -367,10 +364,10 @@ pub(super) fn infer(
         }
         qhir::Expression::If { cond, t, f } => {
             let cond_expr = infer(ctx, env, cond)?;
-            if cond_expr.ty != Ty::BOOL {
+            if cond_expr.ty != ctx.types.bool {
                 return Err(AstTypeError::TypeError {
                     message: format!("condition of 'if' must be Bool, found {}", cond_expr.ty),
-                    expected: Ty::BOOL,
+                    expected: ctx.types.bool,
                     found: cond_expr.ty,
                     range: cond.range,
                 });
@@ -396,13 +393,13 @@ pub(super) fn infer(
                     (f_expr, ty)
                 }
                 None => {
-                    if t_expr.ty != Ty::UNIT {
+                    if t_expr.ty != ctx.types.unit {
                         return Err(AstTypeError::TypeError {
                             message: format!(
                                 "'if' without 'else' must have type Unit, but then-branch has type {}",
                                 t_expr.ty
                             ),
-                            expected: Ty::UNIT,
+                            expected: ctx.types.unit,
                             found: t_expr.ty,
                             range: t.range,
                         });
@@ -410,9 +407,9 @@ pub(super) fn infer(
                     let f_expr = typed_hir::Expr {
                         expr: typed_hir::Expression::Unit,
                         range: expr.range,
-                        ty: Ty::UNIT,
+                        ty: ctx.types.unit,
                     };
-                    (f_expr, Ty::UNIT)
+                    (f_expr, ctx.types.unit)
                 }
             };
 
@@ -428,10 +425,10 @@ pub(super) fn infer(
         }
         qhir::Expression::While { cond, body } => {
             let cond_expr = infer(ctx, env, cond)?;
-            if cond_expr.ty != Ty::BOOL {
+            if cond_expr.ty != ctx.types.bool {
                 return Err(AstTypeError::TypeError {
                     message: format!("condition of 'while' must be Bool, found {}", cond_expr.ty),
-                    expected: Ty::BOOL,
+                    expected: ctx.types.bool,
                     found: cond_expr.ty,
                     range: cond.range,
                 });
@@ -445,12 +442,12 @@ pub(super) fn infer(
                     body: Box::new(body_expr),
                 },
                 range: expr.range,
-                ty: Ty::UNIT,
+                ty: ctx.types.unit,
             })
         }
         qhir::Expression::Call { fn_name, args } => {
             let fun_sig = ctx.fun_sig(fn_name);
-            let expected_tys: Vec<Ty> = fun_sig.args.iter().map(|p| p.1).collect();
+            let expected_tys: Vec<Ty<'tcx>> = fun_sig.args.iter().map(|p| p.1).collect();
 
             if args.len() != expected_tys.len() {
                 // Arity mismatch: infer args just for the error message.
@@ -458,7 +455,7 @@ pub(super) fn infer(
                     .iter()
                     .map(|arg| infer(ctx, env, arg))
                     .collect::<Result<Vec<_>, _>>()?;
-                let arg_tys: Vec<Ty> = arg_exprs.iter().map(|e| e.ty).collect();
+                let arg_tys: Vec<Ty<'tcx>> = arg_exprs.iter().map(|e| e.ty).collect();
                 return Err(AstTypeError::FunctionCallTypeError {
                     message: format!(
                         "function '{}' expects {} arguments but found {}",
@@ -491,7 +488,7 @@ pub(super) fn infer(
         }
         qhir::Expression::IntrinsicCall { fn_name, args } => {
             let (_, fn_sig) = &INTRINSICS[fn_name];
-            let expected_tys = fn_sig.args.clone();
+            let (expected_tys, ret_ty) = fn_sig.resolve(&ctx.types);
 
             if args.len() != expected_tys.len() {
                 // Arity mismatch: infer args just for the error message.
@@ -499,7 +496,7 @@ pub(super) fn infer(
                     .iter()
                     .map(|arg| infer(ctx, env, arg))
                     .collect::<Result<Vec<_>, _>>()?;
-                let arg_tys: Vec<Ty> = arg_exprs.iter().map(|e| e.ty).collect();
+                let arg_tys: Vec<Ty<'tcx>> = arg_exprs.iter().map(|e| e.ty).collect();
                 return Err(AstTypeError::FunctionCallTypeError {
                     message: format!(
                         "intrinsic '{}' expects {} arguments but found {}",
@@ -526,7 +523,7 @@ pub(super) fn infer(
                     args: arg_exprs,
                 },
                 range: expr.range,
-                ty: fn_sig.ret_ty,
+                ty: ret_ty,
             })
         }
         qhir::Expression::Block {
@@ -546,7 +543,7 @@ pub(super) fn infer(
                 let ret_ty = t_expr.ty;
                 (Some(Box::new(t_expr)), ret_ty)
             } else {
-                (None, Ty::UNIT)
+                (None, ctx.types.unit)
             };
 
             Ok(typed_hir::Expr {
@@ -562,7 +559,10 @@ pub(super) fn infer(
             let scrut_expr = infer(ctx, env, scrutinee)?;
             let typed_arms =
                 type_check_match_arms(ctx, env, arms, scrut_expr.ty, None, expr.range)?;
-            let result_ty = typed_arms.first().map(|a| a.body.ty).unwrap_or(Ty::UNIT);
+            let result_ty = typed_arms
+                .first()
+                .map(|a| a.body.ty)
+                .unwrap_or(ctx.types.unit);
             Ok(typed_hir::Expr {
                 expr: typed_hir::Expression::Match {
                     scrutinee: Box::new(scrut_expr),

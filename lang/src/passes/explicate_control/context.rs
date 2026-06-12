@@ -10,25 +10,33 @@ use crate::ir_types::typed_hir as th;
 use crate::lang::ops::Bop;
 use crate::lang::ops::CompOp;
 use crate::lang::ops::Uop;
+use crate::lang::types::CommonTypes;
 use crate::lang::types::Ty;
 
-pub(super) struct FnCx {
+pub(super) struct FnCx<'tcx> {
     #[allow(dead_code)]
-    name: FunRef,
+    name: FunRef<'tcx>,
     #[allow(dead_code)]
     range: Range,
     #[allow(dead_code)]
-    ret_type: Ty,
+    ret_type: Ty<'tcx>,
 
-    pub(super) locals: Vec<LocalDecl>,
-    local_map: Map<UniqVar, LocalId>,
+    pub(super) locals: Vec<LocalDecl<'tcx>>,
+    local_map: Map<UniqVar<'tcx>, LocalId>,
 
-    pub(super) blocks: Vec<BasicBlock>,
+    pub(super) blocks: Vec<BasicBlock<'tcx>>,
     next_temp: usize,
+
+    types: CommonTypes<'tcx>,
 }
 
-impl FnCx {
-    pub(super) fn new(name: FunRef, range: Range, ret_type: Ty) -> Self {
+impl<'tcx> FnCx<'tcx> {
+    pub(super) fn new(
+        name: FunRef<'tcx>,
+        range: Range,
+        ret_type: Ty<'tcx>,
+        types: CommonTypes<'tcx>,
+    ) -> Self {
         Self {
             name,
             range,
@@ -37,12 +45,13 @@ impl FnCx {
             local_map: Map::new(),
             blocks: Vec::new(),
             next_temp: 0,
+            types,
         }
     }
 
     pub(super) fn new_block(
         &mut self,
-        statements: Vec<Statement>,
+        statements: Vec<Statement<'tcx>>,
         terminator: Terminator,
     ) -> BlockId {
         let id = BlockId(self.blocks.len());
@@ -67,7 +76,7 @@ impl FnCx {
     pub(super) fn set_block(
         &mut self,
         id: BlockId,
-        statements: Vec<Statement>,
+        statements: Vec<Statement<'tcx>>,
         terminator: Terminator,
     ) {
         self.blocks[id.0] = BasicBlock {
@@ -77,7 +86,12 @@ impl FnCx {
         };
     }
 
-    pub(super) fn get_or_create_local(&mut self, name: UniqVar, ty: Ty, range: Range) -> LocalId {
+    pub(super) fn get_or_create_local(
+        &mut self,
+        name: UniqVar<'tcx>,
+        ty: Ty<'tcx>,
+        range: Range,
+    ) -> LocalId {
         if let Some(id) = self.local_map.get(&name) {
             return *id;
         }
@@ -93,7 +107,7 @@ impl FnCx {
         id
     }
 
-    pub(super) fn fresh_temp(&mut self, hint: &'static str, ty: Ty, range: Range) -> LocalId {
+    pub(super) fn fresh_temp(&mut self, hint: &'static str, ty: Ty<'tcx>, range: Range) -> LocalId {
         let id = LocalId(self.locals.len());
         let name = LocalName::Temp(self.next_temp, hint);
         self.next_temp += 1;
@@ -111,7 +125,7 @@ impl FnCx {
         Place { local }
     }
 
-    pub(super) fn const_operand(expr: &th::Expr) -> Option<Operand> {
+    pub(super) fn const_operand(expr: &th::Expr<'_>) -> Option<Operand> {
         match &expr.expr {
             th::Expression::Int(i) => Some(Operand::Const(Constant::Int(*i))),
             th::Expression::Bool(b) => Some(Operand::Const(Constant::Bool(*b))),
@@ -122,7 +136,7 @@ impl FnCx {
         }
     }
 
-    pub(super) fn var_operand(&self, name: &UniqVar) -> Operand {
+    pub(super) fn var_operand(&self, name: &UniqVar<'tcx>) -> Operand {
         let local = *self
             .local_map
             .get(name)
@@ -130,7 +144,7 @@ impl FnCx {
         Operand::Copy(Self::place(local))
     }
 
-    pub(super) fn simple_operand(&self, expr: &th::Expr) -> Option<Operand> {
+    pub(super) fn simple_operand(&self, expr: &th::Expr<'tcx>) -> Option<Operand> {
         if let Some(c) = Self::const_operand(expr) {
             return Some(c);
         }
@@ -141,7 +155,12 @@ impl FnCx {
         }
     }
 
-    pub(super) fn assign_stmt(&self, dst: LocalId, value: RValue, range: Range) -> Statement {
+    pub(super) fn assign_stmt(
+        &self,
+        dst: LocalId,
+        value: RValue<'tcx>,
+        range: Range,
+    ) -> Statement<'tcx> {
         Statement::Assign {
             dst: Self::place(dst),
             value,
@@ -180,10 +199,10 @@ impl FnCx {
     /// why that's necessary.
     pub(super) fn lower_pattern_bindings(
         &mut self,
-        pattern: &th::MatchPattern,
+        pattern: &th::MatchPattern<'tcx>,
         source: Operand,
         range: Range,
-        statements: &mut Vec<Statement>,
+        statements: &mut Vec<Statement<'tcx>>,
     ) {
         match pattern {
             th::MatchPattern::Wildcard
@@ -231,11 +250,11 @@ impl FnCx {
     /// the checks passed).
     pub(super) fn lower_projected_pattern(
         &mut self,
-        pattern: &th::MatchPattern,
+        pattern: &th::MatchPattern<'tcx>,
         base: Operand,
         index: usize,
         range: Range,
-        statements: &mut Vec<Statement>,
+        statements: &mut Vec<Statement<'tcx>>,
     ) {
         let field = RValue::Field { base, index };
         match pattern {
@@ -324,7 +343,7 @@ impl FnCx {
     /// ```
     fn build_arm_check_chain(
         &mut self,
-        pattern: &th::MatchPattern,
+        pattern: &th::MatchPattern<'tcx>,
         value_tmp: LocalId,
         arm_bb: BlockId,
         fallthrough_bb: BlockId,
@@ -337,7 +356,7 @@ impl FnCx {
             | th::MatchPattern::Tuple { .. } => arm_bb,
 
             th::MatchPattern::IntLit(n) => {
-                let cmp_tmp = self.fresh_temp("match_int_cmp", Ty::BOOL, range);
+                let cmp_tmp = self.fresh_temp("match_int_cmp", self.types.bool, range);
                 self.new_block(
                     vec![self.assign_stmt(
                         cmp_tmp,
@@ -357,7 +376,7 @@ impl FnCx {
             }
 
             th::MatchPattern::BoolLit(b) => {
-                let cmp_tmp = self.fresh_temp("match_bool_cmp", Ty::BOOL, range);
+                let cmp_tmp = self.fresh_temp("match_bool_cmp", self.types.bool, range);
                 self.new_block(
                     vec![self.assign_stmt(
                         cmp_tmp,
@@ -417,8 +436,8 @@ impl FnCx {
                 };
 
                 // Build the outer discriminant check.
-                let disc_tmp = self.fresh_temp("match_disc", Ty::INT, range);
-                let cmp_tmp = self.fresh_temp("match_cmp", Ty::BOOL, range);
+                let disc_tmp = self.fresh_temp("match_disc", self.types.int, range);
+                let cmp_tmp = self.fresh_temp("match_cmp", self.types.bool, range);
                 self.new_block(
                     vec![
                         self.assign_stmt(
@@ -449,7 +468,7 @@ impl FnCx {
         }
     }
 
-    pub(super) fn lower_tail(&mut self, expr: &th::Expr) -> BlockId {
+    pub(super) fn lower_tail(&mut self, expr: &th::Expr<'tcx>) -> BlockId {
         match &expr.expr {
             th::Expression::If { cond, t, f } => {
                 let then_bb = self.lower_tail(t);
@@ -466,7 +485,7 @@ impl FnCx {
                 self.lower_statements(statements, cont)
             }
 
-            _ if expr.ty == Ty::UNIT => {
+            _ if expr.ty == self.types.unit => {
                 let ret = self.new_block(Vec::new(), Terminator::Return { value: None });
                 self.lower_effect(expr, ret)
             }
@@ -486,7 +505,7 @@ impl FnCx {
 
     pub(super) fn lower_statements(
         &mut self,
-        statements: &[th::Statement],
+        statements: &[th::Statement<'tcx>],
         cont: BlockId,
     ) -> BlockId {
         statements
@@ -495,7 +514,7 @@ impl FnCx {
             .fold(cont, |k, stmt| self.lower_statement(stmt, k))
     }
 
-    pub(super) fn lower_statement(&mut self, stmt: &th::Statement, cont: BlockId) -> BlockId {
+    pub(super) fn lower_statement(&mut self, stmt: &th::Statement<'tcx>, cont: BlockId) -> BlockId {
         match stmt {
             th::Statement::Declaration {
                 name,
@@ -592,8 +611,8 @@ impl FnCx {
                 let else_bb = self.lower_assign(else_branch, fallback_tmp, after_extract_bb);
 
                 // ── discriminant check: disc == variant_idx ──────────────────────────────
-                let disc_tmp = self.fresh_temp("let_pattern_disc", Ty::INT, *range);
-                let cmp_tmp = self.fresh_temp("let_pattern_cmp", Ty::BOOL, *range);
+                let disc_tmp = self.fresh_temp("let_pattern_disc", self.types.int, *range);
+                let cmp_tmp = self.fresh_temp("let_pattern_cmp", self.types.bool, *range);
                 let check_bb = self.new_block(
                     vec![
                         self.assign_stmt(
@@ -629,7 +648,12 @@ impl FnCx {
         }
     }
 
-    pub(super) fn lower_assign(&mut self, expr: &th::Expr, dst: LocalId, cont: BlockId) -> BlockId {
+    pub(super) fn lower_assign(
+        &mut self,
+        expr: &th::Expr<'tcx>,
+        dst: LocalId,
+        cont: BlockId,
+    ) -> BlockId {
         match &expr.expr {
             th::Expression::If { cond, t, f } => {
                 let then_bb = self.lower_assign(t, dst, cont);
@@ -888,7 +912,7 @@ impl FnCx {
         }
     }
 
-    pub(super) fn lower_effect(&mut self, expr: &th::Expr, cont: BlockId) -> BlockId {
+    pub(super) fn lower_effect(&mut self, expr: &th::Expr<'tcx>, cont: BlockId) -> BlockId {
         match &expr.expr {
             th::Expression::If { cond, t, f } => {
                 let then_bb = self.lower_effect(t, cont);
@@ -982,7 +1006,7 @@ impl FnCx {
 
     pub(super) fn lower_pred(
         &mut self,
-        expr: &th::Expr,
+        expr: &th::Expr<'tcx>,
         then_bb: BlockId,
         else_bb: BlockId,
     ) -> BlockId {
@@ -1017,7 +1041,7 @@ impl FnCx {
                 let l_tmp = self.fresh_temp("pred_binop_left", left.ty, left.range);
                 let r_tmp = self.fresh_temp("pred_binop_right", right.ty, right.range);
 
-                let cmp_tmp = self.fresh_temp("pred_binop_comp", Ty::BOOL, expr.range);
+                let cmp_tmp = self.fresh_temp("pred_binop_comp", self.types.bool, expr.range);
 
                 let branch_bb = self.new_block(
                     Vec::new(),

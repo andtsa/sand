@@ -22,11 +22,11 @@ pub enum OwnershipState {
 /// cloning this struct produces an independent snapshot,
 /// which we use for exploring each branch of an if/match independently
 #[derive(Debug, Clone, Default)]
-pub struct OwnershipEnv {
-    states: Map<UniqVar, OwnershipState>,
+pub struct OwnershipEnv<'tcx> {
+    states: Map<UniqVar<'tcx>, OwnershipState>,
 }
 
-impl OwnershipEnv {
+impl<'tcx> OwnershipEnv<'tcx> {
     pub fn new() -> Self {
         Self::default()
     }
@@ -35,19 +35,19 @@ impl OwnershipEnv {
     ///
     /// should be used for new declarations and for re-assignments that restore
     /// ownership
-    pub fn declare(&mut self, var: UniqVar) {
+    pub fn declare(&mut self, var: UniqVar<'tcx>) {
         self.states.insert(var, OwnershipState::Owned);
     }
 
     /// look up the ownership state of `var`
     ///
     /// returns `None` if the variable is not in scope
-    pub fn get(&self, var: &UniqVar) -> Option<&OwnershipState> {
+    pub fn get(&self, var: &UniqVar<'tcx>) -> Option<&OwnershipState> {
         self.states.get(var)
     }
 
     /// mark a variable as moved
-    pub fn mark_moved(&mut self, var: UniqVar, at: Range) {
+    pub fn mark_moved(&mut self, var: UniqVar<'tcx>, at: Range) {
         self.states.insert(var, OwnershipState::Moved { at });
     }
 
@@ -74,18 +74,18 @@ impl OwnershipEnv {
     }
 
     /// snapshot the set of variables currently in scope
-    pub fn var_keys(&self) -> Set<UniqVar> {
+    pub fn var_keys(&self) -> Set<UniqVar<'tcx>> {
         self.states.keys().cloned().collect()
     }
 
     /// remove all variables whose keys are *not* in `vars`
     ///
     /// use on block exit to drop block-local variables from the environment
-    pub fn restrict_to(&mut self, vars: &Set<UniqVar>) {
+    pub fn restrict_to(&mut self, vars: &Set<UniqVar<'tcx>>) {
         self.states.retain(|v, _| vars.contains(v));
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (&UniqVar, &OwnershipState)> {
+    pub fn iter(&self) -> impl Iterator<Item = (&UniqVar<'tcx>, &OwnershipState)> {
         self.states.iter()
     }
 }

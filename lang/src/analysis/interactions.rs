@@ -18,9 +18,17 @@ use crate::ir_types::typed_hir::Expr;
 use crate::ir_types::typed_hir::Expression;
 use crate::lang::intrinsics::RESERVED_FUNCTION_NAMES;
 
-pub fn find_interactions(cfg: Graph<AnnotatedExpression, (), Directed>) -> ProgramAnnotations {
-    let mut in_sets: HashMap<NodeIndex, HashSet<AnnotatedExpression>> = HashMap::new();
-    let mut out_sets: HashMap<NodeIndex, HashSet<AnnotatedExpression>> = HashMap::new();
+// `Expr`/`Ty` keys reach a `Cell<Option<Ty>>` (an enum variant's payload)
+// through arena references, so clippy flags them as interior-mutable map keys.
+// This is sound here: `Expr`/`Ty` hash and compare by structural/pointer
+// identity and never read that `Cell`, so mutating a payload cannot change a
+// key's hash.
+#[allow(clippy::mutable_key_type)]
+pub fn find_interactions<'tcx>(
+    cfg: Graph<AnnotatedExpression<'tcx>, (), Directed>,
+) -> ProgramAnnotations<'tcx> {
+    let mut in_sets: HashMap<NodeIndex, HashSet<AnnotatedExpression<'tcx>>> = HashMap::new();
+    let mut out_sets: HashMap<NodeIndex, HashSet<AnnotatedExpression<'tcx>>> = HashMap::new();
 
     for n in cfg.node_indices() {
         in_sets.insert(n, HashSet::new());
@@ -42,7 +50,7 @@ pub fn find_interactions(cfg: Graph<AnnotatedExpression, (), Directed>) -> Progr
         // In set : The intersection of predecessors
         let preds: Vec<_> = cfg.neighbors_directed(n, petgraph::Incoming).collect();
 
-        let new_in: HashSet<AnnotatedExpression> = if preds.is_empty() {
+        let new_in: HashSet<AnnotatedExpression<'tcx>> = if preds.is_empty() {
             HashSet::new()
         } else {
             let mut result = out_sets[&preds[0]].clone();
@@ -50,7 +58,7 @@ pub fn find_interactions(cfg: Graph<AnnotatedExpression, (), Directed>) -> Progr
                 result = result
                     .intersection(&out_sets[&preds[i]])
                     .cloned()
-                    .collect::<HashSet<AnnotatedExpression>>();
+                    .collect::<HashSet<AnnotatedExpression<'tcx>>>();
             }
             result
         };
@@ -63,7 +71,7 @@ pub fn find_interactions(cfg: Graph<AnnotatedExpression, (), Directed>) -> Progr
         };
 
         // Gen set: A set with only the node's expression itself if it can be memoized
-        let mut generated: HashSet<AnnotatedExpression> = HashSet::new();
+        let mut generated: HashSet<AnnotatedExpression<'tcx>> = HashSet::new();
         if is_candidate(&expr.expr) {
             generated.insert((*expr).clone());
         }
@@ -102,8 +110,8 @@ pub fn find_interactions(cfg: Graph<AnnotatedExpression, (), Directed>) -> Progr
     }
 
     // Collect redundancies
-    let mut expr_occurrences: HashMap<Expr, HashSet<(ModuleRef, Range)>> = HashMap::new();
-    let mut available_at: HashMap<NodeIndex, HashSet<Expr>> = HashMap::new();
+    let mut expr_occurrences: HashMap<Expr<'tcx>, HashSet<(ModuleRef, Range)>> = HashMap::new();
+    let mut available_at: HashMap<NodeIndex, HashSet<Expr<'tcx>>> = HashMap::new();
 
     for n in cfg.node_indices() {
         let node = &cfg[n];
@@ -137,14 +145,14 @@ pub fn find_interactions(cfg: Graph<AnnotatedExpression, (), Directed>) -> Progr
     }
 }
 
-fn is_candidate(expr: &Expr) -> bool {
+fn is_candidate(expr: &Expr<'_>) -> bool {
     matches!(
         expr.expr,
         Expression::BinOp { .. } | Expression::UnOp { .. } | Expression::Call { .. }
     )
 }
 
-pub fn has_other_side_effects(expr: &Expr) -> bool {
+pub fn has_other_side_effects(expr: &Expr<'_>) -> bool {
     false
     // match &expr.expr {
     //     Expression::Call { fn_name, .. } if
@@ -154,7 +162,7 @@ pub fn has_other_side_effects(expr: &Expr) -> bool {
     // has_other_side_effects(&cond) }
 }
 
-fn collect_expr_subtrees<'a>(expr: &'a Expr, out: &mut Vec<&'a Expr>) {
+fn collect_expr_subtrees<'a, 'tcx: 'a>(expr: &'a Expr<'tcx>, out: &mut Vec<&'a Expr<'tcx>>) {
     if has_other_side_effects(expr) {
         println!("side effects: {expr:?}, {out:?}");
         out.clear();

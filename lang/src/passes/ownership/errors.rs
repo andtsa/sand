@@ -28,7 +28,7 @@ pub enum OwnershipError {
 
 /// [`OwnershipError`] with the context of the source module it came from
 #[derive(Debug)]
-pub struct OwnershipCheckError {
+pub struct OwnershipCheckError<'tcx> {
     pub error: OwnershipError,
-    pub module: ModuleRef,
+    pub module: ModuleRef<'tcx>,
 }

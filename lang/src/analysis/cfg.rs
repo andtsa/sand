@@ -22,17 +22,17 @@ use crate::ir_types::typed_hir::TypedFunction;
 use crate::ir_types::typed_hir::TypedProgram;
 use crate::lang::types::Ty;
 
-pub fn construct_cfg(
-    ctx: &CompileCtx,
-    ast: &TypedProgram,
-) -> Graph<AnnotatedExpression, (), Directed> {
-    let mut graph = Graph::<AnnotatedExpression, (), Directed>::new();
+pub fn construct_cfg<'tcx>(
+    ctx: &CompileCtx<'tcx>,
+    ast: &TypedProgram<'tcx>,
+) -> Graph<AnnotatedExpression<'tcx>, (), Directed> {
+    let mut graph = Graph::<AnnotatedExpression<'tcx>, (), Directed>::new();
     let mut function_entries = HashMap::new();
     let mut function_exits = HashMap::new();
 
     // AE Analysis expects that the entry to the main function is always at
     // IndexNode(0)
-    let mut funcs_sorted: Vec<&TypedFunction> = ast.functions.values().collect();
+    let mut funcs_sorted: Vec<&TypedFunction<'tcx>> = ast.functions.values().collect();
     funcs_sorted.sort_by_key(|f| if Some(f.name) == ctx.entrypoint { 0 } else { 1 });
 
     // Add entry and exit nodes for every function
@@ -41,7 +41,7 @@ pub fn construct_cfg(
             expr: Expr {
                 expr: Expression::Unit,
                 range: Default::default(),
-                ty: Ty::UNIT,
+                ty: ctx.types.unit,
             },
             depends_on: HashSet::new(),
             mutates: HashSet::new(),
@@ -53,7 +53,7 @@ pub fn construct_cfg(
             expr: Expr {
                 expr: Expression::Unit,
                 range: Default::default(),
-                ty: Ty::UNIT,
+                ty: ctx.types.unit,
             },
             depends_on: HashSet::new(),
             mutates: HashSet::new(),
@@ -83,13 +83,13 @@ pub fn construct_cfg(
     graph
 }
 
-pub fn build_cfg_func(
-    graph: &mut Graph<AnnotatedExpression, (), Directed>,
-    func: &TypedFunction,
+pub fn build_cfg_func<'tcx>(
+    graph: &mut Graph<AnnotatedExpression<'tcx>, (), Directed>,
+    func: &TypedFunction<'tcx>,
     entry: NodeIndex,
     exit: NodeIndex,
-    function_entries: &HashMap<FunRef, NodeIndex>,
-    function_exits: &HashMap<FunRef, NodeIndex>,
+    function_entries: &HashMap<FunRef<'tcx>, NodeIndex>,
+    function_exits: &HashMap<FunRef<'tcx>, NodeIndex>,
 ) {
     let body_entry = build_cfg_expr(
         graph,
@@ -103,14 +103,14 @@ pub fn build_cfg_func(
     graph.add_edge(entry, body_entry, ());
 }
 
-fn build_cfg_expr(
-    graph: &mut Graph<AnnotatedExpression, (), Directed>,
-    expr: &Expr,
-    module: ModuleRef,
+fn build_cfg_expr<'tcx>(
+    graph: &mut Graph<AnnotatedExpression<'tcx>, (), Directed>,
+    expr: &Expr<'tcx>,
+    module: ModuleRef<'tcx>,
     next: NodeIndex,
-    function_entries: &HashMap<FunRef, NodeIndex>,
-    function_exits: &HashMap<FunRef, NodeIndex>,
-    mutations: Option<HashSet<UniqVar>>,
+    function_entries: &HashMap<FunRef<'tcx>, NodeIndex>,
+    function_exits: &HashMap<FunRef<'tcx>, NodeIndex>,
+    mutations: Option<HashSet<UniqVar<'tcx>>>,
 ) -> NodeIndex {
     match &expr.expr {
         Expression::If { cond, t, f } => {

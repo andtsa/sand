@@ -83,7 +83,7 @@ pub struct UniqPrism;
 impl UniqPrism {
     /// `preview`: attempt to focus on the `Uniq` payload of a `HirVar`.
     /// Returns `None` for any other variant, mirroring `Prism`'s partial `get`.
-    pub fn preview(v: HirVar) -> Option<UniqVar> {
+    pub fn preview<'tcx>(v: HirVar<'tcx>) -> Option<UniqVar<'tcx>> {
         match v {
             HirVar::Uniq(u) => Some(u),
             _ => None,
@@ -92,7 +92,7 @@ impl UniqPrism {
 
     /// `review`: construct a `HirVar` from a `UniqVar`. This direction of a
     /// prism never fails — it is just the variant constructor.
-    pub fn review(u: UniqVar) -> HirVar {
+    pub fn review<'tcx>(u: UniqVar<'tcx>) -> HirVar<'tcx> {
         HirVar::Uniq(u)
     }
 
@@ -103,7 +103,7 @@ impl UniqPrism {
     /// becomes `UniqPrism::expect(v, "...")`. The `msg` should describe
     /// *where* the unqualified variable was encountered; the offending
     /// value is appended automatically.
-    pub fn expect(v: HirVar, msg: &str) -> UniqVar {
+    pub fn expect<'tcx>(v: HirVar<'tcx>, msg: &str) -> UniqVar<'tcx> {
         match Self::preview(v.clone()) {
             Some(u) => u,
             None => internal_bug!("{msg}: {v:?}"),
