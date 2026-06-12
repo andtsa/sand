@@ -217,7 +217,37 @@ constraints/where clauses.
 
 ---
 
-## Step 3 — Monomorphisation Pass
+## Step 3 — Monomorphisation Pass ✅
+
+**Status**: Complete. `passes/mono.rs` lowers a generic `TypedProgram`
+to a fully concrete one; generic functions and enums compile through MIR
+and LLVM and execute correctly end-to-end. 455 tests pass (49 in
+`generics_tests.rs`, incl. interpreter and real LLVM
+`examples/generic_*.sand` runs).
+
+**Implementation notes:**
+- **`passes/mono.rs`** runs at the end of `compile_hir` (after ownership),
+  so every later pass sees only concrete types. For a program with no
+  generics it is behaviour-preserving (non-generic functions keep their
+  `FunRef`, so the entry point and core library are untouched).
+- **Worklist with memoisation**: every non-generic function is a root;
+  generic functions/enums are specialised on demand per distinct
+  instantiation. `fn_instances`/`enum_instances` memoise (and are inserted
+  *before* the body is rewritten, so recursive generics terminate).
+- **Specialisations**: generic functions get a fresh mangled `FunRef`
+  (`id$Int`) via `CompileCtx::register_mono_function`; generic enums get a
+  fresh `EnumRef` (`Option$Int`) via `register_enum` with substituted
+  payloads. `mono_ty` substitutes `Param` and rewrites `App` → the
+  specialised enum's `Enum`.
+- **Recovering call instantiations**: a call's callee instantiation is
+  recovered by unifying the callee's parametric signature against the
+  call's argument/result types in their *original*, `App`-preserving form
+  (with the caller's own substitution applied), then fully monomorphising
+  the recovered arguments. This correctly handles return-only type
+  parameters and generic-returning-generic calls.
+- **Output invariant**: no `TypedFunction` has `type_params`, and no
+  `Ty::Param`/`Ty::App` survives (a white-box test asserts the former;
+  MIR/LLVM execution would fail loudly on the latter).
 
 **Goal**: Eliminate all `Ty::Param` from the program by specialising
 every generic function and type for each concrete instantiation it is

@@ -6,9 +6,50 @@
 //! (calling a generic function with concrete types) is Step 2, so these tests
 //! only define generic items — calls are not exercised here.
 
+use lang::ir_types::typed_hir::Expression;
+
 use crate::common::parse;
+use crate::common::run_hir;
+use crate::common::run_mir_as_expr;
 use crate::common::typecheck;
 use crate::common::typecheck_fails;
+
+#[test]
+fn monomorphisation_removes_all_type_params_and_specialises() {
+    // after compilation (which runs mono), no function carries type parameters,
+    // and `id` has been specialised once per instantiation (`id$Int`,
+    // `id$Bool`), distinct from the original generic name.
+    let (ctx, prog) = typecheck(
+        "def id<T>(x: T): T := x \n \
+         def main(): Int := { let a: Int = id(5); let b: Bool = id(true); a }",
+    );
+    assert!(
+        prog.functions.values().all(|f| f.type_params.is_empty()),
+        "a function still has type parameters after monomorphisation"
+    );
+    let names: Vec<String> = prog
+        .functions
+        .values()
+        .map(|f| ctx.original_fun_name(f.name))
+        .collect();
+    assert!(
+        names.iter().any(|n| n == "id$Int"),
+        "missing id$Int: {names:?}"
+    );
+    assert!(
+        names.iter().any(|n| n == "id$Bool"),
+        "missing id$Bool: {names:?}"
+    );
+}
+
+/// Run a generic program through both interpreters (which execute the
+/// monomorphised program) and assert they agree, returning the result.
+fn run_both(src: &str) -> Expression<'static> {
+    let hir = run_hir(src);
+    let mir = run_mir_as_expr(src);
+    assert_eq!(hir, mir, "HIR and MIR disagree for:\n  {src}");
+    hir
+}
 
 // ── parsing: type parameters are captured on the declaration
 // ──────────────────
@@ -318,4 +359,82 @@ fn let_pattern_on_generic_enum_binds_concrete_payload() {
          def f(o: Option<Int>): Int := {{ let Option#Some(x) = o else Option#Some(0); x }} \n \
          def main(): Int := 0"
     ));
+}
+
+// ── end-to-end execution: generics monomorphise, lower to MIR, and run
+// ────────
+
+#[test]
+fn run_generic_identity() {
+    assert_eq!(
+        run_both("def id<T>(x: T): T := x \n def main(): Int := id(5)"),
+        Expression::Int(5)
+    );
+}
+
+#[test]
+fn run_generic_identity_bool() {
+    assert_eq!(
+        run_both("def id<T>(x: T): T := x \n def main(): Bool := id(true)"),
+        Expression::Bool(true)
+    );
+}
+
+#[test]
+fn run_generic_first_of_two() {
+    assert_eq!(
+        run_both("def first<A, B>(a: A, b: B): A := a \n def main(): Int := first(7, true)"),
+        Expression::Int(7)
+    );
+}
+
+#[test]
+fn run_generic_used_at_two_types() {
+    // `id` is instantiated at both `Int` and `Bool`; two specialisations.
+    assert_eq!(
+        run_both(
+            "def id<T>(x: T): T := x \n \
+             def main(): Int := { let a: Int = id(5); let b: Bool = id(true); a }"
+        ),
+        Expression::Int(5)
+    );
+}
+
+#[test]
+fn run_generic_nested_calls() {
+    assert_eq!(
+        run_both(
+            "def id<T>(x: T): T := x \n \
+             def twice<U>(y: U): U := id(id(y)) \n \
+             def main(): Int := twice(42)"
+        ),
+        Expression::Int(42)
+    );
+}
+
+#[test]
+fn run_generic_enum_construct_and_match() {
+    // build an `Option<Int>` and consume it via `match` — exercises specialised
+    // enum construction and pattern matching through MIR.
+    let src = "type Option<T> = None | Some(T) \n \
+        def unwrap(o: Option<Int>): Int := match o { Option#Some(x) => x, Option#None => 0 } \n \
+        def main(): Int := unwrap(Option#Some(7))";
+    assert_eq!(run_both(src), Expression::Int(7));
+}
+
+#[test]
+fn run_generic_enum_none_branch() {
+    let src = "type Option<T> = None | Some(T) \n \
+        def unwrap(o: Option<Int>): Int := match o { Option#Some(x) => x, Option#None => 99 } \n \
+        def main(): Int := unwrap(Option#None)";
+    assert_eq!(run_both(src), Expression::Int(99));
+}
+
+#[test]
+fn run_generic_function_returning_generic_enum() {
+    let src = "type Option<T> = None | Some(T) \n \
+        def wrap<T>(x: T): Option<T> := Option#Some(x) \n \
+        def unwrap(o: Option<Int>): Int := match o { Option#Some(x) => x, Option#None => 0 } \n \
+        def main(): Int := unwrap(wrap(13))";
+    assert_eq!(run_both(src), Expression::Int(13));
 }

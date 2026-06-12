@@ -491,6 +491,22 @@ impl<'tcx> CompileCtx<'tcx> {
         Ok(fref)
     }
 
+    /// Register a compiler-synthesised function (e.g. a monomorphised
+    /// specialisation) with the given name, inheriting the original's module
+    /// and declaration site. Returns a fresh, distinct [`FunRef`].
+    pub fn register_mono_function(
+        &mut self,
+        name: String,
+        module: ModuleRef<'tcx>,
+        declaration: Range,
+    ) -> FunRef<'tcx> {
+        let id = self.global_functions.len();
+        let fun = OriginalFun::synthetic(name, declaration, module, id);
+        let fref = FunRef(self.arenas.alloc_function(fun));
+        self.global_functions.push(fref);
+        fref
+    }
+
     #[track_caller]
     pub fn original_fun_name(&self, fun: FunRef<'tcx>) -> String {
         fun.0.name.name()

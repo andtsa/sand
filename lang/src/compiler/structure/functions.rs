@@ -74,6 +74,20 @@ impl<'tcx> OriginalFun<'tcx> {
             id,
         }
     }
+
+    pub(in crate::compiler) fn synthetic(
+        name: String,
+        declaration: Range,
+        module: ModuleRef<'tcx>,
+        id: usize,
+    ) -> Self {
+        OriginalFun {
+            name: FnName::synthetic(name),
+            declaration,
+            module,
+            id,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -94,6 +108,12 @@ impl<'tcx> FunSig<'tcx> {
 impl FnName {
     pub(in crate::compiler) fn from_pair(pair: &Pair<'_, Rule>) -> Self {
         FnName(pair.as_str().to_string())
+    }
+
+    /// Construct a name directly — used for compiler-synthesised functions such
+    /// as monomorphised specialisations (`id$Int`).
+    pub(in crate::compiler) fn synthetic(name: String) -> Self {
+        FnName(name)
     }
 
     pub(in crate::compiler) fn name(&self) -> String {
