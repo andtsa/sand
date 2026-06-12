@@ -1,7 +1,6 @@
 # Core Calculus
 
-A formal description of the kind, type, region, and term systems,
-grounded in the existing grammar.
+A formal description of the kind, type, region, and term systems for the sand language.
 
 ---
 
@@ -37,9 +36,9 @@ Region        'r  ::=  'r              -- region variable
                     |  'static         -- permanent region (outlives everything)
 
 Region context
-               R  ::=  ε              -- empty
-                    |  R, 'r          -- introduce region variable
-                    |  R, 'r ≥ 's     -- outlives constraint ('r outlives 's)
+               R  ::=  ε               -- empty
+                    |  R, 'r           -- introduce region variable
+                    |  R, 'r ≥ 's      -- outlives constraint ('r outlives 's)
 
 Kind           k  ::=  Owned
                     |  Borrowed 'r

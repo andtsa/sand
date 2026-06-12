@@ -9,6 +9,7 @@
 use lang::ir_types::typed_hir::Expression;
 
 use crate::common::parse;
+use crate::common::parse_fails;
 use crate::common::run_hir;
 use crate::common::run_mir_as_expr;
 use crate::common::typecheck;
@@ -437,4 +438,73 @@ fn run_generic_function_returning_generic_enum() {
         def unwrap(o: Option<Int>): Int := match o { Option#Some(x) => x, Option#None => 0 } \n \
         def main(): Int := unwrap(wrap(13))";
     assert_eq!(run_both(src), Expression::Int(13));
+}
+
+// ── Step 5: kind and variance annotations on type parameters
+// ──────────────────
+
+use lang::lang::types::Kind;
+use lang::lang::types::Variance;
+
+#[test]
+fn parse_variance_and_kind_annotations() {
+    // `+a : Owned`, `-b`, `c` (defaults). Function params parse the annotations
+    // but are not variance-checked (only type constructors are).
+    let pm = parse("def f<+a : Owned, -b, c>(x: a): a := x");
+    let tps = &pm.functions[0].type_params;
+    assert_eq!(tps[0].name, "a");
+    assert_eq!(tps[0].variance, Variance::Covariant);
+    assert_eq!(tps[0].kind, Kind::Owned);
+    assert_eq!(tps[1].name, "b");
+    assert_eq!(tps[1].variance, Variance::Contravariant);
+    assert_eq!(tps[2].name, "c");
+    assert_eq!(tps[2].variance, Variance::Covariant); // default
+    assert_eq!(tps[2].kind, Kind::Owned); // default
+}
+
+#[test]
+fn covariant_annotation_on_producer_is_accepted() {
+    typecheck("type Option<+a : Owned> = None | Some(a) \n def main(): Int := 0");
+}
+
+#[test]
+fn unannotated_param_defaults_are_accepted() {
+    typecheck("type Either<a, b> = Left(a) | Right(b) \n def main(): Int := 0");
+}
+
+#[test]
+fn invariant_via_no_annotation_on_producer_is_accepted() {
+    // an explicit covariant matches the producer position.
+    typecheck("type Pair<+a> = Wrap((a, a)) \n def main(): Int := 0");
+}
+
+#[test]
+fn contravariant_on_producer_is_unsound() {
+    // `a` appears in a producer position, so it cannot be declared contravariant.
+    typecheck_fails("type Bad<-a> = Some(a) \n def main(): Int := 0");
+    parse_fails("type Bad<-a> = Some(a)");
+}
+
+#[test]
+fn contravariant_on_phantom_param_is_accepted() {
+    // `a` is unused (phantom), so any variance is sound.
+    typecheck("type Phantom<-a> = Red | Green \n def main(): Int := 0");
+}
+
+#[test]
+fn kind_argument_mismatch_is_rejected() {
+    // the parameter requires kind `Never`, but `Int` has kind `Owned`.
+    typecheck_fails(
+        "type F<a : Never> = Wrap(a) \n def g(x: F<Int>): Int := 0 \n def main(): Int := 0",
+    );
+}
+
+#[test]
+fn kind_argument_owned_is_accepted() {
+    typecheck("type F<a : Owned> = Wrap(a) \n def g(x: F<Int>): Int := 0 \n def main(): Int := 0");
+}
+
+#[test]
+fn generic_function_with_annotated_params_type_checks() {
+    typecheck("def id<+a : Owned>(x: a): a := x \n def main(): Int := id(5)");
 }

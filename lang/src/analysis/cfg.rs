@@ -20,6 +20,7 @@ use crate::ir_types::typed_hir::Expression;
 use crate::ir_types::typed_hir::Statement;
 use crate::ir_types::typed_hir::TypedFunction;
 use crate::ir_types::typed_hir::TypedProgram;
+use crate::lang::types::Kind;
 use crate::lang::types::Ty;
 
 pub fn construct_cfg<'tcx>(
@@ -42,6 +43,7 @@ pub fn construct_cfg<'tcx>(
                 expr: Expression::Unit,
                 range: Default::default(),
                 ty: ctx.types.unit,
+                kind: Kind::Owned,
             },
             depends_on: HashSet::new(),
             mutates: HashSet::new(),
@@ -54,6 +56,7 @@ pub fn construct_cfg<'tcx>(
                 expr: Expression::Unit,
                 range: Default::default(),
                 ty: ctx.types.unit,
+                kind: Kind::Owned,
             },
             depends_on: HashSet::new(),
             mutates: HashSet::new(),

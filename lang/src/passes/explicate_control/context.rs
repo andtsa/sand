@@ -11,6 +11,7 @@ use crate::lang::ops::Bop;
 use crate::lang::ops::CompOp;
 use crate::lang::ops::Uop;
 use crate::lang::types::CommonTypes;
+use crate::lang::types::Kind;
 use crate::lang::types::Ty;
 
 pub(super) struct FnCx<'tcx> {
@@ -469,6 +470,12 @@ impl<'tcx> FnCx<'tcx> {
     }
 
     pub(super) fn lower_tail(&mut self, expr: &th::Expr<'tcx>) -> BlockId {
+        // A diverging expression never returns: lower it for its effects and
+        // terminate the path as unreachable (no value is produced).
+        if expr.kind == Kind::Never {
+            let unreachable = self.new_block(Vec::new(), Terminator::Unreachable);
+            return self.lower_effect(expr, unreachable);
+        }
         match &expr.expr {
             th::Expression::If { cond, t, f } => {
                 let then_bb = self.lower_tail(t);
@@ -654,6 +661,12 @@ impl<'tcx> FnCx<'tcx> {
         dst: LocalId,
         cont: BlockId,
     ) -> BlockId {
+        // A diverging expression never produces a value to assign: lower it for
+        // effects and leave the destination/continuation unreachable.
+        if expr.kind == Kind::Never {
+            let unreachable = self.new_block(Vec::new(), Terminator::Unreachable);
+            return self.lower_effect(expr, unreachable);
+        }
         match &expr.expr {
             th::Expression::If { cond, t, f } => {
                 let then_bb = self.lower_assign(t, dst, cont);

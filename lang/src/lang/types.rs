@@ -5,12 +5,81 @@ use std::hash::Hasher;
 
 use crate::compiler::structure::EnumDef;
 
+/// The kind of a type — how its values may be used.
+///
+/// This is the `{Owned, Never}` fragment of the kind lattice (Calculus §1):
+/// `Owned` is the top (a normal, fully-capable value) and `Never` is the
+/// bottom (the uninhabited kind of a diverging expression). The borrow modes
+/// (`Borrowed`, `BorrowedMut`, `InteriorMut`) are introduced in later steps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Kind {
+    /// A normal owned value.
+    Owned,
+    /// The uninhabited kind: a diverging expression (e.g. an infinite loop)
+    /// never produces a value, so it is usable where any kind is expected.
+    Never,
+}
+
+impl Kind {
+    /// Subkinding `self <: other` (Calculus §1.2): "`self` is usable where
+    /// `other` is expected". `Never` is below everything; otherwise kinds are
+    /// only subkinds of themselves (until borrow modes arrive).
+    pub fn is_subkind(self, other: Kind) -> bool {
+        self == Kind::Never || self == other
+    }
+
+    /// Least upper bound of two kinds (Calculus §1.4), used to merge the kinds
+    /// of the branches of an `if`/`match`. `Never` is the identity.
+    pub fn join(self, other: Kind) -> Kind {
+        match (self, other) {
+            (Kind::Never, k) | (k, Kind::Never) => k,
+            (Kind::Owned, Kind::Owned) => Kind::Owned,
+        }
+    }
+}
+
 /// A globally unique identifier for a type parameter (the `T` in
 /// `def f<T>(...)` or `type Option<T> = ...`). Assigned once per declared
 /// parameter; two parameters named `T` in different declarations get distinct
 /// ids, so `TyKind::Param` comparison is unambiguous.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TypeParamId(pub usize);
+
+/// How a type constructor's behaviour relates to a parameter's subtyping
+/// (Calculus §2.1). The system currently has no subtyping between concrete
+/// types, so variance is validated at the declaration site but has no effect
+/// on use-site checking yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Variance {
+    /// `+` — covariant: the parameter appears only in producer positions.
+    Covariant,
+    /// `-` — contravariant: the parameter appears only in consumer positions.
+    Contravariant,
+    /// `∅` — invariant: the parameter appears in both (always sound).
+    Invariant,
+}
+
+/// A region (lifetime) variable, interned per declaration scope (Calculus
+/// §1.1). Distinct names in the same scope get distinct ids.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RegionVar(pub usize);
+
+/// A region: either a variable `'r` or the permanent `'static` region that
+/// outlives everything (Calculus §1.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Region {
+    Var(RegionVar),
+    Static,
+}
+
+/// An outlives constraint `longer ≥ shorter`: region `longer` outlives region
+/// `shorter` (Calculus §1.1). Collected during checking and discharged by the
+/// region solver (a trivially-satisfied stub until Step 8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RegionConstraint {
+    pub longer: Region,
+    pub shorter: Region,
+}
 
 /// A `Copy` handle to an arena-allocated [`EnumDef`].
 ///
@@ -82,6 +151,10 @@ pub enum TyKind<'tcx> {
     /// intern to distinct types. Monomorphisation (Step 3) replaces these with
     /// specialised concrete enums.
     App(EnumRef<'tcx>, &'tcx [Ty<'tcx>]),
+    /// A type ascribed to a region, `T @ 'r` (Calculus §2.3). Carries the same
+    /// kind as its inner type. Regions have no runtime representation, so
+    /// monomorphisation erases this back to the inner `T`.
+    Region(Ty<'tcx>, Region),
 }
 
 /// A shallow, `Copy` handle to an interned [`TyKind`].
@@ -102,7 +175,11 @@ impl<'tcx> Ty<'tcx> {
     /// `true` for types that are implicitly copied on use (Int, Bool, Unit).
     /// Enum types are *not* Copy and are subject to move semantics.
     pub fn is_copy(self) -> bool {
-        matches!(self.kind(), TyKind::Int | TyKind::Bool | TyKind::Unit)
+        match self.kind() {
+            TyKind::Int | TyKind::Bool | TyKind::Unit => true,
+            TyKind::Region(t, _) => t.is_copy(),
+            _ => false,
+        }
     }
 
     /// `true` if this type mentions any type parameter (directly or nested in a
@@ -113,6 +190,7 @@ impl<'tcx> Ty<'tcx> {
             TyKind::Param(_) => true,
             TyKind::Tuple(elems) => elems.iter().any(|t| t.has_param()),
             TyKind::App(_, args) => args.iter().any(|t| t.has_param()),
+            TyKind::Region(t, _) => t.has_param(),
             _ => false,
         }
     }
@@ -146,6 +224,7 @@ impl<'tcx> Ty<'tcx> {
             (TyKind::App(e1, xs), TyKind::App(e2, ys)) if e1 == e2 && xs.len() == ys.len() => {
                 xs.iter().zip(*ys).all(|(x, y)| x.compatible(*y))
             }
+            (TyKind::Region(a, r1), TyKind::Region(b, r2)) if r1 == r2 => a.compatible(*b),
             _ => false,
         }
     }
@@ -216,6 +295,7 @@ impl fmt::Display for Ty<'_> {
                 }
                 write!(f, ">)")
             }
+            TyKind::Region(t, r) => write!(f, "{t} @ {r:?}"),
         }
     }
 }

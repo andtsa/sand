@@ -135,6 +135,7 @@ impl<'tcx> TypedProgram<'tcx> {
                     Some(p) => Some(Box::new(Expr {
                         expr: self.eval_expr(&p.expr, env, ctx, output)?,
                         ty: p.ty,
+                        kind: p.kind,
                         range: p.range,
                     })),
                     None => None,
@@ -153,6 +154,7 @@ impl<'tcx> TypedProgram<'tcx> {
                         Ok(Expr {
                             expr: self.eval_expr(&e.expr, env, ctx, output)?,
                             ty: e.ty,
+                            kind: e.kind,
                             range: e.range,
                         })
                     })

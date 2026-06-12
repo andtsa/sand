@@ -6,6 +6,7 @@ use crate::compiler::structure::UniqVar;
 use crate::ir_types::qhir;
 use crate::ir_types::typed_hir;
 use crate::lang::types::EnumRef;
+use crate::lang::types::Kind;
 use crate::lang::types::Ty;
 use crate::lang::types::TyKind;
 use crate::passes::type_ast::TypeEnv;
@@ -19,6 +20,21 @@ use crate::passes::type_ast::infer::infer_statement;
 /// Variable bindings introduced by a pattern: each is the uniquified variable,
 /// the type bound to it, and its declaration range.
 type PatternBindings<'tcx> = Vec<(UniqVar<'tcx>, Ty<'tcx>, Range)>;
+
+/// If `e` diverges (kind `Never`), re-type it to `expected` and return it:
+/// a diverging expression inhabits every type (Calculus §6.1, `Never <: k`),
+/// so checking it against any `expected` succeeds. Returns `None` otherwise.
+fn coerce_never<'tcx>(
+    e: &typed_hir::Expr<'tcx>,
+    expected: Ty<'tcx>,
+) -> Option<typed_hir::Expr<'tcx>> {
+    (e.kind == Kind::Never).then(|| typed_hir::Expr {
+        expr: e.expr.clone(),
+        ty: expected,
+        kind: Kind::Never,
+        range: e.range,
+    })
+}
 
 /// View a type as an enum scrutinee: the base enum plus a substitution mapping
 /// its type parameters to the instantiation's arguments (empty for a plain,
@@ -337,7 +353,7 @@ fn type_check_match_arms_inner<'tcx>(
         // extend the env with this arm's pattern bindings (immutable — D4)
         let mut arm_env = env.clone();
         for (var, ty, _range) in &bindings {
-            arm_env.insert(*var, (*ty, false));
+            arm_env.insert(*var, (*ty, Kind::Owned, false));
         }
 
         // typecheck the arm body
@@ -805,6 +821,7 @@ pub(super) fn check<'tcx>(
                 },
                 ty: expected,
                 range: expr.range,
+                kind: Kind::Owned,
             })
         }
 
@@ -852,6 +869,7 @@ pub(super) fn check<'tcx>(
             }
             let t_expr = check(ctx, env, t, expected)?;
             let f_expr = check(ctx, env, f, expected)?;
+            let kind = t_expr.kind.join(f_expr.kind);
             Ok(typed_hir::Expr {
                 expr: typed_hir::Expression::If {
                     cond: Box::new(cond_expr),
@@ -860,6 +878,7 @@ pub(super) fn check<'tcx>(
                 },
                 ty: expected,
                 range: expr.range,
+                kind,
             })
         }
 
@@ -876,6 +895,7 @@ pub(super) fn check<'tcx>(
                 },
             )?;
             let typed_ret = check(ctx, &final_env, ret, expected)?;
+            let kind = typed_ret.kind;
             Ok(typed_hir::Expr {
                 expr: typed_hir::Expression::Block {
                     statements: typed_statements,
@@ -883,6 +903,7 @@ pub(super) fn check<'tcx>(
                 },
                 ty: expected,
                 range: expr.range,
+                kind,
             })
         }
 
@@ -891,6 +912,10 @@ pub(super) fn check<'tcx>(
             let scrut_expr = infer(ctx, env, scrutinee)?;
             let typed_arms =
                 type_check_match_arms(ctx, env, arms, scrut_expr.ty, Some(expected), expr.range)?;
+            let kind = typed_arms
+                .iter()
+                .map(|a| a.body.kind)
+                .fold(Kind::Never, Kind::join);
             Ok(typed_hir::Expr {
                 expr: typed_hir::Expression::Match {
                     scrutinee: Box::new(scrut_expr),
@@ -898,6 +923,7 @@ pub(super) fn check<'tcx>(
                 },
                 ty: expected,
                 range: expr.range,
+                kind,
             })
         }
 
@@ -918,9 +944,13 @@ pub(super) fn check<'tcx>(
                     expr: typed_hir::Expression::Tuple(typed_elems),
                     ty: expected,
                     range: expr.range,
+                    kind: Kind::Owned,
                 });
             }
             let e = infer(ctx, env, expr)?;
+            if let Some(coerced) = coerce_never(&e, expected) {
+                return Ok(coerced);
+            }
             if e.ty.type_neq(expected) {
                 return Err(AstTypeError::TypeError {
                     message: format!("expected type {} but found {}", expected, e.ty),
@@ -935,6 +965,11 @@ pub(super) fn check<'tcx>(
         // everything else: infer, then verify type matches expected.
         _ => {
             let e = infer(ctx, env, expr)?;
+            // A diverging expression (kind `Never`) inhabits any type, so it
+            // satisfies the expected type regardless and is re-typed to it.
+            if let Some(coerced) = coerce_never(&e, expected) {
+                return Ok(coerced);
+            }
             if e.ty.type_neq(expected) {
                 return Err(AstTypeError::TypeError {
                     message: format!("expected type {} but found {}", expected, e.ty),

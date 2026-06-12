@@ -29,6 +29,7 @@ fn dummy_expr(expr: Expression<'static>, ctx: &CompileCtx<'static>) -> Expr<'sta
     Expr {
         expr,
         ty: ctx.types.unit,
+        kind: lang::lang::types::Kind::Owned,
         range: Default::default(),
     }
 }

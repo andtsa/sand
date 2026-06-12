@@ -196,6 +196,8 @@ impl<'tcx> Mono<'tcx> {
                 let spec_er = self.request_enum(ctx, base, args);
                 ctx.enum_ty(spec_er)
             }
+            // Regions have no runtime representation: erase `T @ 'r` to `T`.
+            TyKind::Region(inner, _) => self.mono_ty(ctx, *inner, mapping),
             _ => ty,
         }
     }
@@ -294,6 +296,7 @@ impl<'tcx> Mono<'tcx> {
         Expr {
             expr: new,
             ty,
+            kind: expr.kind,
             range: expr.range,
         }
     }
@@ -471,7 +474,8 @@ fn mangle_ty<'tcx>(ctx: &CompileCtx<'tcx>, ty: Ty<'tcx>) -> String {
             let inner: Vec<String> = elems.iter().map(|e| mangle_ty(ctx, *e)).collect();
             format!("Tup{}_{}", elems.len(), inner.join("_"))
         }
-        TyKind::Param(_) | TyKind::App(..) => {
+        // regions are erased by `mono_ty` before mangling is ever reached.
+        TyKind::Param(_) | TyKind::App(..) | TyKind::Region(..) => {
             internal_bug!("type argument is not concrete during mangling: {ty}")
         }
     }

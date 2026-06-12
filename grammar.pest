@@ -16,7 +16,11 @@ tuple_type = { "(" ~ type_ ~ ("," ~ type_)+ ~ ")" }
 // Generic enum instantiation at a use site: `Option<Int>`, `Either<Int, Bool>`.
 type_application = { identifier ~ "<" ~ type_ ~ ("," ~ type_)* ~ ">" }
 
-type_ = {
+// a lifetime / region: `'r`, `'heap`, `'static`. atomic so no internal
+// whitespace is consumed between the tick and the name.
+lifetime = @{ "'" ~ identifier }
+
+core_type = {
     "Int"
   | "Bool"
   | "Unit" // equivalent to rust (), python None
@@ -31,6 +35,11 @@ type_ = {
 
   | identifier // named enum type
 }
+
+// a type, optionally ascribed to a region: `Int`, `Int @ 'r` (Calculus §2.3).
+// the `@ 'r` suffix is parsed here (rather than a left-recursive `region_type`)
+// so the grammar stays a valid PEG.
+type_ = { core_type ~ ("@" ~ lifetime)? }
 
 // keywords (prevent them from being identifiers)
 KEYWORD = { "if" | "then" | "else" | "let" | "def" | "true" | "false" | "Unit" | "Int" | "Bool" | "while" | "do" | "module" | "mut" | "type" | "match" }
@@ -60,10 +69,15 @@ eq       = { "==" }
 ge       = { ">=" | "≥" }
 le       = { "<=" | "≤" }
 
-// type parameters on a generic declaration: `<T>`, `<T, U>`
-// only appears in declaration position (right after the def/type name); uses of
-// a type parameter inside a type are bare identifiers resolved during build.
-type_params = { "<" ~ identifier ~ ("," ~ identifier)* ~ ">" }
+// type parameters on a generic declaration: `<T>`, `<+a : Owned, -b>`.
+// each parameter carries an optional variance annotation (`+`/`-`; absent =
+// default) and an optional kind annotation (`: Owned`/`: Never`; absent =
+// `Owned`). only appears in declaration position (right after the def/type
+// name); uses of a type parameter inside a type are bare identifiers.
+variance_ann = { "+" | "-" }
+kind_ann     = { "Owned" | "Never" }
+type_param   = { variance_ann? ~ identifier ~ (":" ~ kind_ann)? }
+type_params  = { "<" ~ type_param ~ ("," ~ type_param)* ~ ">" }
 
 // enum type declarations
 // a variant is a bare tag (`Red`, nullary) or a tag with a payload type (`Ok(Int)`)
