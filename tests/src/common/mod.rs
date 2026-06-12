@@ -59,31 +59,16 @@ pub fn mir_value_to_expr(v: MirValue<'static>, ctx: &CompileCtx<'static>) -> Exp
     }
 }
 
-pub fn compile_hir_ctx(src: &str) -> anyhow::Result<(CompileCtx<'static>, TypedProgram<'static>)> {
+pub fn compile_hir(src: &str) -> anyhow::Result<(CompileCtx<'static>, TypedProgram<'static>)> {
     let mut proj = Project::empty();
     proj.create_virtual_file(src.to_string(), &std::panic::Location::caller().to_string());
-    Ok(proj.check().result()?)
+    Ok(proj.check().result_leaked()?)
 }
 
-pub fn compile_hir(src: &str) -> anyhow::Result<TypedProgram<'static>> {
-    let (ctx, ast) = compile_hir_ctx(src)?;
-    // The returned `TypedProgram<'static>` borrows from `ctx`'s arena. Leak
-    // `ctx` so the arena outlives it (test helper — process is short-lived).
-    std::mem::forget(ctx);
-    Ok(ast)
-}
-
-pub fn compile_err_ctx(src: &str) -> (CompileCtx<'static>, SandLangError<'static>) {
+pub fn compile_err(src: &str) -> (CompileCtx<'static>, SandLangError<'static>) {
     let mut proj = Project::empty();
     proj.create_virtual_file(src.to_string(), &std::panic::Location::caller().to_string());
     proj.check().ctx_err().expect("expected compile error")
-}
-
-pub fn compile_err(src: &str) -> SandLangError<'static> {
-    let (ctx, err) = compile_err_ctx(src);
-    // `err` borrows from `ctx`'s arena (e.g. `Ty`/`ModuleRef`); leak `ctx`.
-    std::mem::forget(ctx);
-    err
 }
 
 /// Parse source code into an HHIR ProgramModule (no qualification or type
@@ -124,7 +109,7 @@ pub fn qualify_fails(src: &str) {
 }
 
 /// Parse -> qualify -> type-check source code into a TypedProgram
-pub fn typecheck(src: &str) -> TypedProgram<'static> {
+pub fn typecheck(src: &str) -> (CompileCtx<'static>, TypedProgram<'static>) {
     compile_hir(src).expect("compile failed")
 }
 
@@ -139,7 +124,7 @@ pub fn typecheck_fails(src: &str) {
 /// Run source code through full HIR compilation and interpret in HIR
 /// interpreter
 pub fn run_hir(src: &str) -> Expression<'static> {
-    let (ctx, prog) = compile_hir_ctx(src).unwrap_or_else(|e| panic!("compile failed: {e}"));
+    let (ctx, prog) = compile_hir(src).unwrap_or_else(|e| panic!("compile failed: {e}"));
     let result = prog
         .interpret(&ctx)
         .unwrap_or_else(|e| panic!("HIR interpret failed: {e}"));
@@ -151,7 +136,7 @@ pub fn run_hir(src: &str) -> Expression<'static> {
 /// Run source code through full HIR compilation and expect HIR interpretation
 /// to fail
 pub fn run_hir_fails(src: &str) {
-    let (ctx, prog) = compile_hir_ctx(src).unwrap_or_else(|e| panic!("compile failed: {e}"));
+    let (ctx, prog) = compile_hir(src).unwrap_or_else(|e| panic!("compile failed: {e}"));
     assert!(
         prog.interpret(&ctx).is_err(),
         "expected HIR interpret to fail, but it succeeded"
@@ -166,7 +151,7 @@ pub fn run_hir_fails(src: &str) {
 /// compiled in two separate `CompileCtx`s yields *different* handles. Running
 /// both interpreters over one compilation keeps enum handles comparable.
 pub fn run_hir_and_mir(src: &str) -> (Expression<'static>, Expression<'static>) {
-    let (ctx, ast) = compile_hir_ctx(src).unwrap_or_else(|e| panic!("compile failed: {e}"));
+    let (ctx, ast) = compile_hir(src).unwrap_or_else(|e| panic!("compile failed: {e}"));
     let hir = ast
         .interpret(&ctx)
         .unwrap_or_else(|e| panic!("HIR interpret failed: {e}"));
@@ -182,7 +167,7 @@ pub fn run_hir_and_mir(src: &str) -> (Expression<'static>, Expression<'static>) 
 /// Run source code through full HIR compilation, lower to MIR, interpret in
 /// MIR interpreter, and convert the result to `Expression` for comparison.
 pub fn run_mir_as_expr(src: &str) -> Expression<'static> {
-    let (ctx, ast) = compile_hir_ctx(src).unwrap_or_else(|e| panic!("compile failed: {e}"));
+    let (ctx, ast) = compile_hir(src).unwrap_or_else(|e| panic!("compile failed: {e}"));
     let mir = MirProgram::from_typed_program(&ast, &ctx);
     let val = mir
         .interpret(&ctx)
@@ -195,7 +180,7 @@ pub fn run_mir_as_expr(src: &str) -> Expression<'static> {
 /// Run source code through full HIR compilation, lower to MIR, and interpret in
 /// MIR interpreter
 pub fn run_mir(src: &str) -> MirValue<'static> {
-    let (ctx, ast) = compile_hir_ctx(src).unwrap_or_else(|e| panic!("compile failed: {e}"));
+    let (ctx, ast) = compile_hir(src).unwrap_or_else(|e| panic!("compile failed: {e}"));
     let mir = MirProgram::from_typed_program(&ast, &ctx);
     let val = mir
         .interpret(&ctx)
@@ -209,7 +194,7 @@ pub fn run_mir(src: &str) -> MirValue<'static> {
 pub fn run_mir_result(
     src: &str,
 ) -> Result<MirValue<'static>, lang::interpreter::mir::MirInterpError> {
-    let (ctx, ast) = compile_hir_ctx(src).unwrap_or_else(|e| panic!("compile failed: {e}"));
+    let (ctx, ast) = compile_hir(src).unwrap_or_else(|e| panic!("compile failed: {e}"));
     let mir = MirProgram::from_typed_program(&ast, &ctx);
     let result = mir.interpret(&ctx);
     std::mem::forget(ctx);
@@ -225,7 +210,7 @@ pub fn open_example_from_file(name: &str) -> String {
 /// Load, compile, and interpret an example program in the HIR interpreter
 pub fn interpret_example(name: &str) -> anyhow::Result<Expression<'static>> {
     let src = open_example_from_file(name);
-    let (ctx, program) = compile_hir_ctx(&src)?;
+    let (ctx, program) = compile_hir(&src)?;
     let hir_result = program.interpret(&ctx)?;
     std::mem::forget(ctx);
     // Verify agreement with MIR interpreter
@@ -251,7 +236,7 @@ pub fn ownership_fails(src: &str) {
 /// Load, compile, and interpret an example program in the MIR interpreter
 pub fn interpret_mir_example(name: &str) -> anyhow::Result<Expression<'static>> {
     let src = open_example_from_file(name);
-    let (ctx, ast) = compile_hir_ctx(&src)?;
+    let (ctx, ast) = compile_hir(&src)?;
     let mir = MirProgram::from_typed_program(&ast, &ctx);
     let result = mir.interpret(&ctx).map_err(|e| anyhow::anyhow!("{}", e))?;
     let expr = mir_value_to_expr(result, &ctx);

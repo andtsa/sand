@@ -179,6 +179,16 @@ pub fn build_program<'run>(
                     let name_pair = inner.next().missing("enum name", range)?;
                     let enum_name = name_pair.as_str().to_string();
 
+                    // optional type parameters: `type Option<T> = ...`. Allocate
+                    // their ids now so phase 1.5 can resolve `T` in payloads.
+                    let type_params =
+                        if inner.peek().map(|p| p.as_rule()) == Some(Rule::type_params) {
+                            let tp_pair = inner.next().missing("type parameters", range)?;
+                            ctx.begin_type_params(&collect_type_param_names(tp_pair))
+                        } else {
+                            Vec::new()
+                        };
+
                     // enum_variant = { identifier ~ ("(" ~ type_ ~ ")")? }
                     let mut variant_names = Vec::new();
                     let mut variant_payloads = Vec::new();
@@ -196,7 +206,8 @@ pub fn build_program<'run>(
                         variant_payloads.push(payload_pair);
                     }
 
-                    let er = ctx.register_enum(&enum_name, variant_names, range, cur_mod)?;
+                    let er =
+                        ctx.register_enum(&enum_name, variant_names, type_params, range, cur_mod)?;
                     for (idx, payload_pair) in variant_payloads.into_iter().enumerate() {
                         if let Some(p) = payload_pair {
                             pending_payloads.push((er, idx, p));
@@ -210,10 +221,15 @@ pub fn build_program<'run>(
 
     // phase 1.5: resolve every variant's payload type annotation now that all
     // `EnumRef`s exist (so forward/recursive payload types resolve correctly).
+    // Each payload is resolved with its own enum's type parameters in scope, so
+    // a `T` in `type Option<T> = Some(T)` resolves to that enum's `Ty::Param`.
     for (er, idx, payload_pair) in pending_payloads {
+        let params = ctx.get_enum(er).type_params.clone();
+        ctx.enter_type_param_scope(&params);
         let payload_ty = build_type(ctx, payload_pair)?;
         ctx.set_variant_payload(er, idx, payload_ty);
     }
+    ctx.end_type_params();
 
     // second pass: build functions
     let mut mods: Map<ModuleRef, Vec<Function>> = Map::new();
@@ -310,6 +326,16 @@ fn build_function<'run>(
         });
     }
 
+    // optional type parameters: `def f<T, U>(...)`. Scoping them here means
+    // `build_type` resolves `T`/`U` to `Ty::Param` for the rest of this
+    // function's signature and body.
+    let type_params = if inner.peek().map(|p| p.as_rule()) == Some(Rule::type_params) {
+        let tp_pair = inner.next().missing("type parameters", range)?;
+        ctx.begin_type_params(&collect_type_param_names(tp_pair))
+    } else {
+        ctx.begin_type_params(&[])
+    };
+
     // collect optional parameters (parameter or parameters)
     let mut parameters = Vec::new();
     loop {
@@ -358,14 +384,24 @@ fn build_function<'run>(
     let body = build_expr(ctx, body_pair, src)?;
 
     let ofref = ctx.register_function(&name_pair, cur_module)?;
+    ctx.end_type_params();
 
     Ok(Function {
         name: ofref,
         range: Range::from(name_pair),
+        type_params,
         parameters,
         ret_type,
         body,
     })
+}
+
+/// Extract the `(name, range)` of each parameter in a `type_params` pair.
+fn collect_type_param_names(pair: Pair<Rule>) -> Vec<(String, Range)> {
+    assert_eq!(pair.as_rule(), Rule::type_params);
+    pair.into_inner()
+        .map(|p| (p.as_str().to_string(), Range::from(&p)))
+        .collect()
 }
 
 fn build_parameter<'run>(
@@ -460,6 +496,12 @@ fn build_type<'run>(ctx: &mut CompileCtx<'run>, pair: Pair<Rule>) -> Result<Ty<'
                 "Int" => Ok(ctx.types.int),
                 "Bool" => Ok(ctx.types.bool),
                 "Unit" => Ok(ctx.types.unit),
+                // A type parameter in scope (e.g. `T` inside `def f<T>`)
+                // shadows any same-named enum and resolves to `Ty::Param`.
+                other if ctx.lookup_type_param(other).is_some() => {
+                    let id = ctx.lookup_type_param(other).unwrap();
+                    Ok(ctx.param_ty(id))
+                }
                 other => ctx
                     .lookup_enum_by_name(other)
                     .map(|er| ctx.enum_ty(er))

@@ -103,7 +103,36 @@ the concrete checklist for Step 0 rather than re-deriving the work.
 
 ---
 
-## Step 1 — Type Parameters on Functions and Type Definitions
+## Step 1 — Type Parameters on Functions and Type Definitions ✅
+
+**Status**: Complete. Generic functions and enums can be *declared*;
+`T` in a signature/body resolves to an opaque `Ty::Param`. 420 tests
+pass (16 new in `generics_tests.rs`). Instantiation/calls remain Step 2.
+
+**Implementation notes / deviations from the original sketch:**
+- **Syntax**: angle brackets — `def f<T, U>(...)`, `type Option<T> = ...`.
+  Only the *declaration* takes parameters; uses are bare identifiers
+  (`Foo<Int>` use-site syntax arrives with instantiation in Step 2).
+  New grammar rule `type_params`.
+- **`TypeParamId`** (`lang/types.rs`): a `usize` newtype, globally unique
+  (not arena-backed — it has no associated heap data and must be `Copy`
+  inside the arena-interned `TyKind::Param(TypeParamId)`).
+- **One `TypeParam { id, name, range }` struct** is shared across HHIR /
+  QHIR / TypedHIR rather than the planned HHIR-`{name,range}` →
+  QHIR-`{id,name}` split. Reason: this codebase resolves type
+  annotations to `Ty` during `build_ast` (in `build_type`), so the id
+  must exist then — ids are assigned at build time, not in a later
+  uniquify step.
+- **Scope threading**: `CompileCtx` holds a `cur_type_params` name→id map
+  (mirroring `set_build_module`). `begin_type_params` allocates ids and
+  sets the scope; `build_type` resolves an in-scope name to
+  `ctx.param_ty(id)` *before* falling back to enum lookup (so a parameter
+  shadows a same-named enum). Enums re-enter their stored scope in the
+  payload-resolution phase via `enter_type_param_scope`.
+- **`Ty::Param` is opaque to every pass**: type-checking treats distinct
+  ids as distinct types (pointer identity via interning); `is_copy` is
+  `false`; `llvm_type` panics loudly if it is ever reached (it should
+  not be until Step 3 mono erases all params before codegen).
 
 **Goal**: Allow functions and type definitions to declare type
 parameters. No constraints, no kinds, no instantiation checking yet —

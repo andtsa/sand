@@ -3,6 +3,7 @@
 use lang::analysis::ProgramAnnotations;
 use lang::analysis::analyse;
 use lang::analysis::interactions::has_other_side_effects;
+use lang::castles::project::Project;
 use lang::compiler::context::CompileCtx;
 use lang::ir_types::typed_hir::TypedProgram;
 use tower_lsp::lsp_types::Diagnostic;
@@ -39,6 +40,7 @@ impl Backend {
         &'run self,
         ctx: &'run CompileCtx<'lsp>,
         ast: &TypedProgram<'lsp>,
+        project: &'run Project,
     ) -> LspDiagnostics {
         self.log(
             MessageType::LOG,
@@ -54,19 +56,7 @@ impl Backend {
         )
         .await;
 
-        // produce diagnostics for keys with more than one occurrence
         let mut diagnostics: LspDiagnostics = LspDiagnostics::default();
-
-        // acquire lock
-        let project_guard = self.project.read().await;
-        let Some(project) = project_guard.as_ref() else {
-            self.log(
-                MessageType::ERROR,
-                "annotate_reused_expressions called before project was set up".to_string(),
-            )
-            .await;
-            return diagnostics;
-        };
 
         for (e, occs) in annotations.expr_occurrences.into_iter() {
             // // NOTE: whether we include this check or not

@@ -168,6 +168,18 @@ impl CheckResult {
 
     pub fn result(
         self,
+    ) -> Result<
+        (CompileCtx<'static>, TypedProgram<'static>),
+        (CompileCtx<'static>, SandLangError<'static>),
+    > {
+        match self {
+            CheckResult::Success { ctx, ast } => Ok((ctx, ast)),
+            CheckResult::Failure { ctx, error } => Err((ctx, error)),
+        }
+    }
+
+    pub fn result_leaked(
+        self,
     ) -> Result<(CompileCtx<'static>, TypedProgram<'static>), SandLangError<'static>> {
         match self {
             CheckResult::Success { ctx, ast } => Ok((ctx, ast)),

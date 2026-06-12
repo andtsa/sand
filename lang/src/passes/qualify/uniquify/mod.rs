@@ -170,6 +170,7 @@ fn uniquify_function<'tcx>(
     Ok(Function {
         name: f.name,
         range: f.range,
+        type_params: f.type_params.clone(),
         parameters,
         ret_type: f.ret_type,
         body,

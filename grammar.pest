@@ -55,10 +55,15 @@ eq       = { "==" }
 ge       = { ">=" | "≥" }
 le       = { "<=" | "≤" }
 
+// type parameters on a generic declaration: `<T>`, `<T, U>`
+// only appears in declaration position (right after the def/type name); uses of
+// a type parameter inside a type are bare identifiers resolved during build.
+type_params = { "<" ~ identifier ~ ("," ~ identifier)* ~ ">" }
+
 // enum type declarations
 // a variant is a bare tag (`Red`, nullary) or a tag with a payload type (`Ok(Int)`)
 enum_variant = { identifier ~ ("(" ~ type_ ~ ")")? }
-type_alias   = { "type" ~ identifier ~ "=" ~ enum_variant ~ ("|" ~ enum_variant)* ~ ";"? }
+type_alias   = { "type" ~ identifier ~ type_params? ~ "=" ~ enum_variant ~ ("|" ~ enum_variant)* ~ ";"? }
 
 // enum constructors: Light#Red (local), mod::Light#Red (cross-module), or #Red (bare tag, needs check mode)
 // an optional parenthesised argument supplies the variant's payload: `Result#Ok(5)`
@@ -162,7 +167,7 @@ statement = {
 parameter  = { mut_kw? ~ (identifier | empty_identifier) ~ ":" ~ type_ }
 parameters = { parameter ~ ("," ~ parameter)* ~ ","? }
 
-function = { "def" ~ identifier ~ "(" ~ parameters? ~ ")" ~ ":" ~ type_ ~ ":=" ~ expression }
+function = { "def" ~ identifier ~ type_params? ~ "(" ~ parameters? ~ ")" ~ ":" ~ type_ ~ ":=" ~ expression }
 
 module = { "module" ~ identifier ~ ";"? }
 

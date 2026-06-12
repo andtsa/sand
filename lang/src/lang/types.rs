@@ -5,6 +5,13 @@ use std::hash::Hasher;
 
 use crate::compiler::structure::EnumDef;
 
+/// A globally unique identifier for a type parameter (the `T` in
+/// `def f<T>(...)` or `type Option<T> = ...`). Assigned once per declared
+/// parameter; two parameters named `T` in different declarations get distinct
+/// ids, so `TyKind::Param` comparison is unambiguous.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TypeParamId(pub usize);
+
 /// A `Copy` handle to an arena-allocated [`EnumDef`].
 ///
 /// Equality and hashing are by pointer identity: each distinct enum (named
@@ -66,6 +73,15 @@ pub enum TyKind<'tcx> {
     /// Product type, arity >= 2 (arity-0 is `Unit`, arity-1 is plain grouping).
     /// The element slice is arena-allocated so `TyKind` stays `Copy`.
     Tuple(&'tcx [Ty<'tcx>]),
+    /// A type parameter use site (the `T` in a generic signature/body). Opaque
+    /// until monomorphisation (Step 3) substitutes a concrete type for it.
+    Param(TypeParamId),
+    /// A generic enum applied to concrete (or still-parametric) type arguments,
+    /// e.g. `Option<Int>`. The `EnumRef` is the generic base enum; the slice is
+    /// its type arguments, one per declared parameter. Distinct argument lists
+    /// intern to distinct types. Monomorphisation (Step 3) replaces these with
+    /// specialised concrete enums.
+    App(EnumRef<'tcx>, &'tcx [Ty<'tcx>]),
 }
 
 /// A shallow, `Copy` handle to an interned [`TyKind`].
@@ -113,6 +129,9 @@ impl<'tcx> Ty<'tcx> {
         }
         match (self.kind(), other.kind()) {
             (TyKind::Tuple(xs), TyKind::Tuple(ys)) if xs.len() == ys.len() => {
+                xs.iter().zip(*ys).all(|(x, y)| x.compatible(*y))
+            }
+            (TyKind::App(e1, xs), TyKind::App(e2, ys)) if e1 == e2 && xs.len() == ys.len() => {
                 xs.iter().zip(*ys).all(|(x, y)| x.compatible(*y))
             }
             _ => false,
@@ -164,6 +183,7 @@ impl fmt::Display for Ty<'_> {
             TyKind::Unit => write!(f, "Unit"),
             TyKind::Top => write!(f, "Top"),
             TyKind::Enum(er) => write!(f, "Enum({:?})", er),
+            TyKind::Param(id) => write!(f, "Param({})", id.0),
             TyKind::Tuple(ts) => {
                 write!(f, "(")?;
                 for (i, t) in ts.iter().enumerate() {
@@ -173,6 +193,16 @@ impl fmt::Display for Ty<'_> {
                     write!(f, "{t}")?;
                 }
                 write!(f, ")")
+            }
+            TyKind::App(er, args) => {
+                write!(f, "App({er:?}<")?;
+                for (i, t) in args.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{t}")?;
+                }
+                write!(f, ">)")
             }
         }
     }

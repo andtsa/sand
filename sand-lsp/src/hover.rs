@@ -3,11 +3,8 @@
 use lang::castles::project::Project;
 use lang::compiler::context::CompileCtx;
 use lang::compiler::structure::FileRef;
-use lang::compiler::structure::Pos;
-use lang::compiler::structure::Range as LangRange;
 use lang::ir_types::typed_hir::Expr;
 use lang::ir_types::typed_hir::Expression;
-use lang::ir_types::typed_hir::Statement;
 use lang::ir_types::typed_hir::TypedFunction;
 use lang::ir_types::typed_hir::TypedProgram;
 use lang::lang::intrinsics::INTRINSICS;
@@ -19,7 +16,9 @@ use tower_lsp::lsp_types::MarkupKind;
 use tower_lsp::lsp_types::Position;
 use tower_lsp::lsp_types::Url;
 
+use crate::util::find_in_expr;
 use crate::util::pos_from_lsp_position;
+use crate::util::range_contains;
 
 pub fn hover_at_position<'tcx>(
     lsp_pos: Position,
@@ -119,71 +118,6 @@ fn fmt_expr_val<'tcx>(val: &Expression<'tcx>, ctx: &CompileCtx<'tcx>) -> String 
                 .join(", ")
         ),
         _ => "<value>".to_string(),
-    }
-}
-
-fn range_contains(range: LangRange, pos: Pos) -> bool {
-    let p = (pos.line, pos.col);
-    p >= (range.start.line, range.start.col) && p <= (range.end.line, range.end.col)
-}
-
-fn find_in_expr<'a, 'tcx>(expr: &'a Expr<'tcx>, pos: Pos) -> Option<&'a Expr<'tcx>> {
-    if !range_contains(expr.range, pos) {
-        return None;
-    }
-    let child = match &expr.expr {
-        Expression::BinOp { left, right, .. } => {
-            find_in_expr(left, pos).or_else(|| find_in_expr(right, pos))
-        }
-        Expression::UnOp { right, .. } => find_in_expr(right, pos),
-        Expression::If { cond, t, f } => find_in_expr(cond, pos)
-            .or_else(|| find_in_expr(t, pos))
-            .or_else(|| find_in_expr(f, pos)),
-        Expression::While { cond, body } => {
-            find_in_expr(cond, pos).or_else(|| find_in_expr(body, pos))
-        }
-        Expression::Call { args, .. } | Expression::IntrinsicCall { args, .. } => {
-            args.iter().find_map(|a| find_in_expr(a, pos))
-        }
-        Expression::Block { statements, expr } => statements
-            .iter()
-            .find_map(|s| find_in_stmt(s, pos))
-            .or_else(|| expr.as_deref().and_then(|e| find_in_expr(e, pos))),
-        Expression::Var(_) | Expression::Int(_) | Expression::Bool(_) | Expression::Unit => None,
-        Expression::Constructor { payload, .. } => {
-            payload.as_deref().and_then(|p| find_in_expr(p, pos))
-        }
-        Expression::Tuple(elems) => elems.iter().find_map(|e| find_in_expr(e, pos)),
-        Expression::Match { scrutinee, arms } => find_in_expr(scrutinee, pos)
-            .or_else(|| arms.iter().find_map(|arm| find_in_expr(&arm.body, pos))),
-    };
-    child.or(Some(expr))
-}
-
-fn find_in_stmt<'a, 'tcx>(stmt: &'a Statement<'tcx>, pos: Pos) -> Option<&'a Expr<'tcx>> {
-    match stmt {
-        Statement::Declaration { range, val, .. } => {
-            if range_contains(*range, pos) {
-                find_in_expr(val, pos).or(Some(val))
-            } else {
-                None
-            }
-        }
-        Statement::Assignment { range, val, .. } => {
-            if range_contains(*range, pos) {
-                find_in_expr(val, pos).or(Some(val))
-            } else {
-                None
-            }
-        }
-        Statement::LetTuple { range, val, .. } | Statement::LetPattern { range, val, .. } => {
-            if range_contains(*range, pos) {
-                find_in_expr(val, pos).or(Some(val))
-            } else {
-                None
-            }
-        }
-        Statement::Expr(e) => find_in_expr(e, pos),
     }
 }
 

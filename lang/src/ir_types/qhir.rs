@@ -12,6 +12,7 @@ use crate::compiler::structure::FunRef;
 use crate::compiler::structure::Map;
 use crate::compiler::structure::ModuleRef;
 use crate::compiler::structure::Range;
+use crate::compiler::structure::TypeParam;
 use crate::compiler::structure::UniqVar;
 use crate::lang::intrinsics::Intrinsic;
 use crate::lang::ops::*;
@@ -34,6 +35,7 @@ pub struct Parameter<'tcx> {
 pub struct Function<'tcx> {
     pub name: FunRef<'tcx>,
     pub range: Range,
+    pub type_params: Vec<TypeParam>,
     pub parameters: Vec<Parameter<'tcx>>,
     pub ret_type: Ty<'tcx>,
     pub body: Expr<'tcx>,
