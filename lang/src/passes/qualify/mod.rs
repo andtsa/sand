@@ -310,6 +310,7 @@ fn qualify_function<'tcx>(
     Ok(qhir::Function {
         name: func.name,
         range: func.range,
+        type_params: func.type_params,
         parameters,
         ret_type: func.ret_type,
         body,

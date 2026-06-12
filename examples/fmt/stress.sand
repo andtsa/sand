@@ -4,9 +4,9 @@
 def mod(a: Int, m: Int): Int := a - (a / m) * m
 
 def is_prime(n: Int): Bool := {
-    let ok: Bool = true;
+    let mut ok: Bool = true;
     if n <= 1 then false else {
-        let i: Int = 2;
+        let mut i: Int = 2;
         while i * i <= n do {
             if mod(n, i) == 0 then {
                 ok = false;
@@ -48,8 +48,8 @@ def f5(x: Int): Int := f4(f3(x)) * f3(f2(x)) - f2(f1(x)) + f1(x)
 
 // assignments + while + if interleaved
 def collatz(n: Int): Int := {
-    let steps: Int = 0;
-    let x: Int = n;
+    let mut steps: Int = 0;
+    let mut x: Int = n;
     while x != 1 do {
         if mod(x, 2) == 0 then {
             x = x / 2;

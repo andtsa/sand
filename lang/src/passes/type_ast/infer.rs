@@ -37,6 +37,7 @@ pub(super) fn infer_function<'tcx>(
         TypedFunction {
             name: func.name,
             range: func.range,
+            type_params: func.type_params.clone(),
             parameters: func.parameters.to_vec(),
             ret_type: func.ret_type,
             body,

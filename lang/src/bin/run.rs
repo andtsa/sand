@@ -12,7 +12,7 @@ fn main() -> anyhow::Result<()> {
     }
 
     let proj = Project::from_paths(&args[1..].iter().map(PathBuf::from).collect::<Vec<_>>())?.ok();
-    let (ctx, ast) = proj.check().result()?;
+    let (ctx, ast) = proj.check().result_leaked()?;
 
     println!("{:?}", ast.interpret(&ctx));
 

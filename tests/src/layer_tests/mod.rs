@@ -11,6 +11,7 @@
 //! `agreement_tests` for cross-layer verification.
 
 pub mod enum_tests;
+pub mod generics_tests;
 pub mod interpreter_tests;
 pub mod match_tests;
 pub mod ownership_tests;

@@ -15,6 +15,13 @@ pub fn discover_files(root: PathBuf) -> Result<Vec<PathBuf>, FsError> {
     Ok(files)
 }
 
+/// Recursively finds all `sand.toml` config files under `root`.
+pub fn discover_configs(root: PathBuf) -> Result<Vec<PathBuf>, FsError> {
+    let mut configs = Vec::new();
+    walk_configs_sync(&root, &mut configs)?;
+    Ok(configs)
+}
+
 pub fn read_discovered_files(files: Vec<PathBuf>) -> Result<Map<Url, String>, FsError> {
     let mut map = Map::new();
     for file in files {
@@ -22,6 +29,29 @@ pub fn read_discovered_files(files: Vec<PathBuf>) -> Result<Map<Url, String>, Fs
         map.insert(url, std::fs::read_to_string(&file)?);
     }
     Ok(map)
+}
+
+fn walk_configs_sync(dir: &Path, configs: &mut Vec<PathBuf>) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(dir)? {
+        let path = entry?.path();
+        if path.is_dir() {
+            let skip = path
+                .file_name()
+                .map(|n| {
+                    matches!(
+                        n.to_string_lossy().as_ref(),
+                        "node_modules" | ".git" | "target"
+                    )
+                })
+                .unwrap_or(false);
+            if !skip {
+                walk_configs_sync(&path, configs)?;
+            }
+        } else if path.file_name().is_some_and(|n| n == "sand.toml") {
+            configs.push(path);
+        }
+    }
+    Ok(())
 }
 
 fn walk_directory_sync(dir: &Path, files: &mut Vec<PathBuf>) -> std::io::Result<()> {

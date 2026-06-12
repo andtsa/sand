@@ -28,6 +28,8 @@ use crate::lang::types::CommonTypes;
 use crate::lang::types::EnumRef;
 use crate::lang::types::Ty;
 use crate::lang::types::TyKind;
+use crate::lang::types::TypeParamId;
+use crate::compiler::structure::TypeParam;
 use crate::passes::parse::Rule;
 
 /// This should not be used and is intentionally misspelled to be easily
@@ -125,6 +127,18 @@ pub struct CompileCtx<'tcx> {
     ty_interner: Map<TyKind<'tcx>, Ty<'tcx>>,
     /// Separate interner for tuple types, keyed by element lists.
     tuple_interner: Map<Vec<Ty<'tcx>>, Ty<'tcx>>,
+    /// Interner for generic enum instantiations, keyed by base enum + args.
+    app_interner: Map<(EnumRef<'tcx>, Vec<Ty<'tcx>>), Ty<'tcx>>,
+
+    // type parameters
+    /// Number of type parameters allocated so far — assigns each a globally
+    /// unique [`TypeParamId`].
+    type_param_count: usize,
+    /// Display names of every allocated type parameter, keyed by id.
+    type_param_names: Map<TypeParamId, String>,
+    /// Name → id for the type parameters in scope while the current generic
+    /// declaration is being built (set by [`Self::begin_type_params`]).
+    cur_type_params: Map<String, TypeParamId>,
 
     // variables
     /// Number of original variables registered so far — assigns each a stable
@@ -253,6 +267,10 @@ impl<'tcx> CompileCtx<'tcx> {
             },
             ty_interner,
             tuple_interner: Default::default(),
+            app_interner: Default::default(),
+            type_param_count: 0,
+            type_param_names: Default::default(),
+            cur_type_params: Default::default(),
             var_count: 0,
             variable_usages: Default::default(),
             uniq_count: 0,
@@ -317,6 +335,62 @@ impl<'tcx> CompileCtx<'tcx> {
             .ty_interner
             .get(&TyKind::Enum(er))
             .unwrap_or_else(|| internal_bug!("enum {er:?} was not interned as a Ty"))
+    }
+
+    // ======================== Type parameters ================================
+
+    /// Allocate the type parameters for a generic declaration and make them
+    /// the current in-scope set, so that [`Self::lookup_type_param`] (used by
+    /// type resolution) can resolve their names. Returns the [`TypeParam`]
+    /// list to store on the declaration. Call [`Self::end_type_params`] when
+    /// the declaration is fully built.
+    pub fn begin_type_params(&mut self, names: &[(String, Range)]) -> Vec<TypeParam> {
+        let mut params = Vec::with_capacity(names.len());
+        let mut scope = Map::new();
+        for (name, range) in names {
+            let id = TypeParamId(self.type_param_count);
+            self.type_param_count += 1;
+            self.type_param_names.insert(id, name.clone());
+            scope.insert(name.clone(), id);
+            params.push(TypeParam {
+                id,
+                name: name.clone(),
+                range: *range,
+            });
+        }
+        self.cur_type_params = scope;
+        params
+    }
+
+    /// Re-enter an already-allocated type-parameter scope (e.g. an enum's, when
+    /// resolving its variant payloads in a later phase). Unlike
+    /// [`Self::begin_type_params`], this allocates no new ids.
+    pub fn enter_type_param_scope(&mut self, params: &[TypeParam]) {
+        self.cur_type_params = params.iter().map(|p| (p.name.clone(), p.id)).collect();
+    }
+
+    /// Clear the current in-scope type parameters (see
+    /// [`Self::begin_type_params`]).
+    pub fn end_type_params(&mut self) {
+        self.cur_type_params.clear();
+    }
+
+    /// Resolve a name to a type parameter in the current declaration's scope.
+    pub fn lookup_type_param(&self, name: &str) -> Option<TypeParamId> {
+        self.cur_type_params.get(name).copied()
+    }
+
+    /// The interned [`Ty`] for a type parameter use site.
+    pub fn param_ty(&mut self, id: TypeParamId) -> Ty<'tcx> {
+        self.intern_ty(TyKind::Param(id))
+    }
+
+    /// The display name of a type parameter.
+    pub fn type_param_name(&self, id: TypeParamId) -> String {
+        self.type_param_names
+            .get(&id)
+            .cloned()
+            .unwrap_or_else(|| format!("?{}", id.0))
     }
 
     // ========================== Variables ====================================
@@ -440,6 +514,7 @@ impl<'tcx> CompileCtx<'tcx> {
         &mut self,
         name: &str,
         variant_names: Vec<String>,
+        type_params: Vec<TypeParam>,
         range: Range,
         module: ModuleRef<'tcx>,
     ) -> Result<EnumRef<'tcx>, ContextError> {
@@ -463,6 +538,7 @@ impl<'tcx> CompileCtx<'tcx> {
             range,
             src_module: module,
             id,
+            type_params,
             is_anonymous: false,
         };
         let er = EnumRef(self.arenas.alloc_enum(def));
@@ -559,6 +635,7 @@ impl<'tcx> CompileCtx<'tcx> {
             range,
             src_module,
             id,
+            type_params: Vec::new(),
             is_anonymous: true,
         };
         let er = EnumRef(self.arenas.alloc_enum(def));
@@ -677,6 +754,7 @@ impl std::fmt::Display for TyDisplay<'_, '_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.ty.kind() {
             TyKind::Enum(er) => write!(f, "{}", self.ctx.get_enum(*er).name),
+            TyKind::Param(id) => write!(f, "{}", self.ctx.type_param_name(*id)),
             TyKind::Tuple(elems) => {
                 write!(f, "(")?;
                 for (i, elem) in elems.iter().enumerate() {

@@ -4,6 +4,7 @@ use std::cell::Cell;
 
 use crate::compiler::structure::ModuleRef;
 use crate::compiler::structure::Range;
+use crate::compiler::structure::TypeParam;
 use crate::lang::types::Ty;
 
 /// A single variant of an enum: its name and the type of value it carries
@@ -31,6 +32,9 @@ pub struct EnumDef<'tcx> {
     pub range: Range,
     pub src_module: ModuleRef<'tcx>,
     pub(crate) id: usize,
+    /// Type parameters declared on the enum (`type Option<T> = ...`); empty for
+    /// non-generic and anonymous enums.
+    pub type_params: Vec<TypeParam>,
     /// `true` for ad-hoc tag-union types (`#ok | #err`); `false` for named
     /// enums declared with `type T = A | B | C`.
     /// Used to decide whether to print variants with a `#` prefix.
