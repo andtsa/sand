@@ -21,12 +21,17 @@ use crate::compiler::structure::OriginalVarRef;
 use crate::compiler::structure::Range;
 use crate::compiler::structure::Set;
 use crate::compiler::structure::TypeParam;
+use crate::compiler::structure::TypeParamSpec;
 use crate::compiler::structure::UniqVar;
 use crate::compiler::structure::VarName;
 use crate::internal_bug;
 use crate::ir_types::hhir::HirVar;
 use crate::lang::types::CommonTypes;
 use crate::lang::types::EnumRef;
+use crate::lang::types::Kind;
+use crate::lang::types::Region;
+use crate::lang::types::RegionConstraint;
+use crate::lang::types::RegionVar;
 use crate::lang::types::Ty;
 use crate::lang::types::TyKind;
 use crate::lang::types::TypeParamId;
@@ -129,6 +134,16 @@ pub struct CompileCtx<'tcx> {
     tuple_interner: Map<Vec<Ty<'tcx>>, Ty<'tcx>>,
     /// Interner for generic enum instantiations, keyed by base enum + args.
     app_interner: Map<(EnumRef<'tcx>, Vec<Ty<'tcx>>), Ty<'tcx>>,
+    /// Interner for region-ascribed types `T @ 'r`, keyed by inner type +
+    /// region.
+    region_ty_interner: Map<(Ty<'tcx>, Region), Ty<'tcx>>,
+
+    // regions
+    /// Number of region variables allocated so far.
+    region_count: usize,
+    /// Region name → variable. Regions are currently interned globally (they
+    /// have no semantics yet); per-scope region binding arrives in Step 8.
+    region_names: Map<String, RegionVar>,
 
     // type parameters
     /// Number of type parameters allocated so far — assigns each a globally
@@ -268,6 +283,9 @@ impl<'tcx> CompileCtx<'tcx> {
             ty_interner,
             tuple_interner: Default::default(),
             app_interner: Default::default(),
+            region_ty_interner: Default::default(),
+            region_count: 0,
+            region_names: Default::default(),
             type_param_count: 0,
             type_param_names: Default::default(),
             cur_type_params: Default::default(),
@@ -343,6 +361,48 @@ impl<'tcx> CompileCtx<'tcx> {
         ty
     }
 
+    /// The kind of a type — the default kind of a value of that type (Calculus
+    /// §5 kinding judgment). Every current type is `Owned`; borrow modes and
+    /// declared constructor kinds arrive in later steps.
+    pub fn kind_of(&self, _ty: Ty<'tcx>) -> Kind {
+        Kind::Owned
+    }
+
+    // ============================ Regions ====================================
+
+    /// Resolve a lifetime name to a [`Region`]. `'static` is the permanent
+    /// region; any other name is interned to a [`RegionVar`].
+    pub fn resolve_region(&mut self, name: &str) -> Region {
+        if name == "static" {
+            return Region::Static;
+        }
+        if let Some(&rv) = self.region_names.get(name) {
+            return Region::Var(rv);
+        }
+        let rv = RegionVar(self.region_count);
+        self.region_count += 1;
+        self.region_names.insert(name.to_string(), rv);
+        Region::Var(rv)
+    }
+
+    /// Intern a region-ascribed type `inner @ region` (Calculus §2.3).
+    pub fn region_ty(&mut self, inner: Ty<'tcx>, region: Region) -> Ty<'tcx> {
+        let key = (inner, region);
+        if let Some(&ty) = self.region_ty_interner.get(&key) {
+            return ty;
+        }
+        let kind_ref = self.arenas.alloc_ty(TyKind::Region(inner, region));
+        let ty = Ty(kind_ref);
+        self.region_ty_interner.insert(key, ty);
+        ty
+    }
+
+    /// Discharge a set of outlives constraints. A trivially-satisfied stub
+    /// until the constraint solver lands in Step 8.
+    pub fn solve_outlives(&self, _constraints: &[RegionConstraint]) -> bool {
+        true
+    }
+
     /// The [`Ty`] handle for the enum type `er`.
     ///
     /// Every `EnumRef` is interned as a `Ty` at registration time, so this
@@ -361,18 +421,20 @@ impl<'tcx> CompileCtx<'tcx> {
     /// type resolution) can resolve their names. Returns the [`TypeParam`]
     /// list to store on the declaration. Call [`Self::end_type_params`] when
     /// the declaration is fully built.
-    pub fn begin_type_params(&mut self, names: &[(String, Range)]) -> Vec<TypeParam> {
-        let mut params = Vec::with_capacity(names.len());
+    pub fn begin_type_params(&mut self, specs: &[TypeParamSpec]) -> Vec<TypeParam> {
+        let mut params = Vec::with_capacity(specs.len());
         let mut scope = Map::new();
-        for (name, range) in names {
+        for spec in specs {
             let id = TypeParamId(self.type_param_count);
             self.type_param_count += 1;
-            self.type_param_names.insert(id, name.clone());
-            scope.insert(name.clone(), id);
+            self.type_param_names.insert(id, spec.name.clone());
+            scope.insert(spec.name.clone(), id);
             params.push(TypeParam {
                 id,
-                name: name.clone(),
-                range: *range,
+                name: spec.name.clone(),
+                range: spec.range,
+                variance: spec.variance,
+                kind: spec.kind,
             });
         }
         self.cur_type_params = scope;

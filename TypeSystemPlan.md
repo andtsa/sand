@@ -290,6 +290,38 @@ used with, producing a `TypedProgram` with no generics.
 > but for this step it suffices to confirm that `is_copy()` and `Owned`
 > agree for all current types.
 
+> **Status**: ✅ Complete. The `{Owned, Never}` lattice is in place and
+> full divergence is implemented: a `while true` loop has kind `Never`
+> and inhabits any type, compiling (via `Terminator::Unreachable`) and
+> running end-to-end through LLVM. 468 tests pass (12 new in
+> `kind_tests.rs` + `examples/divergence.sand`).
+>
+> **Calculus alignment**: implements the `{Owned, Never}` fragment of
+> §1.2 (`Kind::is_subkind`: `a==b ‖ a==Never`), §1.4 (`Kind::join`),
+> §5 (`CompileCtx::kind_of` → `Owned` for every current type), and §6.1
+> subsumption (the only non-trivial subkind case, `Never <: k`, is
+> realised as the `coerce_never` coercion in `check`; `if`/`match` merge
+> branch kinds with `join`). Borrow modes, regions, and kind annotations
+> are deferred to Steps 5–9 exactly as the lattice anticipates.
+>
+> **Implementation notes / deviations:**
+> - `Kind { Owned, Never }` lives in `lang/types.rs` with `is_subkind` and
+>   `join`. `typed_hir::Expr` carries `kind` (excluded from `Eq`/`Hash`
+>   like `ty`); `TypeEnv` entries carry it too (inert `Owned` for now —
+>   scaffolding for Step 6 borrowed bindings).
+> - **Full divergence** (chosen over the lattice-only option): `while true`
+>   → `Never`; in checking mode a `Never` expression coerces to any
+>   expected type (re-typed via `coerce_never`); `if`/`match` take the
+>   result type from non-diverging branches.
+> - **Codegen**: this required touching `explicate_control` (the nearby
+>   plan steps kept it untouched): `lower_tail`/`lower_assign` route a
+>   `Never` expression through `lower_effect` with an `Unreachable`
+>   continuation, so no value is fabricated for a path that never returns.
+>   A reachable-but-unexecuted divergence (`if true then 7 else loop`)
+>   therefore compiles and runs.
+> - **Ownership pass** left on `is_copy()` per the pre-step note; kinds add
+>   no constraints yet, so they stay consistent.
+
 **Goal**: Introduce the kind system with the two uncontroversial kinds
 first. Every existing type is `Owned`. `Never` is the uninhabited kind,
 useful for diverging expressions.
@@ -317,7 +349,42 @@ variables, kind annotations on type parameters.
 
 ---
 
-## Step 5 — Kind Annotations on Type Parameters
+## Step 5 — Kind Annotations on Type Parameters ✅
+
+> **Status**: Complete. Type parameters carry optional variance (`+`/`-`)
+> and kind (`: Owned`/`: Never`) annotations; the kind-application rule
+> and a variance-soundness check are enforced at the declaration/use
+> sites. 477 tests pass (9 new in `generics_tests.rs`).
+>
+> **Calculus alignment**: implements §2.1 variance, §2.2 parameterised
+> type-constructor parameters (`v̂ a : k`), grammar §8.4 (`variance_ann`,
+> `kind_ann`, `type_param`), and the §5 `K-App` kind-argument check.
+> `kind_ann` is `Owned`/`Never` only — the borrow kinds (which need a
+> region) arrive in Steps 7–9.
+>
+> **Implementation notes / scope reality:**
+> - Because monomorphisation erases all generics and the system has no
+>   subtyping between concrete types, variance/kind annotations are
+>   **declaration- and use-site checks**, not use-site coercions. They
+>   have real teeth only where a concrete error can be produced:
+>   - **`K-App`** (`build_type`, `type_application`): each argument's kind
+>     must satisfy the parameter's declared kind → `KindArgMismatch`. With
+>     only `Owned` types this fires for a `: Never` parameter.
+>   - **Variance soundness** (`check_variance`, after enum payloads
+>     resolve): every position in the current grammar is a *producer*
+>     (covariant) position, so the only unsound declaration is
+>     `Contravariant` on a *used* parameter → `UnsoundVariance`. Covariant
+>     and invariant are always sound; a phantom (unused) parameter accepts
+>     any variance.
+> - **Defaults** (§2.1): unannotated variance → `Covariant` (the §2.1
+>   result for producer-only positions), unannotated kind → `Owned`.
+> - `TypeParam` gained `variance: Variance` and `kind: Kind`; a new
+>   `TypeParamSpec` carries the parsed-and-defaulted annotation into
+>   `begin_type_params`. `Variance` lives in `lang/types.rs`.
+> - The full producer/consumer polarity engine (with variance
+>   *composition* through nested applications) is deferred until function
+>   types (Step 13) introduce the first consumer positions; today the
+>   analysis is exact because contravariant positions cannot occur.
 
 **Goal**: Allow type parameters to carry kind annotations
 (`+a : Owned`) and variance annotations (`+`, `-`, `∅`). Validate
@@ -341,7 +408,41 @@ that type constructor bodies are consistent with declared variance.
 
 ---
 
-## Step 6 — Region Variables and the Region Context
+## Step 6 — Region Variables and the Region Context ✅
+
+> **Status**: Complete. Lifetime syntax (`'r`, `'static`) parses, `T @ 'r`
+> is a distinct interned type that round-trips, and monomorphisation
+> erases regions so MIR/LLVM are unchanged. 484 tests pass (7 new in
+> `region_tests.rs`).
+>
+> **Calculus alignment**: implements §1.1 regions (`Region::Var | Static`,
+> `RegionConstraint` as the outlives relation) and §2.3 region ascription
+> `T @ 'r : Owned`. Borrow types/expressions and actual constraint
+> solving are deferred to Steps 7–8 as scoped.
+>
+> **Implementation notes / deviations:**
+> - **`TyKind::Region(Ty, Region)`** (ascription carries its inner type)
+>   rather than the plan's bare `Ty::Region(Region)`, which would lose
+>   `T`. `is_copy`/`has_param`/`compatible`/`Display` recurse through it.
+> - **Grammar**: `lifetime = @{ "'" ~ identifier }`; the `@ 'r` suffix is
+>   parsed on a renamed `core_type` (`type_ = { core_type ~ ("@" ~
+>   lifetime)? }`) to keep the PEG free of the left recursion that a
+>   literal `region_type = type_ ~ "@" ~ lifetime` would introduce.
+> - **Implicit region binding** (per "elision scaffolded, not active"):
+>   regions bind on first use in `T @ 'r`; explicit `<'r>` region
+>   parameters are deferred. Regions are currently **interned globally by
+>   name** (sound because they have no semantics yet); per-declaration
+>   region scoping arrives with the constraint solver in Step 8.
+> - **Region ascription is a distinct type** from the bare type (faithful
+>   to §2.3): `Int @ 'r ≠ Int`. Since there is no ascription *expression*
+>   yet, region-ascribed values cannot be created from literals — regions
+>   appear only in signatures and are erased by mono.
+> - **Deferred to Step 8** (noted): the `Vec<RegionConstraint>` region
+>   context in `TypeEnv`. Adding it now would convert `TypeEnv` from a map
+>   alias to a struct and ripple through ~10 sites for an always-empty
+>   field; its first real use (constraint generation + solving) is Step 8.
+>   `RegionConstraint` and the `solve_outlives` stub (trivially satisfied)
+>   are in place now per the "data structures in place" requirement.
 
 **Goal**: Introduce region variables as first-class entities. Add
 lifetime syntax (`'r`) to the grammar and thread region variables
@@ -608,6 +709,21 @@ returned.
 - LLVM codegen: lambdas lower to a function pointer + captured
   environment struct (fat pointer representation)
 - Typing rules `Lam-Owned` and `Lam-Borrow` from the calculus
+- **Variance follow-up (carried over from Step 5)**: function types are
+  the first *consumer* (contravariant) positions in the grammar, so this
+  step must finish the variance story that Step 5 could only scaffold:
+  - extend the polarity analysis (`check_variance` in `build_ast.rs`) to
+    flip polarity across a function arrow's argument position and compose
+    variance through nested type applications (a parameter under a
+    contravariant constructor argument is itself contravariant);
+  - recompute the §2.1 *default* variance from actual positions
+    (producer → `+`, consumer → `-`, both → `∅`) instead of the current
+    always-`Covariant` default;
+  - **add the variance tests that Step 5 deferred**: a parameter used
+    only in argument position accepts `-a` and rejects `+a`; a parameter
+    in both positions must be `∅`; declaring `+a`/`-a` against the wrong
+    polarity is an `UnsoundVariance` error; nested composition
+    (`F<G<a>>` where `G`'s parameter is contravariant) resolves correctly.
 - New tests: lambda passed as argument, lambda returned from function,
   closure over owned value (moves it), closure over borrowed value
 

@@ -13,8 +13,10 @@
 pub mod enum_tests;
 pub mod generics_tests;
 pub mod interpreter_tests;
+pub mod kind_tests;
 pub mod match_tests;
 pub mod ownership_tests;
 pub mod parse_tests;
 pub mod qualify_tests;
+pub mod region_tests;
 pub mod typecheck_tests;

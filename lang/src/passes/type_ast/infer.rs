@@ -8,6 +8,7 @@ use crate::ir_types::typed_hir;
 use crate::ir_types::typed_hir::TypedFunction;
 use crate::lang::intrinsics::INTRINSICS;
 use crate::lang::types::EnumRef;
+use crate::lang::types::Kind;
 use crate::lang::types::Ty;
 use crate::lang::types::TyKind;
 use crate::lang::types::TypeParamId;
@@ -28,7 +29,7 @@ pub(super) fn infer_function<'tcx>(
     let env: TypeEnv<'tcx> = func
         .parameters
         .iter()
-        .map(|p| (p.name, (p.ty, p.is_mutable)))
+        .map(|p| (p.name, (p.ty, Kind::Owned, p.is_mutable)))
         .collect();
 
     // use check() so that bare tags in return position are resolved against the
@@ -104,6 +105,7 @@ pub(super) fn infer_constructor<'tcx>(
             },
             range: expr.range,
             ty,
+            kind: Kind::Owned,
         })
     };
 
@@ -191,7 +193,7 @@ pub(super) fn infer_statement<'tcx>(
                     (inferred, ty)
                 }
             };
-            env.insert(*name, (ty, *is_mutable));
+            env.insert(*name, (ty, Kind::Owned, *is_mutable));
             Ok(typed_hir::Statement::Declaration {
                 name: *name,
                 range: *range,
@@ -200,7 +202,7 @@ pub(super) fn infer_statement<'tcx>(
             })
         }
         qhir::Statement::Assignment { name, val, range } => {
-            let (var_ty, is_mutable) =
+            let (var_ty, _kind, is_mutable) =
                 env.get(name)
                     .copied()
                     .ok_or_else(|| AstTypeError::UnboundVariable {
@@ -262,7 +264,7 @@ pub(super) fn infer_statement<'tcx>(
                 .iter()
                 .zip(elem_tys.iter())
                 .map(|((name, is_mutable, elem_range), &ty)| {
-                    env.insert(*name, (ty, *is_mutable));
+                    env.insert(*name, (ty, Kind::Owned, *is_mutable));
                     (*name, ty, *is_mutable, *elem_range)
                 })
                 .collect();
@@ -314,7 +316,7 @@ pub(super) fn infer_statement<'tcx>(
 
             // 6. Register all bindings in the environment.
             for (var, ty, _range) in &bindings {
-                env.insert(*var, (*ty, false)); // all let-pattern bindings are immutable
+                env.insert(*var, (*ty, Kind::Owned, false)); // all let-pattern bindings are immutable
             }
 
             Ok(typed_hir::Statement::LetPattern {
@@ -342,19 +344,22 @@ pub(super) fn infer<'tcx>(
             expr: typed_hir::Expression::Int(*x),
             range: expr.range,
             ty: ctx.types.int,
+            kind: Kind::Owned,
         }),
         qhir::Expression::Bool(x) => Ok(typed_hir::Expr {
             expr: typed_hir::Expression::Bool(*x),
             range: expr.range,
             ty: ctx.types.bool,
+            kind: Kind::Owned,
         }),
         qhir::Expression::Unit => Ok(typed_hir::Expr {
             expr: typed_hir::Expression::Unit,
             range: expr.range,
             ty: ctx.types.unit,
+            kind: Kind::Owned,
         }),
         qhir::Expression::Var(x) => {
-            let (ty, _) = env
+            let (ty, _, _) = env
                 .get(x)
                 .copied()
                 .ok_or_else(|| AstTypeError::UnboundVariable {
@@ -365,6 +370,7 @@ pub(super) fn infer<'tcx>(
                 expr: typed_hir::Expression::Var(*x),
                 range: expr.range,
                 ty,
+                kind: Kind::Owned,
             })
         }
         qhir::Expression::Constructor {
@@ -397,6 +403,7 @@ pub(super) fn infer<'tcx>(
                 expr: typed_hir::Expression::Tuple(typed_elems),
                 range: expr.range,
                 ty,
+                kind: Kind::Owned,
             })
         }
 
@@ -437,6 +444,7 @@ pub(super) fn infer<'tcx>(
                 },
                 range: expr.range,
                 ty,
+                kind: Kind::Owned,
             })
         }
         qhir::Expression::UnOp { op, right } => {
@@ -458,6 +466,7 @@ pub(super) fn infer<'tcx>(
                 },
                 range: expr.range,
                 ty,
+                kind: Kind::Owned,
             })
         }
         qhir::Expression::If { cond, t, f } => {
@@ -476,18 +485,26 @@ pub(super) fn infer<'tcx>(
             let (f_expr, ty) = match f {
                 Some(f) => {
                     let f_expr = infer(ctx, env, f)?;
-                    if t_expr.ty != f_expr.ty {
-                        return Err(AstTypeError::TypeError {
-                            message: format!(
-                                "branches of 'if' expression must have the same type, found {} and {}",
-                                t_expr.ty, f_expr.ty
-                            ),
-                            expected: t_expr.ty,
-                            found: f_expr.ty,
-                            range: expr.range,
-                        });
-                    }
-                    let ty = t_expr.ty;
+                    // A diverging branch (kind `Never`) does not constrain the
+                    // result type — it is taken from the other branch.
+                    let ty = match (t_expr.kind, f_expr.kind) {
+                        (Kind::Never, _) => f_expr.ty,
+                        (_, Kind::Never) => t_expr.ty,
+                        _ => {
+                            if t_expr.ty != f_expr.ty {
+                                return Err(AstTypeError::TypeError {
+                                    message: format!(
+                                        "branches of 'if' expression must have the same type, found {} and {}",
+                                        t_expr.ty, f_expr.ty
+                                    ),
+                                    expected: t_expr.ty,
+                                    found: f_expr.ty,
+                                    range: expr.range,
+                                });
+                            }
+                            t_expr.ty
+                        }
+                    };
                     (f_expr, ty)
                 }
                 None => {
@@ -506,11 +523,13 @@ pub(super) fn infer<'tcx>(
                         expr: typed_hir::Expression::Unit,
                         range: expr.range,
                         ty: ctx.types.unit,
+                        kind: Kind::Owned,
                     };
                     (f_expr, ctx.types.unit)
                 }
             };
 
+            let kind = t_expr.kind.join(f_expr.kind);
             Ok(typed_hir::Expr {
                 expr: typed_hir::Expression::If {
                     cond: Box::new(cond_expr),
@@ -519,6 +538,7 @@ pub(super) fn infer<'tcx>(
                 },
                 range: expr.range,
                 ty,
+                kind,
             })
         }
         qhir::Expression::While { cond, body } => {
@@ -534,6 +554,13 @@ pub(super) fn infer<'tcx>(
 
             let body_expr = infer(ctx, env, body)?;
 
+            // A `while true do …` loop has no exit (the language has no
+            // `break`), so it diverges: its kind is `Never`.
+            let kind = if matches!(cond_expr.expr, typed_hir::Expression::Bool(true)) {
+                Kind::Never
+            } else {
+                Kind::Owned
+            };
             Ok(typed_hir::Expr {
                 expr: typed_hir::Expression::While {
                     cond: Box::new(cond_expr),
@@ -541,6 +568,7 @@ pub(super) fn infer<'tcx>(
                 },
                 range: expr.range,
                 ty: ctx.types.unit,
+                kind,
             })
         }
         qhir::Expression::Call { fn_name, args } => {
@@ -587,6 +615,7 @@ pub(super) fn infer<'tcx>(
                     },
                     range: expr.range,
                     ty: fun_sig.ret_ty,
+                    kind: Kind::Owned,
                 });
             }
 
@@ -629,6 +658,7 @@ pub(super) fn infer<'tcx>(
                 },
                 range: expr.range,
                 ty: ret_ty,
+                kind: Kind::Owned,
             })
         }
         qhir::Expression::IntrinsicCall { fn_name, args } => {
@@ -669,6 +699,7 @@ pub(super) fn infer<'tcx>(
                 },
                 range: expr.range,
                 ty: ret_ty,
+                kind: Kind::Owned,
             })
         }
         qhir::Expression::Block {
@@ -683,12 +714,13 @@ pub(super) fn infer<'tcx>(
                 },
             )?;
 
-            let (typed_expr, ret_ty) = if let Some(e) = ret_expr {
+            let (typed_expr, ret_ty, kind) = if let Some(e) = ret_expr {
                 let t_expr = infer(ctx, &final_env, e)?;
                 let ret_ty = t_expr.ty;
-                (Some(Box::new(t_expr)), ret_ty)
+                let kind = t_expr.kind;
+                (Some(Box::new(t_expr)), ret_ty, kind)
             } else {
-                (None, ctx.types.unit)
+                (None, ctx.types.unit, Kind::Owned)
             };
 
             Ok(typed_hir::Expr {
@@ -698,6 +730,7 @@ pub(super) fn infer<'tcx>(
                 },
                 range: expr.range,
                 ty: ret_ty,
+                kind,
             })
         }
         qhir::Expression::Match { scrutinee, arms } => {
@@ -708,6 +741,11 @@ pub(super) fn infer<'tcx>(
                 .first()
                 .map(|a| a.body.ty)
                 .unwrap_or(ctx.types.unit);
+            // The match diverges only if every arm does.
+            let kind = typed_arms
+                .iter()
+                .map(|a| a.body.kind)
+                .fold(Kind::Never, Kind::join);
             Ok(typed_hir::Expr {
                 expr: typed_hir::Expression::Match {
                     scrutinee: Box::new(scrut_expr),
@@ -715,6 +753,7 @@ pub(super) fn infer<'tcx>(
                 },
                 ty: result_ty,
                 range: expr.range,
+                kind,
             })
         }
     }

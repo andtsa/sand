@@ -1,0 +1,8 @@
+//@TEST:{7}[]
+// `diverge`'s whole body is an infinite loop (kind Never), so it compiles to a
+// loop that never returns. `main` takes the live branch and exits 7; the
+// diverging `else` is compiled but never executed.
+
+def diverge(): Int := while true do {}
+
+def main(): Int := if true then 7 else (while true do {})

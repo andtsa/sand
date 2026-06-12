@@ -189,6 +189,44 @@ pub fn ast_error_to_diagnostics(
                 },
             );
         }
+        AstError::KindArgMismatch {
+            type_name,
+            param,
+            expected,
+            found,
+            range,
+        } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    file: Some(file),
+                    severity: DiagnosticSeverity::Error,
+                    message: format!(
+                        "type argument for parameter '{param}' of '{type_name}' has kind {found:?}, but kind {expected:?} is required"
+                    ),
+                    range: *range,
+                    ..Default::default()
+                },
+            );
+        }
+        AstError::UnsoundVariance {
+            type_name,
+            param,
+            range,
+        } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    file: Some(file),
+                    severity: DiagnosticSeverity::Error,
+                    message: format!(
+                        "parameter '{param}' of '{type_name}' is declared contravariant but appears in a covariant (producer) position"
+                    ),
+                    range: *range,
+                    ..Default::default()
+                },
+            );
+        }
     }
     diagnostics
 }

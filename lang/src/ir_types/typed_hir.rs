@@ -81,11 +81,15 @@ pub enum Statement<'tcx> {
     Expr(Expr<'tcx>),
 }
 
-/// `Expr` wraps an `Expression` and carries its type and source position.
+/// `Expr` wraps an `Expression` and carries its type, kind, and source
+/// position. `kind` is `Owned` for ordinary expressions and `Never` for
+/// diverging ones (e.g. an infinite loop); only `expr` participates in
+/// equality/hashing (see the impls below), so `ty`/`kind` are free to differ.
 #[derive(Debug, Clone)]
 pub struct Expr<'tcx> {
     pub expr: Expression<'tcx>,
     pub ty: Ty<'tcx>,
+    pub kind: Kind,
     pub range: Range,
 }
 

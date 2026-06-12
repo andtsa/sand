@@ -15,12 +15,13 @@ use crate::compiler::structure::UniqVar;
 use crate::ir_types::qhir;
 use crate::ir_types::typed_hir;
 use crate::ir_types::typed_hir::TypedFunction;
+use crate::lang::types::Kind;
 use crate::lang::types::Ty;
 pub use crate::passes::type_ast::errors::AstTypeError;
 use crate::passes::type_ast::errors::TypeError;
 use crate::passes::type_ast::infer::infer_function;
 
-type TypeEnv<'tcx> = im::HashMap<UniqVar<'tcx>, (Ty<'tcx>, bool)>; // (type, is_mutable)
+type TypeEnv<'tcx> = im::HashMap<UniqVar<'tcx>, (Ty<'tcx>, Kind, bool)>; // (type, is_mutable)
 
 impl<'tcx> typed_hir::TypedProgram<'tcx> {
     pub fn from_ast_program(

@@ -14,6 +14,7 @@ use crate::compiler::structure::FileRef;
 use crate::compiler::structure::Map;
 use crate::compiler::structure::ModuleRef;
 use crate::compiler::structure::Range;
+use crate::compiler::structure::TypeParamSpec;
 use crate::compiler::structure::UriError;
 use crate::internal_bug;
 use crate::ir_types::hhir::*;
@@ -70,6 +71,26 @@ pub enum AstError {
         name: String,
         expected: usize,
         found: usize,
+        range: Range,
+    },
+
+    #[error(
+        "type argument for parameter '{param}' of '{type_name}' has kind {found:?}, but kind {expected:?} is required at {range}"
+    )]
+    KindArgMismatch {
+        type_name: String,
+        param: String,
+        expected: Kind,
+        found: Kind,
+        range: Range,
+    },
+
+    #[error(
+        "parameter '{param}' of '{type_name}' is declared contravariant but appears in a covariant (producer) position at {range}"
+    )]
+    UnsoundVariance {
+        type_name: String,
+        param: String,
         range: Range,
     },
 }
@@ -168,6 +189,7 @@ pub fn build_program<'run>(
     // the raw payload `type_` pairs (cloned — they borrow from `src`) here
     // and resolve them in phase 1.5 below, once every enum skeleton exists.
     let mut pending_payloads: Vec<(EnumRef, usize, Pair<Rule>)> = Vec::new();
+    let mut generic_enums: Vec<EnumRef> = Vec::new();
     {
         let mut cur_mod = default_module;
         for child in &children {
@@ -194,7 +216,7 @@ pub fn build_program<'run>(
                     let type_params =
                         if inner.peek().map(|p| p.as_rule()) == Some(Rule::type_params) {
                             let tp_pair = inner.next().missing("type parameters", range)?;
-                            ctx.begin_type_params(&collect_type_param_names(tp_pair))
+                            ctx.begin_type_params(&collect_type_params(tp_pair))
                         } else {
                             Vec::new()
                         };
@@ -216,8 +238,12 @@ pub fn build_program<'run>(
                         variant_payloads.push(payload_pair);
                     }
 
+                    let is_generic = !type_params.is_empty();
                     let er =
                         ctx.register_enum(&enum_name, variant_names, type_params, range, cur_mod)?;
+                    if is_generic {
+                        generic_enums.push(er);
+                    }
                     for (idx, payload_pair) in variant_payloads.into_iter().enumerate() {
                         if let Some(p) = payload_pair {
                             pending_payloads.push((er, idx, p));
@@ -240,6 +266,12 @@ pub fn build_program<'run>(
         ctx.set_variant_payload(er, idx, payload_ty);
     }
     ctx.end_type_params();
+
+    // phase 1.6: validate declared variance against the positions each
+    // parameter occupies in the enum's variant payloads (Calculus §2.1).
+    for er in generic_enums {
+        check_variance(ctx, er)?;
+    }
 
     // second pass: build functions
     let mut mods: Map<ModuleRef, Vec<Function>> = Map::new();
@@ -341,7 +373,7 @@ fn build_function<'run>(
     // function's signature and body.
     let type_params = if inner.peek().map(|p| p.as_rule()) == Some(Rule::type_params) {
         let tp_pair = inner.next().missing("type parameters", range)?;
-        ctx.begin_type_params(&collect_type_param_names(tp_pair))
+        ctx.begin_type_params(&collect_type_params(tp_pair))
     } else {
         ctx.begin_type_params(&[])
     };
@@ -406,11 +438,81 @@ fn build_function<'run>(
     })
 }
 
-/// Extract the `(name, range)` of each parameter in a `type_params` pair.
-fn collect_type_param_names(pair: Pair<Rule>) -> Vec<(String, Range)> {
+/// Validate the declared variance of a generic enum's parameters against the
+/// positions they occupy in its variant payloads (Calculus §2.1).
+///
+/// Every position in the current type grammar (enum payloads, tuples, generic
+/// applications) is a *producer* (covariant) position — there are no consumer
+/// positions until function types arrive. So a parameter that is used is
+/// covariant, and the only unsound declaration is `Contravariant` on a used
+/// parameter. `Covariant` and `Invariant` are always sound, and an unused
+/// (phantom) parameter accepts any declared variance.
+fn check_variance<'run>(ctx: &CompileCtx<'run>, er: EnumRef<'run>) -> Result<(), AstError> {
+    let def = ctx.get_enum(er);
+    for param in &def.type_params {
+        let used = def
+            .variants
+            .iter()
+            .filter_map(|v| v.payload.get())
+            .any(|ty| ty_mentions_param(ty, param.id));
+        if used && param.variance == Variance::Contravariant {
+            return Err(AstError::UnsoundVariance {
+                type_name: def.name.clone(),
+                param: param.name.clone(),
+                range: param.range,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Whether `ty` mentions the type parameter `id` (directly or nested).
+fn ty_mentions_param(ty: Ty<'_>, id: TypeParamId) -> bool {
+    match ty.kind() {
+        TyKind::Param(p) => *p == id,
+        TyKind::Tuple(elems) => elems.iter().any(|e| ty_mentions_param(*e, id)),
+        TyKind::App(_, args) => args.iter().any(|a| ty_mentions_param(*a, id)),
+        _ => false,
+    }
+}
+
+/// Parse each `type_param` in a `type_params` pair, applying the default
+/// variance (`Covariant`) and kind (`Owned`) when their annotations are absent.
+fn collect_type_params(pair: Pair<Rule>) -> Vec<TypeParamSpec> {
     assert_eq!(pair.as_rule(), Rule::type_params);
     pair.into_inner()
-        .map(|p| (p.as_str().to_string(), Range::from(&p)))
+        .map(|tp| {
+            // type_param = { variance_ann? ~ identifier ~ (":" ~ kind_ann)? }
+            let range = Range::from(&tp);
+            let mut variance = Variance::Covariant;
+            let mut kind = Kind::Owned;
+            let mut name = String::new();
+            for part in tp.into_inner() {
+                match part.as_rule() {
+                    Rule::variance_ann => {
+                        variance = match part.as_str() {
+                            "+" => Variance::Covariant,
+                            "-" => Variance::Contravariant,
+                            _ => Variance::Invariant,
+                        };
+                    }
+                    Rule::identifier => name = part.as_str().to_string(),
+                    Rule::kind_ann => {
+                        kind = match part.as_str() {
+                            "Never" => Kind::Never,
+                            _ => Kind::Owned,
+                        };
+                    }
+                    _ => {}
+                }
+            }
+            TypeParamSpec {
+                name,
+                range,
+                variance,
+                kind,
+            }
+        })
         .collect()
 }
 
@@ -441,12 +543,31 @@ fn build_parameter<'run>(
     })
 }
 
+/// Build a type, applying an optional `@ 'r` region ascription (Calculus §2.3).
+/// `type_ = { core_type ~ ("@" ~ lifetime)? }`.
 fn build_type<'run>(ctx: &mut CompileCtx<'run>, pair: Pair<Rule>) -> Result<Ty<'run>, AstError> {
-    tracing::trace!("build_type called with {:?}", pair.as_str());
+    assert_eq!(pair.as_rule(), Rule::type_);
+    let range = Range::from(&pair);
+    let mut inner = pair.into_inner();
+    let core = inner.next().missing("core type", range)?;
+    let mut ty = build_core_type(ctx, core)?;
+    if let Some(lt) = inner.next() {
+        assert_eq!(lt.as_rule(), Rule::lifetime);
+        let region = ctx.resolve_region(lt.as_str().trim_start_matches('\''));
+        ty = ctx.region_ty(ty, region);
+    }
+    Ok(ty)
+}
+
+fn build_core_type<'run>(
+    ctx: &mut CompileCtx<'run>,
+    pair: Pair<Rule>,
+) -> Result<Ty<'run>, AstError> {
+    tracing::trace!("build_core_type called with {:?}", pair.as_str());
     assert_eq!(
         pair.as_rule(),
-        Rule::type_,
-        "expected type literal, got {:?}: {}",
+        Rule::core_type,
+        "expected core type, got {:?}: {}",
         pair.as_rule(),
         pair.as_str()
     );
@@ -490,14 +611,28 @@ fn build_type<'run>(ctx: &mut CompileCtx<'run>, pair: Pair<Rule>) -> Result<Ty<'
                     name: name.clone(),
                     range,
                 })?;
-            let expected = ctx.get_enum(er).type_params.len();
-            if expected != arg_tys.len() {
+            let params = ctx.get_enum(er).type_params.clone();
+            if params.len() != arg_tys.len() {
                 return Err(AstError::TypeArgArityMismatch {
                     name,
-                    expected,
+                    expected: params.len(),
                     found: arg_tys.len(),
                     range,
                 });
+            }
+            // K-App (Calculus §5): each argument's kind must satisfy the
+            // declared parameter kind.
+            for (param, &arg) in params.iter().zip(&arg_tys) {
+                let arg_kind = ctx.kind_of(arg);
+                if !arg_kind.is_subkind(param.kind) {
+                    return Err(AstError::KindArgMismatch {
+                        type_name: name,
+                        param: param.name.clone(),
+                        expected: param.kind,
+                        found: arg_kind,
+                        range,
+                    });
+                }
             }
             Ok(ctx.intern_app(er, arg_tys))
         }
