@@ -157,7 +157,43 @@ constraints, monomorphisation.
 
 ---
 
-## Step 2 — Generic Instantiation and Type Substitution
+## Step 2 — Generic Instantiation and Type Substitution ✅
+
+**Status**: Complete. Generic functions can be *called* (type arguments
+inferred by unifying parameters against arguments), and generic enums
+can be *used* (`Option<Int>` types, constructors, `match`, and
+let-patterns). 463 tests pass (40 in `generics_tests.rs`). Generic
+*bodies* still contain `Ty::Param`/`Ty::App` — Step 3 (mono) erases them
+before codegen.
+
+**Implementation notes:**
+- **Use-site syntax**: angle brackets — `Option<Int>`, `Either<A, B>`
+  (new grammar rule `type_application`, resolved in `build_type` with an
+  arity check → `AstError::TypeArgArityMismatch`).
+- **`TyKind::App(EnumRef, &[Ty])`** represents a generic enum applied to
+  type arguments; interned by `CompileCtx::intern_app` so `Option<Int>`
+  and `Option<Bool>` are distinct types. The base enum keeps its
+  parametric payloads (`Param`); use sites substitute on the fly. This is
+  the Step-2/Step-3 boundary the plan describes (intern now, specialise
+  bodies later).
+- **`passes/type_ast/generics.rs`**: `subst(ty, mapping)` (recurses into
+  `Tuple`/`App`), `unify(declared, actual, &mut mapping)` (binds params,
+  rejects conflicts), and `Subst = Map<TypeParamId, Ty>`. `Ty::has_param`
+  decides whether a signature is generic.
+- **Generic calls** (`infer.rs`): a call is generic iff its signature
+  still mentions a parameter. Parametric args are inferred then unified;
+  concrete args keep the existing `check` path (so bare tags still
+  resolve). The return type is `subst`ituted with the solved mapping. A
+  parameter forced to two types is a `FunctionCallTypeError`.
+- **Generic constructors** (`infer_constructor`, shared by infer/check):
+  type arguments are seeded from the expected type (`let x: Option<Int>
+  = Option#None`) and/or inferred from the payload (`Option#Some(5)`). An
+  underdetermined constructor (bare nullary, no annotation) is
+  `CannotInferTypeArguments`.
+- **Generic `match`/let-patterns** (`check.rs`): an `App` scrutinee is
+  matched like its base enum; the `enum_instantiation` helper builds the
+  param→arg substitution, and variant payload types are `subst`ituted so
+  bindings get concrete types (`Option<Int>#Some(x)` ⟹ `x : Int`).
 
 **Goal**: Type-check calls to generic functions and uses of generic
 types, performing substitution to produce fully typed expressions with

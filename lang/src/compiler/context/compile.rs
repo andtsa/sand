@@ -20,6 +20,7 @@ use crate::compiler::structure::OriginalVar;
 use crate::compiler::structure::OriginalVarRef;
 use crate::compiler::structure::Range;
 use crate::compiler::structure::Set;
+use crate::compiler::structure::TypeParam;
 use crate::compiler::structure::UniqVar;
 use crate::compiler::structure::VarName;
 use crate::internal_bug;
@@ -29,7 +30,6 @@ use crate::lang::types::EnumRef;
 use crate::lang::types::Ty;
 use crate::lang::types::TyKind;
 use crate::lang::types::TypeParamId;
-use crate::compiler::structure::TypeParam;
 use crate::passes::parse::Rule;
 
 /// This should not be used and is intentionally misspelled to be easily
@@ -295,8 +295,8 @@ impl<'tcx> CompileCtx<'tcx> {
     /// same handle. Use [`Self::intern_tuple`] for `TyKind::Tuple`.
     fn intern_ty(&mut self, kind: TyKind<'tcx>) -> Ty<'tcx> {
         debug_assert!(
-            !matches!(kind, TyKind::Tuple(_)),
-            "use intern_tuple for tuple types"
+            !matches!(kind, TyKind::Tuple(_) | TyKind::App(..)),
+            "use intern_tuple / intern_app for slice-bearing types"
         );
         if let Some(&ty) = self.ty_interner.get(&kind) {
             return ty;
@@ -323,6 +323,23 @@ impl<'tcx> CompileCtx<'tcx> {
         let kind_ref = self.arenas.alloc_ty(TyKind::Tuple(slice));
         let ty = Ty(kind_ref);
         self.tuple_interner.insert(elems, ty);
+        ty
+    }
+
+    /// Intern a generic enum instantiation `Base<args...>`. The argument count
+    /// must match the base enum's declared type-parameter count (callers check
+    /// arity and report a user-facing error). Distinct argument lists intern to
+    /// distinct types.
+    pub fn intern_app(&mut self, er: EnumRef<'tcx>, args: Vec<Ty<'tcx>>) -> Ty<'tcx> {
+        let key = (er, args);
+        if let Some(&ty) = self.app_interner.get(&key) {
+            return ty;
+        }
+        let (er, args) = key;
+        let slice = self.arenas.alloc_ty_slice(&args);
+        let kind_ref = self.arenas.alloc_ty(TyKind::App(er, slice));
+        let ty = Ty(kind_ref);
+        self.app_interner.insert((er, args), ty);
         ty
     }
 

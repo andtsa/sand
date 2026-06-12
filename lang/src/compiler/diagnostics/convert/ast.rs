@@ -170,6 +170,25 @@ pub fn ast_error_to_diagnostics(
                 },
             );
         }
+        AstError::TypeArgArityMismatch {
+            name,
+            expected,
+            found,
+            range,
+        } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    file: Some(file),
+                    severity: DiagnosticSeverity::Error,
+                    message: format!(
+                        "generic type '{name}' expects {expected} type argument(s) but {found} were given"
+                    ),
+                    range: *range,
+                    ..Default::default()
+                },
+            );
+        }
     }
     diagnostics
 }
