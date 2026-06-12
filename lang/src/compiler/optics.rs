@@ -62,12 +62,6 @@ use crate::ir_types::hhir::HirVar;
 
 /// A **prism** focusing on the [`HirVar::Uniq`] variant.
 ///
-/// A prism is the dual of a lens: where a lens always succeeds at `get`ting
-/// a field out of a product type, a prism may *fail* to match a particular
-/// variant of a sum type, but always succeeds at *constructing* one.
-///
-/// Haskell analogue (as you would derive with `makePrisms ''HirVar`):
-///
 /// ```haskell
 /// _Uniq :: Prism' HirVar UniqVar
 /// _Uniq = prism' Uniq (\case Uniq u -> Just u; _ -> Nothing)
@@ -77,7 +71,7 @@ use crate::ir_types::hhir::HirVar;
 /// By the time the qualify stage runs, `uniquify` has already rewritten
 /// every `HirVar::Decl`/`HirVar::Unqualified` into `HirVar::Uniq`, so a
 /// `Decl`/`Unqualified` surviving to this point is an internal-compiler-error,
-/// not a user-facing one — exactly the situation `preview`/`expect` is for.
+/// not a user-facing one
 pub struct UniqPrism;
 
 impl UniqPrism {
@@ -98,11 +92,16 @@ impl UniqPrism {
 
     /// `preview` composed with an internal-bug panic on mismatch.
     ///
-    /// This is the idiom this module exists to replace:
-    /// `let HirVar::Uniq(u) = v else { internal_bug!("...: {v:?}") }`
-    /// becomes `UniqPrism::expect(v, "...")`. The `msg` should describe
-    /// *where* the unqualified variable was encountered; the offending
-    /// value is appended automatically.
+    /// this is the idiom this module exists to replace:
+    /// ```ignore
+    /// let HirVar::Uniq(u) = v else { internal_bug!("...: {v:?}") }
+    /// ```
+    /// becomes
+    /// ```ignore
+    /// UniqPrism::expect(v, "...")
+    /// ```
+    /// the `msg` should describe
+    /// *where* the unqualified variable was encountered
     pub fn expect<'tcx>(v: HirVar<'tcx>, msg: &str) -> UniqVar<'tcx> {
         match Self::preview(v.clone()) {
             Some(u) => u,

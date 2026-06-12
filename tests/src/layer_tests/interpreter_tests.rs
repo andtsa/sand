@@ -102,7 +102,7 @@ fn interpret_parenthesised_expr() {
 #[test]
 fn interpret_bool_and_true() {
     assert_eq!(
-        run_both("def main(): Bool := true & true"),
+        run_both("def main(): Bool := true and true"),
         Expression::Bool(true)
     );
 }
@@ -110,7 +110,7 @@ fn interpret_bool_and_true() {
 #[test]
 fn interpret_bool_and_false() {
     assert_eq!(
-        run_both("def main(): Bool := true & false"),
+        run_both("def main(): Bool := true and false"),
         Expression::Bool(false)
     );
 }
@@ -381,7 +381,7 @@ fn interpret_negative_zero_is_zero() {
 #[test]
 fn interpret_chained_comparisons_via_bool_ops() {
     assert_eq!(
-        run_both("def main(): Bool := (1 < 2) & (3 > 2)"),
+        run_both("def main(): Bool := (1 < 2) and (3 > 2)"),
         Expression::Bool(true)
     );
 }

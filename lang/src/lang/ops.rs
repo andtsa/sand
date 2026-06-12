@@ -10,6 +10,9 @@ pub enum Bop {
     Mult,
     Div,
     Pow,
+    /// bitwise AND on `Int`, written `&&`.
+    BitAnd,
+    /// logical AND on `Bool`, written `and`.
     And,
     Or,
     Xor,
@@ -43,14 +46,21 @@ impl Bop {
     ) -> Result<Ty<'tcx>, Ty<'tcx>> {
         use Bop::*;
         match self {
-            Plus | Minus | Mult | Div | Pow => {
+            Plus | Minus | Mult | Div | Pow | BitAnd => {
                 if left == types.int && right == types.int {
                     Ok(types.int)
                 } else {
                     Err(types.int)
                 }
             }
-            And | Or | Xor => {
+            And => {
+                if left == types.bool && right == types.bool {
+                    Ok(types.bool)
+                } else {
+                    Err(types.bool)
+                }
+            }
+            Or | Xor => {
                 if left == right {
                     Ok(left)
                 } else {

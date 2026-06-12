@@ -314,7 +314,8 @@ impl<'ctx> LlvmCodegen<'ctx> {
             Bop::Div => self.builder.build_int_signed_div(li, ri, "div")?.into(),
             // pow is intercepted in emit_rvalue before reaching here
             Bop::Pow => internal_bug!("Bop::Pow should be handled before emit_binop"),
-            Bop::And => self.builder.build_and(li, ri, "and")?.into(),
+            // bitwise AND on i64 and logical AND on i1 are the same LLVM `and`.
+            Bop::BitAnd | Bop::And => self.builder.build_and(li, ri, "and")?.into(),
             Bop::Or => self.builder.build_or(li, ri, "or")?.into(),
             Bop::Xor => self.builder.build_xor(li, ri, "xor")?.into(),
             Bop::Comp(cop) => {

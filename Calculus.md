@@ -1,6 +1,6 @@
 # Core Calculus
 
-A formal description of the kind, type, region, and term systems for the sand language.
+a formal description of the kind, type, region, and term systems for the sand language.
 
 ---
 
@@ -892,3 +892,5 @@ KEYWORD = {
   | "requires" | "for"         -- typeclass relations
   | "where"                    -- constraints
 }
+
+```
