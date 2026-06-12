@@ -4,12 +4,13 @@ use std::cell::Cell;
 
 use crate::compiler::structure::ModuleRef;
 use crate::compiler::structure::Range;
+use crate::compiler::structure::RegionParam;
 use crate::compiler::structure::TypeParam;
 use crate::lang::types::Ty;
 
 /// A single variant of an enum: its name and the type of value it carries
 /// (if any). `payload: None` is a nullary tag (`Light#Red`); `payload:
-/// Some(ty)` carries exactly one value — which may itself be a
+/// Some(ty)` carries exactly one value, which may itself be a
 /// `TyKind::Tuple` for multi-field constructors (`Pair#Both((Int, Bool))`).
 ///
 /// The payload is held in a [`Cell`] because enum registration is two-phase:
@@ -35,6 +36,9 @@ pub struct EnumDef<'tcx> {
     /// Type parameters declared on the enum (`type Option<T> = ...`); empty for
     /// non-generic and anonymous enums.
     pub type_params: Vec<TypeParam>,
+    /// Region parameters declared on the enum (`type Ref<'r, a> = ...`); empty
+    /// for enums with no lifetime parameters and anonymous enums.
+    pub region_params: Vec<RegionParam>,
     /// `true` for ad-hoc tag-union types (`#ok | #err`); `false` for named
     /// enums declared with `type T = A | B | C`.
     /// Used to decide whether to print variants with a `#` prefix.

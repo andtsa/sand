@@ -222,6 +222,12 @@ impl<'fmt, 'tcx> Iterator for TypedExprFormatter<'fmt, 'tcx> {
                     Int(x) => return Some((x.to_string(), Nothing)),
                     Var(x) => return Some((self.ctx.uniq_variable_name(x), Nothing)),
 
+                    // emission order: & inner (no space, e.g. "&x")
+                    Borrow(inner) => {
+                        self.stack.push(Exp(&inner.expr));
+                        return Some(("&".into(), Nothing));
+                    }
+
                     // --- compound expressions ---
                     If { cond, t, f } => {
                         // emission order: if cond then t else f

@@ -69,7 +69,7 @@ module.exports = grammar({
       repeat(seq('|', '#', field('tag', $.identifier)))
     ),
 
-    // Tuple type: (Int, Bool) — arity >= 2
+    // Tuple type: (Int, Bool) arity >= 2
     tuple_type: $ => seq(
       '(',
       $._type,
@@ -267,7 +267,7 @@ module.exports = grammar({
       ')'
     ),
 
-    // Tuple literal: (a, b, ...) — arity >= 2
+    // Tuple literal: (a, b, ...) arity >= 2
     tuple_expr: $ => seq(
       '(',
       $._expression,

@@ -488,6 +488,38 @@ actual constraint solving.
 > existing tests/examples (`&` on `Bool` → `and`). New `operator_tests.rs`
 > (9 tests) locks in the split. Borrow syntax (`&` / `&mut`) is added below.
 
+> **Status**: ✅ Complete. The `Borrowed` kind, `&'r T` reference types,
+> `&e` borrow expressions, and `let &x = e` borrow bindings all compile
+> and run end-to-end; borrows don't consume their referent. 507 tests
+> pass (14 new in `borrow_tests.rs`). The block-region escape check is
+> deferred to Step 8 (per the confirmed scope decision).
+>
+> **Calculus alignment**: §1.1/§1.2 (`Kind::Borrowed(Region)`,
+> `Owned <: Borrowed`), §2.3 (`TyKind::Ref(Region, Ty)`, `K-Borrow`),
+> §3.2/§8.7 (`borrow_expr`, `borrow_type`), §6.2 (`Var-Borrow`:
+> borrowing does not consume).
+>
+> **Implementation notes / deviations:**
+> - **Affine tracking stays in the ownership pass** (where move-tracking
+>   already lives), not the type checker: `&e` and `let &x = e` borrow
+>   without consuming, so a non-`Copy` referent stays usable. `&T` is
+>   `Copy` (immutable, freely shareable).
+> - **Monomorphisation erases borrows**: `&'r T → T`; `&e` and `let &x`
+>   lower transparently to the inner value. Sound because shared borrows
+>   are immutable and nothing is freed, so codegen is unchanged.
+> - **`let &x : T = e` desugars to `let x : &T = &e`** at build time
+>   (reusing the borrow-expression machinery, no new IR fields). This
+>   gives `x` a reference type `&T` rather than the calculus's "T at
+>   kind `Borrowed`"; without a deref operator the distinction is not yet
+>   observable. The `x : T @ Borrowed` refinement is deferred.
+> - **Elided borrows share one anonymous region** (`anon_region`), so an
+>   elided `&T` type and an elided `&e` value compare equal. Per-borrow
+>   fresh regions and the **escape check** arrive with the region solver
+>   in Step 8 (region scoping is its prerequisite, deferred in Step 6).
+> - **`Owned <: Borrowed`** is in `Kind::is_subkind` but is mostly
+>   scaffolding — there is no auto-ref coercion yet, so it fires only
+>   where a value already has the right reference type.
+
 **Goal**: Add `Borrowed 'r` as a kind and `&'r T` as a type. Implement
 shared (immutable) borrow expressions and borrow let-bindings. This is
 the first step where the ownership semantics change meaningfully.
@@ -547,6 +579,58 @@ do not outlive their source region. Validate the outlives relation
   accepted and rejected correctly
 
 **Out of scope**: Region inference/elision activation, `BorrowedMut`.
+
+> **✅ Step split into 8a (plumbing) + 8b (enforcement).**
+> Step 8 entangles the region *machinery* (declared region parameters,
+> `where` clauses threaded through every signature) with the *rules* that
+> reason over it (escape check, outlives solver). Mirroring the Step 1→2
+> (plumbing→enforcement) pattern, it is split so 8b's borrow checker reasons
+> over real declared regions and stored constraints rather than inventing
+> them.
+>
+> **✅ Step 8a — region-parameter plumbing (DONE).**
+> Structural only; nothing is enforced and all 518 tests pass, clippy clean.
+> - **Grammar**: `region_param = { lifetime }` mixed into `type_params`
+>   (`def f<'r, T>(...)`, `type Ref<'r, a>`; Calculus §8.4). `where_clause` /
+>   `where_constraint` for `where 'r >= 's` on functions (§8.10), plus the
+>   `where` keyword. `region_param` is tried before `type_param` in the
+>   choice (a `'`-prefixed token is unambiguously a region).
+> - **Scoped region resolution**: `CompileCtx::resolve_region` now consults a
+>   per-declaration `cur_regions` scope (replacing the global region-name
+>   interner) and returns `Option` — a named lifetime must be a declared
+>   region parameter or `'static`, else `AstError::UnknownRegion`. Elided
+>   borrows (`&T`/`&e`) still use the shared `anon_region` (now a dedicated
+>   lazily-allocated var, not `resolve_region("_")`).
+> - **`begin_region_params` / `enter_region_param_scope`** mirror the
+>   type-param scope methods; `end_type_params` clears both scopes. Region
+>   params are allocated from the same `type_params` pair via
+>   `collect_region_params` (type params via the now-filtered
+>   `collect_type_params`).
+> - **Threaded through the IR**: `region_params: Vec<RegionParam>` and
+>   `where_constraints: Vec<RegionConstraint>` on hhir/qhir/typed `Function`;
+>   `region_params` on `EnumDef` (re-entered when resolving variant payloads).
+>   Mono erases all of it (empty vecs on specialised functions). `where`
+>   constraints are resolved while the function's region params are in scope
+>   and stored, but **not yet checked**.
+> - `ty_mentions_param` now recurses through `Ref`/`Region` so a type
+>   parameter used only under a borrow (`type Ref<'r, a> = Mk(&'r a)`) is not
+>   mis-flagged as phantom by the variance check.
+> - Tests: `region_param_tests.rs` (declaration/resolution, mixed
+>   type+region lists, undeclared-lifetime rejection, `where` parse+storage,
+>   enum region params). Step 6/7 tests that used bare `'r` updated to
+>   declare `<'r>`.
+>
+> **Deferred to Step 8b — enforcement (the rules):**
+> - Per-block scope regions + variable→scope tracking (replacing the single
+>   shared elision region) — the prerequisite for the escape check.
+> - The outlives solver (scope-nesting + the stored `where` constraints);
+>   `solve_outlives` is still the `true` stub.
+> - The block/return escape check (`'r ∉ freeRegions(T)` → `RegionEscape`).
+> - Checking `where` constraints **at call sites**, and region instantiation
+>   so an explicit-region function can be *called* with an elided borrow
+>   (currently only its definition type-checks — see
+>   `region_parametric_function_definition_type_checks`).
+> - `ElisionRule` scaffolding enum.
 
 ---
 

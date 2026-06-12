@@ -45,6 +45,8 @@ pub(super) fn infer_function<'tcx>(
             name: func.name,
             range: func.range,
             type_params: func.type_params.clone(),
+            region_params: func.region_params.clone(),
+            where_constraints: func.where_constraints.clone(),
             parameters: func.parameters.to_vec(),
             ret_type: func.ret_type,
             body,
@@ -358,6 +360,19 @@ pub(super) fn infer<'tcx>(
             ty: ctx.types.unit,
             kind: Kind::Owned,
         }),
+        // `&e` (Calculus §3.2): a shared borrow, of type `&'r T` and kind
+        // `Borrowed 'r` (`K-Borrow`). The region is fresh.
+        qhir::Expression::Borrow(inner) => {
+            let inner_expr = infer(ctx, env, inner)?;
+            let region = ctx.anon_region();
+            let ty = ctx.ref_ty(region, inner_expr.ty);
+            Ok(typed_hir::Expr {
+                expr: typed_hir::Expression::Borrow(Box::new(inner_expr)),
+                range: expr.range,
+                ty,
+                kind: Kind::Borrowed(region),
+            })
+        }
         qhir::Expression::Var(x) => {
             let (ty, _, _) = env
                 .get(x)

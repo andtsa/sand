@@ -12,6 +12,7 @@ use crate::compiler::structure::FunRef;
 use crate::compiler::structure::Map;
 use crate::compiler::structure::ModuleRef;
 use crate::compiler::structure::Range;
+use crate::compiler::structure::RegionParam;
 use crate::compiler::structure::TypeParam;
 use crate::compiler::structure::UniqVar;
 use crate::lang::intrinsics::Intrinsic;
@@ -36,6 +37,8 @@ pub struct Function<'tcx> {
     pub name: FunRef<'tcx>,
     pub range: Range,
     pub type_params: Vec<TypeParam>,
+    pub region_params: Vec<RegionParam>,
+    pub where_constraints: Vec<RegionConstraint>,
     pub parameters: Vec<Parameter<'tcx>>,
     pub ret_type: Ty<'tcx>,
     pub body: Expr<'tcx>,
@@ -117,6 +120,8 @@ pub enum Expression<'tcx> {
     Int(i64),
     Bool(bool),
     Unit,
+    /// shared borrow `&e` (Calculus §3.2).
+    Borrow(Box<Expr<'tcx>>),
     Block {
         statements: Vec<Statement<'tcx>>,
         expr: Option<Box<Expr<'tcx>>>,

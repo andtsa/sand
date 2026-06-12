@@ -137,7 +137,7 @@ impl std::fmt::Display for AnnotatedExpression<'_> {
 }
 
 // `Expr` keys reach an enum payload `Cell` through arena references, but hash
-// by structural/pointer identity that never reads it — see `find_interactions`.
+// by structural/pointer identity that never reads it. see `find_interactions`.
 #[allow(clippy::mutable_key_type)]
 pub fn flipped_occurence_map<'a, 'tcx>(
     map: &'a HashMap<Expr<'tcx>, HashSet<(ModuleRef<'tcx>, Range)>>,

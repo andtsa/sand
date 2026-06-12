@@ -1,7 +1,7 @@
 //! Optics for the compiler's intermediate representations.
 //!
 //! Optics are composable abstractions for focusing on parts of data
-//! structures — "functional references" that let you `get`, `set`, or
+//! structures ("functional references") that let you `get`, `set`, or
 //! `traverse` into a substructure without writing the surrounding
 //! pattern-match boilerplate by hand. This module collects the optics used
 //! by the `qualify`/`uniquify` passes, following the classic Haskell `lens`
@@ -27,9 +27,9 @@
 //! Rust has no higher-kinded types, so we cannot write one polymorphic
 //! definition and instantiate `f` to `Identity`, `Const`, or `Either e` as
 //! needed the way `lens` does. Instead we specialise directly to the
-//! `Result<_, E>` ("Either e") applicative/monad — the one instantiation
-//! that actually matters for compiler passes, since every pass is an
-//! effectful, fallible, tree-rewriting traversal. This is exactly the
+//! `Result<_, E>` ("Either e") applicative/monad, which is the only
+//! instantiation that actually matters for compiler passes, since every pass is
+//! an effectful, fallible, tree-rewriting traversal. This is exactly the
 //! `traverseOf`/`mapMOf` use of a `Traversal` in Haskell:
 //!
 //! ```haskell
@@ -38,19 +38,19 @@
 //!
 //! ## What lives where
 //!
-//! * **Traversal** — `hhir::Expr::traverse_subexprs` (in `ir_types::hhir`)
+//! * **Traversal** `hhir::Expr::traverse_subexprs` (in `ir_types::hhir`)
 //!   focuses on every immediate child expression of an `Expr` and rebuilds the
 //!   parent around the (transformed) results. It is the "recurse-and-rebuild"
 //!   boilerplate of a tree rewrite, factored out once so that passes only need
 //!   to special-case the structurally interesting nodes (see `uniquify_expr`).
 //!
-//! * **Prism** — [`UniqPrism`] focuses on the `Uniq` variant of `HirVar`, the
+//! * **Prism** [`UniqPrism`] focuses on the `Uniq` variant of `HirVar`, the
 //!   only variant that should remain once the uniquify stage has run. `preview`
 //!   safely extracts the payload (`Option`), `review` safely re-injects it;
 //!   together they replace the repeated `let HirVar::Uniq(u) = v else {
 //!   internal_bug!(..) }` idiom with a single named, reusable optic.
 //!
-//! * **Getter (composed)** — `QualfiyCtx::resolve_constructor` (in
+//! * **Getter (composed)** `QualfiyCtx::resolve_constructor` (in
 //!   `passes::qualify`) composes the two-step `lookup_enum_by_name` then
 //!   `lookup_variant` lookup into one `(type_name, variant) -> (EnumRef,
 //!   variant_idx)` getter, the way you would write `to enumByName . to
@@ -85,7 +85,7 @@ impl UniqPrism {
     }
 
     /// `review`: construct a `HirVar` from a `UniqVar`. This direction of a
-    /// prism never fails — it is just the variant constructor.
+    /// prism never fails (it is just the variant constructor).
     pub fn review<'tcx>(u: UniqVar<'tcx>) -> HirVar<'tcx> {
         HirVar::Uniq(u)
     }

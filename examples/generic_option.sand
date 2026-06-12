@@ -1,6 +1,6 @@
 //@TEST:{13}[]
 // a generic enum is constructed, returned from a generic function, and consumed
-// by `match` — all monomorphised before codegen.
+// by `match`. all should be monomorphised before codegen
 
 type Option<T> = None | Some(T)
 

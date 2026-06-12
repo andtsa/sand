@@ -1,6 +1,6 @@
 //@TEST:{0}[5,0,5]
 
-// Option / Maybe type — tests payload enum construction and pattern matching.
+// Option / Maybe type tests payload enum construction and pattern matching
 //
 //   Maybe = Nothing | Just(Int)
 //

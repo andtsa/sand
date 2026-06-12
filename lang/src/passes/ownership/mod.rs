@@ -120,6 +120,15 @@ impl<'tcx> OwnershipChecker<'_, 'tcx> {
         match &expr.expr {
             th::Expression::Int(_) | th::Expression::Bool(_) | th::Expression::Unit => Ok(()),
 
+            // A shared borrow does not consume its referent: borrowing a
+            // variable is a non-consuming read, so the variable stays usable
+            // (Calculus §6.2, `Var-Borrow`). Borrowing a temporary just checks
+            // the sub-expression that produces it.
+            th::Expression::Borrow(inner) => match &inner.expr {
+                th::Expression::Var(_) => Ok(()),
+                _ => self.check_expr(inner, env),
+            },
+
             th::Expression::Constructor { payload, .. } => match payload {
                 Some(p) => self.check_expr(p, env),
                 None => Ok(()),

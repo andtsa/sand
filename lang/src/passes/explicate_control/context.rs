@@ -668,6 +668,8 @@ impl<'tcx> FnCx<'tcx> {
             return self.lower_effect(expr, unreachable);
         }
         match &expr.expr {
+            // a shared borrow is transparent at runtime: assign the referent.
+            th::Expression::Borrow(inner) => self.lower_assign(inner, dst, cont),
             th::Expression::If { cond, t, f } => {
                 let then_bb = self.lower_assign(t, dst, cont);
                 let else_bb = self.lower_assign(f, dst, cont);

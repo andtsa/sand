@@ -311,6 +311,8 @@ fn qualify_function<'tcx>(
         name: func.name,
         range: func.range,
         type_params: func.type_params,
+        region_params: func.region_params,
+        where_constraints: func.where_constraints,
         parameters,
         ret_type: func.ret_type,
         body,
@@ -342,6 +344,9 @@ fn qualify_expr<'tcx>(
         hhir::Expression::Bool(b) => qhir::Expression::Bool(b),
         hhir::Expression::Int(i) => qhir::Expression::Int(i),
         hhir::Expression::Unit => qhir::Expression::Unit,
+        hhir::Expression::Borrow(inner) => {
+            qhir::Expression::Borrow(Box::new(qualify_expr(q, module_name, *inner)?))
+        }
         hhir::Expression::BinOp { left, op, right } => qhir::Expression::BinOp {
             left: Box::new(qualify_expr(q, module_name, *left)?),
             op,

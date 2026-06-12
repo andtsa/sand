@@ -45,7 +45,7 @@ fn undefined_function_diagnostic_has_non_zero_range() {
         for d in diags {
             assert!(
                 d.range != Default::default(),
-                "diagnostic has zero range — user cannot locate the error: {:?}",
+                "diagnostic has zero range! user cannot locate the error: {:?}",
                 d.range
             );
         }

@@ -63,7 +63,7 @@ fn assignment_to_immutable_bool_is_type_error() {
     );
 }
 
-/// Function parameters are immutable — assigning to one must fail.
+/// Function parameters are immutable: assigning to one must fail.
 #[test]
 fn assignment_to_parameter_is_type_error() {
     typecheck_fails(
@@ -118,7 +118,7 @@ fn mutable_parameter_can_be_reassigned() {
     );
 }
 
-/// A plain (immutable) parameter cannot be reassigned — type error.
+/// A plain (immutable) parameter cannot be reassigned: type error.
 #[test]
 fn immutable_parameter_assignment_is_type_error() {
     typecheck_fails(

@@ -60,6 +60,8 @@ impl<'tcx> TypedProgram<'tcx> {
         match expr {
             Expression::Int(n) => Ok(Expression::Int(*n)),
             Expression::Bool(b) => Ok(Expression::Bool(*b)),
+            // a shared borrow is transparent at runtime: evaluate the referent.
+            Expression::Borrow(inner) => self.eval_expr(&inner.expr, env, ctx, output),
             Expression::Unit => Ok(Expression::Unit),
 
             Expression::Var(name) => env
