@@ -45,6 +45,22 @@ pub(super) fn infer_function<'tcx>(
         module: func.src_module,
     })?;
 
+    // Function-return escape check (Calculus §6.3, the frame boundary): the
+    // returned value's type may not name any *local* region — the function frame
+    // or a block. Only *outer* regions (`'static`, lifetime parameters) outlive
+    // the call, so a borrow of a by-value parameter or a local cannot be
+    // returned; a borrow tied to a lifetime parameter (`&'a T`) can. This
+    // tightens the per-block escape check, which alone would wrongly admit
+    // `def f(x: Int): &Int := &x`.
+    let mut ret_regions = Vec::new();
+    body.ty.free_regions(&mut ret_regions);
+    if ret_regions.iter().any(|&r| ctx.is_scope_region(r)) {
+        return Err(TypeError {
+            error: AstTypeError::RegionEscape { range: func.range },
+            module: func.src_module,
+        });
+    }
+
     Ok((
         func.name,
         TypedFunction {
