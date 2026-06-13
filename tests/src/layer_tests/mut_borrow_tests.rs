@@ -8,7 +8,6 @@
 
 use lang::ir_types::typed_hir::Expression;
 use lang::lang::types::Kind;
-use lang::lang::types::Region;
 
 use crate::common::parse;
 use crate::common::run_hir;
@@ -28,28 +27,22 @@ fn run_both(src: &str) -> Expression<'static> {
 
 #[test]
 fn owned_is_subkind_of_borrowed_mut() {
-    let r = Region::Static;
-    assert!(Kind::Owned.is_subkind(Kind::BorrowedMut(r)));
-    assert!(Kind::Never.is_subkind(Kind::BorrowedMut(r)));
-    assert!(!Kind::BorrowedMut(r).is_subkind(Kind::Owned));
+    assert!(Kind::Owned.is_subkind(Kind::BorrowedMut));
+    assert!(Kind::Never.is_subkind(Kind::BorrowedMut));
+    assert!(!Kind::BorrowedMut.is_subkind(Kind::Owned));
 }
 
 #[test]
 fn borrow_modes_are_incomparable() {
-    let r = Region::Static;
     // Borrowed and BorrowedMut are distinct, mutually-incomparable branches.
-    assert!(!Kind::Borrowed(r).is_subkind(Kind::BorrowedMut(r)));
-    assert!(!Kind::BorrowedMut(r).is_subkind(Kind::Borrowed(r)));
+    assert!(!Kind::Borrowed.is_subkind(Kind::BorrowedMut));
+    assert!(!Kind::BorrowedMut.is_subkind(Kind::Borrowed));
 }
 
 #[test]
 fn borrow_modes_join_to_owned() {
-    let r = Region::Static;
-    assert_eq!(Kind::Borrowed(r).join(Kind::BorrowedMut(r)), Kind::Owned);
-    assert_eq!(
-        Kind::BorrowedMut(r).join(Kind::BorrowedMut(r)),
-        Kind::BorrowedMut(r)
-    );
+    assert_eq!(Kind::Borrowed.join(Kind::BorrowedMut), Kind::Owned);
+    assert_eq!(Kind::BorrowedMut.join(Kind::BorrowedMut), Kind::BorrowedMut);
 }
 
 // ── reference types and borrow expressions parse and type-check

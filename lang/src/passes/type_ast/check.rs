@@ -844,7 +844,7 @@ pub(super) fn check<'tcx>(
                 payload.as_deref(),
                 Some(expected),
             )?;
-            if e.ty.type_neq(expected) {
+            if !e.ty.eq_modulo_regions(expected) {
                 return Err(AstTypeError::TypeError {
                     message: format!("expected type {} but found {}", expected, e.ty),
                     expected,
@@ -910,13 +910,17 @@ pub(super) fn check<'tcx>(
 
             let (typed_statements, typed_ret) = computed?;
             let kind = typed_ret.kind;
-            escape_check(ctx, kind, block_depth, expr.range)?;
+            // Carry the *actual* result type (region-blind-equal to `expected`, but
+            // keeping its real regions) so a nested block's borrow region survives
+            // to the enclosing block's escape check; regions live on the type.
+            let ret_ty = typed_ret.ty;
+            escape_check(ctx, ret_ty, block_depth, expr.range)?;
             Ok(typed_hir::Expr {
                 expr: typed_hir::Expression::Block {
                     statements: typed_statements,
                     expr: Some(Box::new(typed_ret)),
                 },
-                ty: expected,
+                ty: ret_ty,
                 range: expr.range,
                 kind,
             })
@@ -966,7 +970,7 @@ pub(super) fn check<'tcx>(
             if let Some(coerced) = coerce_never(&e, expected) {
                 return Ok(coerced);
             }
-            if e.ty.type_neq(expected) {
+            if !e.ty.eq_modulo_regions(expected) {
                 return Err(AstTypeError::TypeError {
                     message: format!("expected type {} but found {}", expected, e.ty),
                     expected,
@@ -985,7 +989,7 @@ pub(super) fn check<'tcx>(
             if let Some(coerced) = coerce_never(&e, expected) {
                 return Ok(coerced);
             }
-            if e.ty.type_neq(expected) {
+            if !e.ty.eq_modulo_regions(expected) {
                 return Err(AstTypeError::TypeError {
                     message: format!("expected type {} but found {}", expected, e.ty),
                     expected,

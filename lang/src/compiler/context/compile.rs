@@ -387,13 +387,14 @@ impl<'tcx> CompileCtx<'tcx> {
     /// # get the _kind of a type_
     /// returns the default kind for a value of that type
     /// (see Calculus§5 kinding judgment).
-    /// A shared reference `&'r T` has kind `Borrowed 'r` (`K-Borrow`); an
-    /// exclusive reference `&'r mut T` has kind `BorrowedMut 'r`
-    /// (`K-BorrowMut`); everything else is `Owned`.
+    /// A shared reference `&'r T` has kind `Borrowed` (`K-Borrow`); an
+    /// exclusive reference `&'r mut T` has kind `BorrowedMut`
+    /// (`K-BorrowMut`); everything else is `Owned`. The region lives on the
+    /// *type*, not the kind.
     pub fn kind_of(&self, ty: Ty<'tcx>) -> Kind {
         match ty.kind() {
-            TyKind::Ref(r, _) => Kind::Borrowed(*r),
-            TyKind::RefMut(r, _) => Kind::BorrowedMut(*r),
+            TyKind::Ref(..) => Kind::Borrowed,
+            TyKind::RefMut(..) => Kind::BorrowedMut,
             _ => Kind::Owned,
         }
     }

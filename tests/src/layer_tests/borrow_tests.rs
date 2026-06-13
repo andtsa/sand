@@ -7,7 +7,6 @@
 
 use lang::ir_types::typed_hir::Expression;
 use lang::lang::types::Kind;
-use lang::lang::types::Region;
 
 use crate::common::parse;
 use crate::common::run_hir;
@@ -27,10 +26,9 @@ fn run_both(src: &str) -> Expression<'static> {
 
 #[test]
 fn owned_is_subkind_of_borrowed() {
-    let r = Region::Static;
-    assert!(Kind::Owned.is_subkind(Kind::Borrowed(r)));
-    assert!(Kind::Never.is_subkind(Kind::Borrowed(r)));
-    assert!(!Kind::Borrowed(r).is_subkind(Kind::Owned));
+    assert!(Kind::Owned.is_subkind(Kind::Borrowed));
+    assert!(Kind::Never.is_subkind(Kind::Borrowed));
+    assert!(!Kind::Borrowed.is_subkind(Kind::Owned));
 }
 
 // ── reference types and borrow expressions parse and type-check

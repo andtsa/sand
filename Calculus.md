@@ -41,11 +41,19 @@ Region context
                     |  R, 'r ≥ 's      -- outlives constraint ('r outlives 's)
 
 Kind           k  ::=  Owned
-                    |  Borrowed 'r
-                    |  BorrowedMut 'r
+                    |  Borrowed
+                    |  BorrowedMut
                     |  InteriorMut
                     |  Never
 ```
+
+**Kinds are region-free.** A kind records only *capability* — owned, shared
+borrow, exclusive borrow, interior-mutable, or uninhabited. A borrow's **region**
+is part of its **type** (`&'r T`, `&'r mut T`; §2.3), not its kind: regions belong
+to the type system, and region safety (escape) is checked on the type's free
+regions (§6.3), not on the kind. So `&'r T : Borrowed` and `&'r mut T :
+BorrowedMut` — the `'r` lives on the type, the kind is just `Borrowed` /
+`BorrowedMut`.
 
 ### 1.2 Subkinding
 
@@ -60,11 +68,11 @@ k <: k
 
 
 ────────────────────────  (SK-OwnedBorrowed)
-Owned <: Borrowed 'r
+Owned <: Borrowed
 
 
 ──────────────────────────  (SK-OwnedBorrowedMut)
-Owned <: BorrowedMut 'r
+Owned <: BorrowedMut
 
 
 ────────────────────────  (SK-OwnedInteriorMut)
@@ -101,9 +109,9 @@ inference to resolve kind variables when two branches must agree.
 
 ```
 k ∨ k = k                               (join-refl)
-Borrowed 'r ∨ BorrowedMut 'r = Owned   (join-borrow-modes)
-Borrowed 'r ∨ InteriorMut   = Owned
-BorrowedMut 'r ∨ InteriorMut = Owned
+Borrowed ∨ BorrowedMut = Owned   (join-borrow-modes)
+Borrowed ∨ InteriorMut   = Owned
+BorrowedMut ∨ InteriorMut = Owned
 Never ∨ k = k                           (join-never)
 k ∨ Never = k
 ```
@@ -130,7 +138,7 @@ the positions in which it appears in the type constructor body:
 Owned,       producer position only  →  +  (covariant)
 Owned,       consumer position only  →  -  (contravariant)
 Owned,       both positions          →  ∅  (invariant)
-Borrowed 'r, any position            →  +  (read-only, always covariant)
+Borrowed, any position            →  +  (read-only, always covariant)
 BorrowedMut, any position            →  ∅  (read-write, always invariant)
 InteriorMut, any position            →  ∅  (hidden mutation, always invariant)
 ```
@@ -171,9 +179,9 @@ Type   T  ::=  a                        -- type variable (kind given by context)
             |  Bool                     -- primitive boolean        (Owned)
             |  Unit                     -- unit type                (Owned)
             |  T @ 'r                   -- T in region 'r           (Owned)
-            |  &'r T                    -- shared borrow            (Borrowed 'r)
+            |  &'r T                    -- shared borrow            (Borrowed)
             |                           --   sugar for Ref<T> @ 'r
-            |  &'r mut T                -- mutable borrow           (BorrowedMut 'r)
+            |  &'r mut T                -- mutable borrow           (BorrowedMut)
             |  T₁ →[k] T₂              -- function type            (Owned)
             |  F<T̄>                     -- type constructor application
             |  (T₁, ..., Tₙ)           -- tuple  (n ≥ 2)           (Owned)
@@ -189,7 +197,7 @@ The function arrow `→[k]` carries the *ownership mode of the function*:
 
 ```
 T₁ →[Owned] T₂        -- consuming function: argument is moved in, single-use
-T₁ →[Borrowed 'r] T₂  -- borrowing function: argument is borrowed, reusable
+T₁ →[Borrowed] T₂  -- borrowing function: argument is borrowed, reusable
 ```
 
 The owned and borrowed variants of `fmap` differ at the
@@ -200,7 +208,7 @@ type level, via the arrow kind, not by the argument kind:
 fmap     : (a →[Owned] b)       →[Owned]       F<a> →[Owned] F<b>
 
 -- borrowing map: borrows the container, produces a new one
-fmap_ref : (a →[Borrowed 'r] b) →[Borrowed 'r] &'r F<a> →[Owned] F<b>
+fmap_ref : (a →[Borrowed] b) →[Borrowed] &'r F<a> →[Owned] F<b>
 ```
 
 Region ascription `T @ 'r` is a type-level construct only. There is no
@@ -320,8 +328,8 @@ Context   Γ  ::=
 The subscript on `:ₖ` is the ownership mode of the binding:
 
 - `x :_Owned T`            - x is consumed on use; removed from Γ afterward
-- `x :_(Borrowed 'r) T`    - x may be used multiple times within 'r; stays in Γ
-- `x :_(BorrowedMut 'r) T` - same, but exclusive write access within 'r
+- `x :_(Borrowed) T`    - x may be used multiple times within 'r; stays in Γ
+- `x :_(BorrowedMut) T` - same, but exclusive write access within 'r
 - `x :_InteriorMut T`      - x may be used multiple times; mutation is internal
 
 ---
@@ -352,12 +360,12 @@ These run as a pre-pass over type expressions before type inference.
 
 Γ ⊢ T : Owned    'r ∈ Γ
 ─────────────────────────  (K-Borrow)
-Γ ⊢ &'r T : Borrowed 'r
+Γ ⊢ &'r T : Borrowed
 
 
 Γ ⊢ T : Owned    'r ∈ Γ
 ──────────────────────────  (K-BorrowMut)
-Γ ⊢ &'r mut T : BorrowedMut 'r
+Γ ⊢ &'r mut T : BorrowedMut
 
 
 Γ ⊢ T₁ : k₁    Γ ⊢ T₂ : k₂
@@ -457,13 +465,13 @@ the formal statement of lifetime safety: values cannot outlive their region.
 
 
 Γ ⊢ e₁ ⇒ T : Owned
-'r fresh    Γ, x :_(Borrowed 'r) T ⊢ e₂ ⇒ U : k    'r ∉ freeRegions(U)
+'r fresh    Γ, x :_(Borrowed) T ⊢ e₂ ⇒ U : k    'r ∉ freeRegions(U)
 ────────────────────────────────────────────────────────────────────────  (Let-Borrow)
 Γ ⊢ (let &x : T = e₁; e₂) ⇒ U : k
 
 
 Γ ⊢ e₁ ⇒ T : Owned
-'r fresh    Γ, x :_(BorrowedMut 'r) T ⊢ e₂ ⇒ U : k    'r ∉ freeRegions(U)
+'r fresh    Γ, x :_(BorrowedMut) T ⊢ e₂ ⇒ U : k    'r ∉ freeRegions(U)
 ──────────────────────────────────────────────────────────────────────────────  (Let-BorrowMut)
 Γ ⊢ (let &mut x : T = e₁; e₂) ⇒ U : k
 ```
@@ -480,9 +488,9 @@ cannot escape the scope in which they are introduced.
 
 
 'r fresh
-Γ, x :_(Borrowed 'r) T ⊢ e ⇒ U : k    'r ∉ freeRegions(U)
+Γ, x :_(Borrowed) T ⊢ e ⇒ U : k    'r ∉ freeRegions(U)
 ──────────────────────────────────────────────────────────────  (Lam-Borrow)
-Γ ⊢ fn &(x : T) -> e  ⇒  T →[Borrowed 'r] U : Owned
+Γ ⊢ fn &(x : T) -> e  ⇒  T →[Borrowed] U : Owned
 
 
 Γ ⊢ e₁ ⇒ T →[Owned] U : Owned    Γ ⊢ e₂ ⇐ T : Owned
@@ -490,7 +498,7 @@ cannot escape the scope in which they are introduced.
 Γ ⊢ e₁(e₂) ⇒ U : Owned
 
 
-Γ ⊢ e₁ ⇒ T →[Borrowed 'r] U : Owned    Γ ⊢ e₂ ⇐ T : Borrowed 'r
+Γ ⊢ e₁ ⇒ T →[Borrowed] U : Owned    Γ ⊢ e₂ ⇐ T : Borrowed
 ────────────────────────────────────────────────────────────────────  (App-Borrow)
 Γ ⊢ e₁(e₂) ⇒ U : Owned
 ```
@@ -588,7 +596,7 @@ typeclass OwnedFunctor<F : Owned → Owned> {
 -- Borrows the container without consuming it.
 typeclass BorrowedFunctor<F : Owned → Owned> {
   fmap_ref : ∀(a b : Owned)('r).
-             (a →[Borrowed 'r] b) →[Borrowed 'r] &'r F<a> →[Owned] F<b>
+             (a →[Borrowed] b) →[Borrowed] &'r F<a> →[Owned] F<b>
 }
 ```
 
@@ -648,7 +656,7 @@ than by convention.
 
 ```
 typeclass Clone<T : Owned> {
-  clone : &'r T →[Borrowed 'r] T
+  clone : &'r T →[Borrowed] T
   -- borrows, produces a new owned copy; implementation decides the cost
 }
 
