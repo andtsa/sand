@@ -2,14 +2,18 @@
 
 use crate::compiler::context::CompileCtx;
 use crate::compiler::structure::FunRef;
+use crate::compiler::structure::FunSig;
 use crate::compiler::structure::Map;
 use crate::compiler::structure::Range;
+use crate::compiler::structure::RegionParam;
 use crate::ir_types::qhir;
 use crate::ir_types::typed_hir;
 use crate::ir_types::typed_hir::TypedFunction;
 use crate::lang::intrinsics::INTRINSICS;
 use crate::lang::types::EnumRef;
 use crate::lang::types::Kind;
+use crate::lang::types::Region;
+use crate::lang::types::RegionVar;
 use crate::lang::types::Ty;
 use crate::lang::types::TyKind;
 use crate::lang::types::TypeParamId;
@@ -30,6 +34,9 @@ pub(super) fn infer_function<'tcx>(
     // Open the function's region scope (depth 0): parameters live for the whole
     // call, so a borrow of a parameter never escapes the body (Step 8b).
     let fn_region = ctx.enter_region_scope();
+    // The function's own `where 'a >= 's` clauses become the outlives
+    // assumptions available while checking callee constraints at call sites.
+    let prev_where = ctx.set_where_assumptions(func.where_constraints.clone());
     let env: TypeEnv<'tcx> = func
         .parameters
         .iter()
@@ -39,6 +46,7 @@ pub(super) fn infer_function<'tcx>(
     // use check() so that bare tags in return position are resolved against the
     // declared return type.
     let body_result = check(ctx, &env, &func.body, func.ret_type);
+    ctx.set_where_assumptions(prev_where);
     ctx.exit_region_scope();
     let body = body_result.map_err(|e| TypeError {
         error: e,
@@ -241,8 +249,63 @@ pub(super) fn join_region_ty<'tcx>(
     if regions.is_empty() {
         return structural; // no borrows in play — nothing to constrain
     }
-    let meet = ctx.region_meet(&regions, &[]);
+    // Meet under the enclosing function's `where` assumptions, so a branch that
+    // returns a longer-lived borrow coercible to the result lifetime (e.g.
+    // `&'a` where `'a >= 'b`) is admitted; callers must satisfy the `where`.
+    let assumptions = ctx.where_assumptions().to_vec();
+    let meet = ctx.region_meet(&regions, &assumptions);
     ctx.region_fill(structural, meet)
+}
+
+/// Call-site region inference + `where`-clause checking (Calculus §1.1, §8.10).
+///
+/// Infers the call's region substitution (each callee region parameter and the
+/// elided region mapped to the meet of the actual argument regions, via
+/// [`CompileCtx::infer_region_subst`]), then checks every callee `where 'a >=
+/// 's` constraint under it — using the *enclosing* function's own clauses as
+/// assumptions, so a generic caller can discharge a callee constraint. Returns
+/// the substitution to stamp onto the return type.
+fn instantiate_call_regions<'tcx>(
+    ctx: &mut CompileCtx<'tcx>,
+    fun_sig: &FunSig<'tcx>,
+    decls: &[Ty<'tcx>],
+    actuals: &[Ty<'tcx>],
+    range: Range,
+) -> Result<Map<RegionVar, Region>, AstTypeError<'tcx>> {
+    let region_subst = ctx.infer_region_subst(decls, actuals, &fun_sig.region_params);
+    let assumptions = ctx.where_assumptions().to_vec();
+    for c in &fun_sig.where_constraints {
+        let longer = apply_region(c.longer, &region_subst);
+        let shorter = apply_region(c.shorter, &region_subst);
+        if !ctx.outlives(longer, shorter, &assumptions) {
+            return Err(AstTypeError::RegionConstraintUnsatisfied {
+                longer: region_param_name(&fun_sig.region_params, c.longer),
+                shorter: region_param_name(&fun_sig.region_params, c.shorter),
+                range,
+            });
+        }
+    }
+    Ok(region_subst)
+}
+
+/// Apply a region substitution to a single region (the constraint endpoints).
+fn apply_region(r: Region, subst: &Map<RegionVar, Region>) -> Region {
+    match r {
+        Region::Var(rv) => subst.get(&rv).copied().unwrap_or(r),
+        Region::Static => Region::Static,
+    }
+}
+
+/// The source-level name of a callee region (`'a`) for diagnostics.
+fn region_param_name(params: &[RegionParam], r: Region) -> String {
+    match r {
+        Region::Static => "static".to_string(),
+        Region::Var(rv) => params
+            .iter()
+            .find(|p| p.region == rv)
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| "_".to_string()),
+    }
 }
 
 pub(super) fn infer_statement<'tcx>(
@@ -830,13 +893,12 @@ pub(super) fn infer<'tcx>(
                     .zip(&expected_tys)
                     .map(|(arg, &expected_ty)| check(ctx, env, arg, expected_ty))
                     .collect::<Result<Vec<_>, _>>()?;
-                // result region = meet of the argument regions (item 8).
-                let mut arg_regions = Vec::new();
-                for a in &arg_exprs {
-                    a.ty.free_regions(&mut arg_regions);
-                }
-                let meet = ctx.region_meet(&arg_regions, &[]);
-                let ret_ty = ctx.region_fill(raw_ret, meet);
+                // Infer the call's region substitution per lifetime parameter and
+                // check the callee's `where` clauses, then stamp the return type.
+                let arg_tys: Vec<Ty<'tcx>> = arg_exprs.iter().map(|a| a.ty).collect();
+                let region_subst =
+                    instantiate_call_regions(ctx, &fun_sig, &raw_expected, &arg_tys, expr.range)?;
+                let ret_ty = ctx.region_subst_ty(raw_ret, &region_subst);
                 return Ok(typed_hir::Expr {
                     expr: typed_hir::Expression::Call {
                         fn_name: *fn_name,
@@ -878,14 +940,13 @@ pub(super) fn infer<'tcx>(
                     })?;
                 }
             }
-            // result region = meet of the argument regions (item 8), stamped onto
-            // the return type, then the solved type parameters substituted in.
-            let mut arg_regions = Vec::new();
-            for a in &arg_exprs {
-                a.ty.free_regions(&mut arg_regions);
-            }
-            let meet = ctx.region_meet(&arg_regions, &[]);
-            let filled_ret = ctx.region_fill(raw_ret, meet);
+            // Infer the call's region substitution per lifetime parameter and
+            // check the callee's `where` clauses, stamp the return type, then
+            // substitute the solved type parameters.
+            let arg_tys: Vec<Ty<'tcx>> = arg_exprs.iter().map(|a| a.ty).collect();
+            let region_subst =
+                instantiate_call_regions(ctx, &fun_sig, &raw_expected, &arg_tys, expr.range)?;
+            let filled_ret = ctx.region_subst_ty(raw_ret, &region_subst);
             let ret_ty = subst(ctx, filled_ret, &mapping);
 
             Ok(typed_hir::Expr {

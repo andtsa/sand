@@ -9,8 +9,10 @@ use pest::iterators::Pair;
 
 use crate::compiler::structure::ModuleRef;
 use crate::compiler::structure::Range;
+use crate::compiler::structure::RegionParam;
 use crate::compiler::structure::UniqVar;
 use crate::lang::intrinsics::Intrinsic;
+use crate::lang::types::RegionConstraint;
 use crate::lang::types::Ty;
 use crate::passes::parse::Rule;
 
@@ -94,13 +96,26 @@ impl<'tcx> OriginalFun<'tcx> {
 pub struct FunSig<'tcx> {
     pub args: Vec<(UniqVar<'tcx>, Ty<'tcx>)>,
     pub ret_ty: Ty<'tcx>,
+    /// The function's declared region parameters — the lifetimes inferred at a
+    /// call site (call-site region inference).
+    pub region_params: Vec<RegionParam>,
+    /// The function's `where 'a >= 's` outlives constraints, checked at each
+    /// call site against the inferred region substitution.
+    pub where_constraints: Vec<RegionConstraint>,
 }
 
 impl<'tcx> FunSig<'tcx> {
-    pub fn with(args: &[crate::ir_types::qhir::Parameter<'tcx>], ret_ty: Ty<'tcx>) -> Self {
+    pub fn with(
+        args: &[crate::ir_types::qhir::Parameter<'tcx>],
+        ret_ty: Ty<'tcx>,
+        region_params: Vec<RegionParam>,
+        where_constraints: Vec<RegionConstraint>,
+    ) -> Self {
         Self {
             args: args.iter().map(|a| (a.name, a.ty)).collect(),
             ret_ty,
+            region_params,
+            where_constraints,
         }
     }
 }

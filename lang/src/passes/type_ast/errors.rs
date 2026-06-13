@@ -147,6 +147,15 @@ pub enum AstTypeError<'tcx> {
     RegionEscape { range: Range },
 
     #[error(
+        "call at {range} does not satisfy the callee's lifetime constraint `'{longer} >= '{shorter}`: the argument lifetimes do not guarantee it (Calculus §1.1, §8.10)"
+    )]
+    RegionConstraintUnsatisfied {
+        longer: String,
+        shorter: String,
+        range: Range,
+    },
+
+    #[error(
         "cannot mutably borrow immutable variable '{name}' at {range}: declare it `let mut {name}` (or a `mut` parameter)"
     )]
     MutBorrowOfImmutable { name: String, range: Range },

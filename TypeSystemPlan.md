@@ -104,8 +104,10 @@ typeclasses and may start before Step 10 if convenient.*
 12. **Step 14 — `Clone`/`Copy` integration** (Step 11). Wire the typeclasses into
     the ownership pass (implicit copy for `Copy`; explicit `.clone()` otherwise).
 13. **Step 15 — `where`-clause checking at call sites** (Step 11). Verify typeclass
-    constraints + superclass requirements per call; revive `where 'r >= 's` via the
-    Ref-Rep `meet`.
+    constraints + superclass requirements per call. ~~revive `where 'r >= 's`~~ —
+    **the region half is done** (call-site region inference + `where 'r >= 's`
+    checking, pulled forward; see the Step 8b note). Only the typeclass-constraint
+    half remains here.
 
 ### Deferred (not in this roadmap)
 The `fip`/`fbip` grade system + grade-polymorphism, first-class threadable `Slot`,
@@ -744,13 +746,24 @@ do not outlive their source region. Validate the outlives relation
 >   regions (`infer::join_region_ty`, wired into both modes of `if` and `match`),
 >   mirroring the call path's per-argument meet. A borrow escaping through *any*
 >   branch (not just the first/chosen one) therefore surfaces in the result type
->   and is caught by the enclosing escape check. (Conservative: a multi-lifetime
->   return through branches that needs `where 'a >= 'b` reasoning is rejected
->   rather than inferred — see the next bullet.)
-> - `where 'r >= 's` is parsed/stored/solvable but **not yet checked at call
->   sites**, and explicit-region functions still cannot be *called* with an
->   elided borrow — both need call-site region instantiation (region
->   inference), still deferred.
+>   and is caught by the enclosing escape check. The join meets under the
+>   function's `where` assumptions, so a multi-lifetime branch return justified by
+>   `'a >= 'b` is now admitted (see the next bullet).
+> - ~~`where 'r >= 's` is parsed/stored/solvable but **not yet checked at call
+>   sites**.~~ **✅ Closed (call-site region inference).** A call now infers a
+>   per-parameter region substitution by unifying the callee's declared parameter
+>   types against the actual argument types (`CompileCtx::infer_region_subst`),
+>   stamps the return type with it (`region_subst_ty`, replacing the global-meet
+>   `region_fill`), and checks each callee `where 'a >= 's` under that
+>   substitution (`infer::instantiate_call_regions`), using the *enclosing*
+>   function's own clauses as assumptions. The `outlives` solver was generalised
+>   to depth comparison so a region parameter / the frame (depth 0) outlives every
+>   inner block. This is the **region half of Step 15** pulled forward (the
+>   typeclass-constraint half remains in Step 15). Explicit-region functions are
+>   callable with ordinary borrows (already covered by `region_inference_tests`).
+>   *Residual incompleteness (sound):* two depth-0 regions (e.g. a region
+>   parameter vs the frame, or two unrelated parameters) are incomparable without
+>   an explicit `where`, so such constraints are conservatively rejected.
 
 ---
 

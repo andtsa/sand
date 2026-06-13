@@ -108,6 +108,26 @@ fn a_same_lifetime_parametric_branch_return_is_accepted() {
     );
 }
 
+#[test]
+fn a_distinct_lifetime_branch_return_justified_by_a_where_is_accepted() {
+    // distinct lifetimes, but `'a >= 'b` lets the `'a` arm coerce to `'b`, so the
+    // join meets to `'b` (a parameter, not a local) and the return is sound.
+    typecheck(
+        "def choose<'a, 'b>(c: Bool, x: &'a Int, y: &'b Int): &'b Int where 'a >= 'b := if c then x else y \n \
+         def main(): Int := 0",
+    );
+}
+
+#[test]
+fn a_distinct_lifetime_branch_return_without_a_where_is_rejected() {
+    // with no constraint relating 'a and 'b, the join collapses to a local region
+    // and the return escapes.
+    typecheck_fails(
+        "def choose<'a, 'b>(c: Bool, x: &'a Int, y: &'b Int): &'b Int := if c then x else y \n \
+         def main(): Int := 0",
+    );
+}
+
 // ── the outlives solver: `'r ≥ 's` (Calculus §1.1)
 // ────────────────────────────
 //
