@@ -109,6 +109,15 @@ pub(super) fn infer_constructor<'tcx>(
     let variant_name = def.variants[variant_idx].name.clone();
     let declared_payload = def.variants[variant_idx].payload.get();
     let tp_ids: Vec<TypeParamId> = def.type_params.iter().map(|p| p.id).collect();
+    let region_params = def.region_params.clone();
+    // Region args the expected type pins (`let h: Holder<'a> = Holder#…`), used to
+    // seed region params the payload doesn't constrain (e.g. a nullary variant).
+    let expected_region_args: Option<Vec<Region>> = expected.and_then(|e| match e.kind() {
+        TyKind::App(er, _, regs) if *er == enum_ref && regs.len() == region_params.len() => {
+            Some(regs.to_vec())
+        }
+        _ => None,
+    });
 
     // payload presence must match the variant's declaration
     if declared_payload.is_none() && payload.is_some() {
@@ -147,13 +156,27 @@ pub(super) fn infer_constructor<'tcx>(
             (Some(decl), Some(p)) => Some(Box::new(check(ctx, env, p, decl)?)),
             _ => None,
         };
-        return make(typed_payload, ctx.enum_ty(enum_ref));
+        // No region params => a plain `Enum` type. With region params, infer the
+        // region args from the payload so the value's borrow lifetimes are
+        // tracked in its type and the escape check can see them.
+        if region_params.is_empty() {
+            return make(typed_payload, ctx.enum_ty(enum_ref));
+        }
+        let actual_payload = typed_payload.as_ref().map(|p| p.ty);
+        let region_args = ctx.infer_ctor_region_args(
+            &region_params,
+            declared_payload,
+            actual_payload,
+            expected_region_args.as_deref(),
+        );
+        let ty = ctx.intern_app(enum_ref, Vec::new(), region_args);
+        return make(typed_payload, ty);
     }
 
     // Generic enum: solve the type arguments.
     let mut mapping: Subst<'tcx> = Map::new();
     if let Some(exp) = expected
-        && let TyKind::App(exp_er, exp_args) = exp.kind()
+        && let TyKind::App(exp_er, exp_args, _) = exp.kind()
         && *exp_er == enum_ref
         && exp_args.len() == tp_ids.len()
     {
@@ -196,7 +219,15 @@ pub(super) fn infer_constructor<'tcx>(
             }
         }
     }
-    let ty = ctx.intern_app(enum_ref, args);
+    // Region args are inferred from the payload borrows, in declaration order.
+    let actual_payload = typed_payload.as_ref().map(|p| p.ty);
+    let region_args = ctx.infer_ctor_region_args(
+        &region_params,
+        declared_payload,
+        actual_payload,
+        expected_region_args.as_deref(),
+    );
+    let ty = ctx.intern_app(enum_ref, args, region_args);
     make(typed_payload, ty)
 }
 

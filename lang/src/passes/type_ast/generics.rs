@@ -20,10 +20,11 @@ pub fn subst<'tcx>(ctx: &mut CompileCtx<'tcx>, ty: Ty<'tcx>, mapping: &Subst<'tc
             let elems: Vec<Ty<'tcx>> = elems.iter().map(|e| subst(ctx, *e, mapping)).collect();
             ctx.intern_tuple(elems)
         }
-        TyKind::App(er, args) => {
+        TyKind::App(er, args, regions) => {
             let er = *er;
+            let regions = regions.to_vec();
             let args: Vec<Ty<'tcx>> = args.iter().map(|a| subst(ctx, *a, mapping)).collect();
-            ctx.intern_app(er, args)
+            ctx.intern_app(er, args, regions)
         }
         // References and region ascriptions substitute their pointee/inner type
         // and keep their region. (Regions themselves are not type parameters, so
@@ -81,7 +82,8 @@ pub fn unify<'tcx>(
             }
             Ok(())
         }
-        (TyKind::App(de, da), TyKind::App(ae, aa)) if de == ae && da.len() == aa.len() => {
+        // region args are region-blind here (inferred separately); unify type args.
+        (TyKind::App(de, da, _), TyKind::App(ae, aa, _)) if de == ae && da.len() == aa.len() => {
             for (d, a) in da.iter().zip(*aa) {
                 unify(*d, *a, mapping)?;
             }

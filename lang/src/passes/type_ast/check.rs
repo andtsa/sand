@@ -1,12 +1,15 @@
 //! check the type of a subexpression against an expected type
 
 use crate::compiler::context::CompileCtx;
+use crate::compiler::structure::Map;
 use crate::compiler::structure::Range;
 use crate::compiler::structure::UniqVar;
 use crate::ir_types::qhir;
 use crate::ir_types::typed_hir;
 use crate::lang::types::EnumRef;
 use crate::lang::types::Kind;
+use crate::lang::types::Region;
+use crate::lang::types::RegionVar;
 use crate::lang::types::Ty;
 use crate::lang::types::TyKind;
 use crate::passes::type_ast::TypeEnv;
@@ -38,24 +41,35 @@ fn coerce_never<'tcx>(
     })
 }
 
-/// View a type as an enum scrutinee: the base enum plus a substitution mapping
-/// its type parameters to the instantiation's arguments (empty for a plain,
-/// non-generic `Enum`). Returns `None` for non-enum types.
+/// A scrutinee instantiation's region arguments, mapping the enum's region
+/// parameters to the concrete regions the matched value borrows from.
+type RegionSubst = Map<RegionVar, Region>;
+
+/// View a type as an enum scrutinee: the base enum, a substitution mapping its
+/// type parameters to the instantiation's type arguments, and a map from its
+/// region parameters to the instantiation's region arguments (both empty for a
+/// plain, non-generic `Enum`). Returns `None` for non-enum types.
 fn enum_instantiation<'tcx>(
     ctx: &CompileCtx<'tcx>,
     ty: Ty<'tcx>,
-) -> Option<(EnumRef<'tcx>, Subst<'tcx>)> {
+) -> Option<(EnumRef<'tcx>, Subst<'tcx>, RegionSubst)> {
     match ty.kind() {
-        TyKind::Enum(er) => Some((*er, Subst::new())),
-        TyKind::App(er, args) => {
-            let mapping = ctx
-                .get_enum(*er)
+        TyKind::Enum(er) => Some((*er, Subst::new(), RegionSubst::new())),
+        TyKind::App(er, args, regions) => {
+            let def = ctx.get_enum(*er);
+            let mapping = def
                 .type_params
                 .iter()
                 .map(|p| p.id)
                 .zip(args.iter().copied())
                 .collect();
-            Some((*er, mapping))
+            let region_mapping = def
+                .region_params
+                .iter()
+                .map(|p| p.region)
+                .zip(regions.iter().copied())
+                .collect();
+            Some((*er, mapping, region_mapping))
         }
         _ => None,
     }
@@ -95,7 +109,7 @@ pub(super) fn type_check_match_arms<'tcx>(
     let kind = match scrutinee_ty.kind() {
         TyKind::Enum(er) => ScrutKind::Enum(*er),
         // a generic enum instantiation matches just like its base enum.
-        TyKind::App(er, _) => ScrutKind::Enum(*er),
+        TyKind::App(er, _, _) => ScrutKind::Enum(*er),
         TyKind::Tuple(_) => ScrutKind::Tuple,
         TyKind::Int => ScrutKind::Int,
         TyKind::Bool => ScrutKind::Bool,
@@ -161,10 +175,10 @@ fn type_check_match_arms_inner<'tcx>(
     let mut typed_arms: Vec<typed_hir::TypedMatchArm> = Vec::with_capacity(arms.len());
     // the type all arm bodies must produce
     let mut result_ty: Option<Ty<'tcx>> = forced_expected;
-    // substitution from the scrutinee's instantiation (empty for plain enums),
-    // applied to variant payload types so bindings get concrete types.
-    let inst: Subst<'tcx> = enum_instantiation(ctx, scrutinee_ty)
-        .map(|(_, m)| m)
+    // substitutions from the scrutinee's instantiation (empty for plain enums),
+    // applied to variant payload types so bindings get concrete types + regions.
+    let (inst, region_inst): (Subst<'tcx>, RegionSubst) = enum_instantiation(ctx, scrutinee_ty)
+        .map(|(_, m, rm)| (m, rm))
         .unwrap_or_default();
 
     for arm in arms {
@@ -228,6 +242,7 @@ fn type_check_match_arms_inner<'tcx>(
                     *variant_idx,
                     payload.as_deref(),
                     &inst,
+                    &region_inst,
                     arm.range,
                     &mut bindings,
                 )?;
@@ -276,6 +291,7 @@ fn type_check_match_arms_inner<'tcx>(
                     idx,
                     payload.as_deref(),
                     &inst,
+                    &region_inst,
                     arm.range,
                     &mut bindings,
                 )?;
@@ -559,19 +575,29 @@ fn check_exhaustiveness<'tcx>(
 /// `Variant`/`Tag` pattern, against the variant's declared payload type.
 /// returns the typed sub-pattern (or `None` for nullary variants / patterns
 /// that don't destructure).
+#[allow(clippy::too_many_arguments)]
 fn check_variant_payload_pattern<'tcx>(
     ctx: &mut CompileCtx<'tcx>,
     enum_ref: EnumRef<'tcx>,
     variant_idx: usize,
     payload_pattern: Option<&qhir::QPattern<'tcx>>,
     inst: &Subst<'tcx>,
+    region_inst: &RegionSubst,
     arm_range: Range,
     bindings: &mut PatternBindings<'tcx>,
 ) -> Result<Option<(Ty<'tcx>, Box<typed_hir::MatchPattern<'tcx>>)>, AstTypeError<'tcx>> {
     // Substitute the scrutinee's type arguments into the declared payload so a
-    // pattern on `Option<Int>#Some(x)` binds `x : Int`, not the parameter `T`.
+    // pattern on `Option<Int>#Some(x)` binds `x : Int`, not the parameter `T`,
+    //
+    // this means that x also binds its region arguments:
+    // `Holder<'a>#H(x)` binds `x : &'a Int`
+    // a borrow matched out of the ADT keeps the instantiation's lifetime, so the
+    // escape check catches it being returned.
     let raw_payload = ctx.get_enum(enum_ref).variants[variant_idx].payload.get();
-    let declared_payload = raw_payload.map(|p| subst(ctx, p, inst));
+    let declared_payload = raw_payload.map(|p| {
+        let p = subst(ctx, p, inst);
+        ctx.region_subst_ty(p, region_inst)
+    });
     match (declared_payload, payload_pattern) {
         (None, None) => Ok(None),
         (Some(payload_ty), Some(sub)) => {
@@ -677,8 +703,8 @@ fn check_subpattern<'tcx>(
             payload,
         } => {
             // The expected type must be the same enum that the pattern names.
-            let inst = match enum_instantiation(ctx, expected_ty) {
-                Some((er, inst)) if er == *pat_er => inst,
+            let (inst, region_inst) = match enum_instantiation(ctx, expected_ty) {
+                Some((er, inst, region_inst)) if er == *pat_er => (inst, region_inst),
                 _ => {
                     return Err(AstTypeError::PatternTypeMismatch {
                         message: format!(
@@ -696,6 +722,7 @@ fn check_subpattern<'tcx>(
                 *variant_idx,
                 payload.as_deref(),
                 &inst,
+                &region_inst,
                 arm_range,
                 bindings,
             )?;
@@ -708,8 +735,8 @@ fn check_subpattern<'tcx>(
         }
         qhir::QPattern::Tag { variant, payload } => {
             // Resolve the expected type to an enum, then look up the variant.
-            let (enum_ref, inst) = match enum_instantiation(ctx, expected_ty) {
-                Some(pair) => pair,
+            let (enum_ref, inst, region_inst) = match enum_instantiation(ctx, expected_ty) {
+                Some(triple) => triple,
                 None => {
                     return Err(AstTypeError::PatternTypeMismatch {
                         message: format!(
@@ -733,6 +760,7 @@ fn check_subpattern<'tcx>(
                 idx,
                 payload.as_deref(),
                 &inst,
+                &region_inst,
                 arm_range,
                 bindings,
             )?;
@@ -1062,8 +1090,8 @@ fn check_let_pattern_inner<'tcx>(
             payload,
         } => {
             // The expected type must be this enum.
-            let inst = match enum_instantiation(ctx, expected_ty) {
-                Some((er, inst)) if er == *enum_ref => inst,
+            let (inst, region_inst) = match enum_instantiation(ctx, expected_ty) {
+                Some((er, inst, region_inst)) if er == *enum_ref => (inst, region_inst),
                 _ => {
                     return Err(AstTypeError::PatternTypeMismatch {
                         message: format!(
@@ -1094,6 +1122,7 @@ fn check_let_pattern_inner<'tcx>(
                 *variant_idx,
                 payload.as_deref(),
                 &inst,
+                &region_inst,
                 range,
                 bindings,
             )?;

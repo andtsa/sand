@@ -141,7 +141,16 @@ impl<'tcx> Mono<'tcx> {
         }
 
         let base = ctx.get_enum(base_er);
-        let mangled = mangle_enum(ctx, base_er, &args);
+        // A region-only instantiation (no type args) still needs a distinct
+        // monomorphic copy, as its payloads may contain generic `App`s to specialise
+        // and its borrow regions to erase, but `mangle_enum` would collide with
+        // the base name, so give it a deterministic suffix. (Regions are erased,
+        // so all region-instantiations of one base collapse to a single spec.)
+        let mangled = if args.is_empty() {
+            format!("{}$", base.name)
+        } else {
+            mangle_enum(ctx, base_er, &args)
+        };
         let variant_names: Vec<String> = base.variants.iter().map(|v| v.name.clone()).collect();
         let base_mapping: Subst<'tcx> = base
             .type_params
@@ -197,7 +206,9 @@ impl<'tcx> Mono<'tcx> {
                     .collect();
                 ctx.intern_tuple(elems)
             }
-            TyKind::App(base, args) => {
+            // Region args are dropped: regions are compile-time, and the enum is
+            // specialised on its type arguments only.
+            TyKind::App(base, args, _) => {
                 let base = *base;
                 let args: Vec<Ty<'tcx>> = args
                     .iter()

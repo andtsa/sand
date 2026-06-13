@@ -22,6 +22,7 @@ pub mod operator_tests;
 pub mod ownership_tests;
 pub mod parse_tests;
 pub mod qualify_tests;
+pub mod region_adt_tests;
 pub mod region_escape_tests;
 pub mod region_inference_tests;
 pub mod region_param_tests;

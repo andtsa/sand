@@ -186,7 +186,14 @@ pub enum TyKind<'tcx> {
     /// its type arguments, one per declared parameter. Distinct argument lists
     /// intern to distinct types. Monomorphisation (Step 3) replaces these with
     /// specialised concrete enums.
-    App(EnumRef<'tcx>, &'tcx [Ty<'tcx>]),
+    /// `Option<Int>` / `Holder<'a, T>`. Second slice = type arguments (one per
+    /// declared type parameter); third slice = region arguments (one per
+    /// declared region parameter, lifetimes-first). The region args carry
+    /// the lifetimes a value of this type may borrow from, so `freeRegions`
+    /// exposes them to the escape check (R5). Distinct type *or* region
+    /// arguments intern distinct. Monomorphisation drops the region args
+    /// (regions are compile-time).
+    App(EnumRef<'tcx>, &'tcx [Ty<'tcx>], &'tcx [Region]),
     /// A type ascribed to a region, `T @ 'r` (Calculus §2.3). Carries the same
     /// kind as its inner type. Regions have no runtime representation, so
     /// monomorphisation erases this back to the inner `T`.
@@ -235,7 +242,7 @@ impl<'tcx> Ty<'tcx> {
         match self.kind() {
             TyKind::Param(_) => true,
             TyKind::Tuple(elems) => elems.iter().any(|t| t.has_param()),
-            TyKind::App(_, args) => args.iter().any(|t| t.has_param()),
+            TyKind::App(_, args, _) => args.iter().any(|t| t.has_param()),
             TyKind::Region(t, _) => t.has_param(),
             TyKind::Ref(_, t) | TyKind::RefMut(_, t) => t.has_param(),
             _ => false,
@@ -274,7 +281,11 @@ impl<'tcx> Ty<'tcx> {
             (TyKind::Tuple(xs), TyKind::Tuple(ys)) if xs.len() == ys.len() => {
                 xs.iter().zip(*ys).all(|(x, y)| x.eq_modulo_regions(*y))
             }
-            (TyKind::App(e1, xs), TyKind::App(e2, ys)) if e1 == e2 && xs.len() == ys.len() => {
+            // region-blind: ignore the region args (regions are inferred at call
+            // sites, not matched here), compare only the type args.
+            (TyKind::App(e1, xs, _), TyKind::App(e2, ys, _))
+                if e1 == e2 && xs.len() == ys.len() =>
+            {
                 xs.iter().zip(*ys).all(|(x, y)| x.eq_modulo_regions(*y))
             }
             _ => false,
@@ -300,9 +311,14 @@ impl<'tcx> Ty<'tcx> {
                     e.free_regions(out);
                 }
             }
-            TyKind::App(_, args) => {
+            TyKind::App(_, args, regions) => {
                 for a in args.iter() {
                     a.free_regions(out);
+                }
+                // the lifetimes this ADT instantiation borrows from (R5): exposing
+                // them lets the escape check catch an ADT holding a local borrow.
+                for r in regions.iter() {
+                    out.push(*r);
                 }
             }
             _ => {}
@@ -320,7 +336,9 @@ impl<'tcx> Ty<'tcx> {
             (TyKind::Tuple(xs), TyKind::Tuple(ys)) if xs.len() == ys.len() => {
                 xs.iter().zip(*ys).all(|(x, y)| x.compatible(*y))
             }
-            (TyKind::App(e1, xs), TyKind::App(e2, ys)) if e1 == e2 && xs.len() == ys.len() => {
+            (TyKind::App(e1, xs, rs1), TyKind::App(e2, ys, rs2))
+                if e1 == e2 && xs.len() == ys.len() && rs1 == rs2 =>
+            {
                 xs.iter().zip(*ys).all(|(x, y)| x.compatible(*y))
             }
             (TyKind::Region(a, r1), TyKind::Region(b, r2)) if r1 == r2 => a.compatible(*b),
@@ -387,13 +405,22 @@ impl fmt::Display for Ty<'_> {
                 }
                 write!(f, ")")
             }
-            TyKind::App(er, args) => {
+            TyKind::App(er, args, regions) => {
                 write!(f, "App({er:?}<")?;
-                for (i, t) in args.iter().enumerate() {
-                    if i > 0 {
+                let mut first = true;
+                for r in regions.iter() {
+                    if !first {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{r:?}")?;
+                    first = false;
+                }
+                for t in args.iter() {
+                    if !first {
                         write!(f, ", ")?;
                     }
                     write!(f, "{t}")?;
+                    first = false;
                 }
                 write!(f, ">)")
             }

@@ -203,6 +203,53 @@ pub fn ast_error_to_diagnostics(
                 },
             );
         }
+        AstError::RegionArgArityMismatch {
+            name,
+            expected,
+            found,
+            range,
+        } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    file: Some(file),
+                    severity: DiagnosticSeverity::Error,
+                    message: format!(
+                        "type '{name}' expects {expected} lifetime argument(s) but {found} were given"
+                    ),
+                    range: *range,
+                    ..Default::default()
+                },
+            );
+        }
+        AstError::RegionArgsNotFirst { name, range } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    file: Some(file),
+                    severity: DiagnosticSeverity::Error,
+                    message: format!(
+                        "lifetime arguments must come before type arguments (write `{name}<'a, T>`)"
+                    ),
+                    range: *range,
+                    ..Default::default()
+                },
+            );
+        }
+        AstError::PayloadBorrowNeedsLifetime { name, range } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    file: Some(file),
+                    severity: DiagnosticSeverity::Error,
+                    message: format!(
+                        "a reference in a payload of '{name}' must use a declared lifetime parameter (e.g. `type {name}<'a> = …(&'a T)`) or `'static`"
+                    ),
+                    range: *range,
+                    ..Default::default()
+                },
+            );
+        }
         AstError::KindArgMismatch {
             type_name,
             param,

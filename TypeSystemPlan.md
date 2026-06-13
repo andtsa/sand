@@ -1454,7 +1454,15 @@ checking (`infer_region_subst` / `region_subst_ty` / `instantiate_call_regions`,
 `outlives` depth generalisation), and the *tuple* case of escape-via-data
 (check-mode `Tuple` now carries real element regions).
 
-#### Phase R5 — region-parameterized ADTs (close escape-via-data for ADTs)
+#### Phase R5 — region-parameterized ADTs (close escape-via-data for ADTs) ✅ DONE
+
+> **Status: complete.** All sub-phases (R5a representation → R5b use-site syntax →
+> R5c declaration check + constructor inference → R5d match substitution → R5e
+> call-site inference) landed; 626 tests pass, clippy clean. The escape-via-data
+> hole is closed for enums/ADTs. Coverage in `tests/layer_tests/region_adt_tests.rs`.
+> Deferred as planned: true region variance on ADT params (Step 13), region
+> elision at ADT use sites, recursive ADT *values* (Memory C).
+
 
 **The hole.** A reference stored in an ADT payload is *region-opaque*:
 `TyKind::Enum`/`App` carry no region for a borrow inside the payload (`App` holds
@@ -1599,15 +1607,13 @@ remaining gaps:
   closed.** *Tuples* are now caught: the `freeRegions` check recurses tuple types
   and the check-mode `Tuple` arm carries the elements' real regions
   (`region_escape_tests::returning_a_tuple_holding_a_local_borrow_is_rejected`).
-  ⚠ **`enum`/ADT payloads are still an OPEN soundness hole:** a reference stored
-  in an ADT payload (`type Holder = H(&Int)`, `Holder#H(&local)`) is *region-
-  opaque* — `TyKind::Enum`/`App` carry no region for a borrow inside the payload
-  (`App` holds only type arguments; the `&` lives in the `EnumDef`), so
-  `freeRegions` finds nothing and the escape is not caught. Closing this needs
-  **region-parameterized ADTs** (region arguments threaded into instantiations +
-  `freeRegions` recursion through payloads), a real unimplemented feature — see
-  the design note below. Until then, returning an ADT that holds a borrow of a
-  local is wrongly accepted.
+  ✅ **`enum`/ADT payloads — closed by Phase R5 (region-parameterized ADTs).** A
+  payload borrow must name a region parameter (`type Holder<'a> = H(&'a T)`);
+  `App` carries region arguments, `freeRegions` exposes them, constructors infer
+  them, and `match` substitutes them into payload bindings. Returning an ADT (or
+  nested ADT) that holds a borrow of a local — or extracting one and returning it
+  — is now rejected; param/`'static` borrows and in-scope use are accepted. See
+  `tests/layer_tests/region_adt_tests.rs`.
 - **Variance in consumer positions** — already tracked in Step 13's
   "Variance follow-up": function-argument (contravariant) positions enable the
   `-a` accept / `+a` reject and nested-composition tests Step 5 could only
