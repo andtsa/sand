@@ -975,9 +975,15 @@ pub(super) fn check<'tcx>(
                     .zip(expected_tys.iter())
                     .map(|(e, ety)| check(ctx, env, e, *ety))
                     .collect::<Result<Vec<_>, _>>()?;
+                // Carry the *actual* element types (region-blind-equal to
+                // `expected`, but keeping their real regions) so a borrow of a
+                // local stored in the tuple survives to the escape check; regions
+                // live on the type (cf. the Block / if / match arms).
+                let elem_tys: Vec<Ty<'tcx>> = typed_elems.iter().map(|e| e.ty).collect();
+                let ty = ctx.intern_tuple(elem_tys);
                 return Ok(typed_hir::Expr {
                     expr: typed_hir::Expression::Tuple(typed_elems),
-                    ty: expected,
+                    ty,
                     range: expr.range,
                     kind: Kind::Owned,
                 });

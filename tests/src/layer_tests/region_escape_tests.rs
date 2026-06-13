@@ -128,6 +128,25 @@ fn a_distinct_lifetime_branch_return_without_a_where_is_rejected() {
     );
 }
 
+// ── escape via data: a returned aggregate holding a local borrow
+// ──────────────
+
+#[test]
+fn returning_a_tuple_holding_a_local_borrow_is_rejected() {
+    // the tuple carries `&y`, a borrow of a local; returning it would dangle. The
+    // escape check reads the borrow's region *through* the tuple type.
+    typecheck_fails("def f(): (&Int, Int) := { let y = 5; (&y, 0) } \n def main(): Int := 0");
+}
+
+#[test]
+fn returning_a_tuple_of_a_parameter_borrow_is_accepted() {
+    // the borrow comes from a parameter (which outlives the call), so the tuple
+    // names no local region and is returnable.
+    typecheck(
+        "def f(p: &Int): (&Int, Int) := (p, 0) \n def main(): Int := { let x = 5; let (y,z) = f(&x); *y }",
+    );
+}
+
 // ── the outlives solver: `'r ≥ 's` (Calculus §1.1)
 // ────────────────────────────
 //
