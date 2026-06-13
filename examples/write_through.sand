@@ -1,0 +1,7 @@
+//@TEST:{6}[]
+// Write-through a `&mut` reference (R3): `*r = e` stores *through* the reference,
+// mutating the caller's variable. Validated via LLVM execution — references are
+// real pointers (R2), so the store lands in the caller's storage. (The
+// interpreters do not yet model shared storage, so this is LLVM-observable only.)
+def incr(r: &mut Int): Unit := { *r = *r + 1; }
+def main(): Int := { let mut x = 5; incr(&mut x); x }

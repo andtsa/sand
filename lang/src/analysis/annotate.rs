@@ -81,6 +81,12 @@ pub fn collect_dependencies<'tcx>(
                     Statement::Assignment { val, .. } => {
                         collect_dependencies(&val.expr, dependencies);
                     }
+                    Statement::DerefAssign {
+                        reference, value, ..
+                    } => {
+                        collect_dependencies(&reference.expr, dependencies);
+                        collect_dependencies(&value.expr, dependencies);
+                    }
                     Statement::LetTuple { val, .. } | Statement::LetPattern { val, .. } => {
                         collect_dependencies(&val.expr, dependencies);
                     }
@@ -117,6 +123,8 @@ pub fn get_mutations_stmt<'tcx>(stmt: &Statement<'tcx>) -> HashSet<UniqVar<'tcx>
     match stmt {
         Statement::Declaration { name, .. } => HashSet::from([*name]),
         Statement::Assignment { name, .. } => HashSet::from([*name]),
+        // write-through mutates through a reference, not a named local.
+        Statement::DerefAssign { .. } => HashSet::new(),
         Statement::LetTuple { elems, .. } => elems.iter().map(|(n, ..)| *n).collect(),
         Statement::LetPattern { pattern, .. } => collect_let_pattern_bindings(pattern),
         Statement::Expr(_) => HashSet::new(),
@@ -140,6 +148,7 @@ fn collect_mutations<'tcx>(expr: &Expression<'tcx>, mutations: &mut HashSet<Uniq
                     Statement::Assignment { name, .. } => {
                         mutations.insert(*name);
                     }
+                    Statement::DerefAssign { .. } => {}
                     Statement::LetTuple { elems, .. } => {
                         for (name, ..) in elems {
                             mutations.insert(*name);

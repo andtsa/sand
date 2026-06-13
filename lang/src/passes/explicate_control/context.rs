@@ -538,6 +538,35 @@ impl<'tcx> FnCx<'tcx> {
                 self.lower_assign(val, dst, cont)
             }
 
+            // `*reference = value`: evaluate `value` into a temp, then store it
+            // *through* the reference — `Assign { dst: Place::deref(ref), .. }`.
+            th::Statement::DerefAssign {
+                reference,
+                value,
+                range,
+            } => {
+                let value_tmp = self.fresh_temp("deref_assign_val", value.ty, *range);
+                let ref_is_var = matches!(reference.expr, th::Expression::Var(_));
+                let ref_local = match &reference.expr {
+                    th::Expression::Var(v) => {
+                        self.get_or_create_local(*v, reference.ty, reference.range)
+                    }
+                    _ => self.fresh_temp("deref_assign_ref", reference.ty, reference.range),
+                };
+                let store = Statement::Assign {
+                    dst: Place::deref(ref_local),
+                    value: RValue::Use(Operand::Copy(Self::place(value_tmp))),
+                    range: *range,
+                };
+                let store_bb = self.new_block(vec![store], Terminator::Goto { target: cont });
+                let after_val = self.lower_assign(value, value_tmp, store_bb);
+                if ref_is_var {
+                    after_val
+                } else {
+                    self.lower_assign(reference, ref_local, after_val)
+                }
+            }
+
             th::Statement::LetTuple { elems, range, val } => {
                 // Desugar to: tuple_tmp = val; a = Field(tmp, 0); b = Field(tmp, 1); ...
                 let tuple_tmp = self.fresh_temp("let_tuple_tmp", val.ty, *range);

@@ -395,6 +395,15 @@ impl<'tcx> Mono<'tcx> {
                 range: *range,
                 val: self.rewrite_expr(ctx, val, mapping),
             },
+            Statement::DerefAssign {
+                reference,
+                value,
+                range,
+            } => Statement::DerefAssign {
+                reference: self.rewrite_expr(ctx, reference, mapping),
+                value: self.rewrite_expr(ctx, value, mapping),
+                range: *range,
+            },
             Statement::LetTuple { elems, range, val } => Statement::LetTuple {
                 elems: elems
                     .iter()

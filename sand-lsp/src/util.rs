@@ -115,6 +115,19 @@ pub(crate) fn find_in_stmt<'a, 'tcx>(
                 None
             }
         }
+        Statement::DerefAssign {
+            range,
+            reference,
+            value,
+        } => {
+            if range_contains(*range, pos) {
+                find_in_expr(reference, pos)
+                    .or_else(|| find_in_expr(value, pos))
+                    .or(Some(value))
+            } else {
+                None
+            }
+        }
         Statement::LetTuple { range, val, .. } | Statement::LetPattern { range, val, .. } => {
             if range_contains(*range, pos) {
                 find_in_expr(val, pos).or(Some(val))

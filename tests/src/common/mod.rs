@@ -57,6 +57,9 @@ pub fn mir_value_to_expr(v: MirValue<'static>, ctx: &CompileCtx<'static>) -> Exp
                 .map(|e| dummy_expr(mir_value_to_expr(e, ctx), ctx))
                 .collect(),
         ),
+        // A program's top-level result is never a bare reference (escape check +
+        // `main : Int`), so this only appears via a misuse of the helper.
+        MirValue::Ref(_) => unreachable!("a program result cannot be a bare reference"),
     }
 }
 

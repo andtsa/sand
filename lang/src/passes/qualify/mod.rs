@@ -584,6 +584,15 @@ fn qualify_statement<'tcx>(
                 val: qualify_expr(q, module_name, val)?,
             })
         }
+        hhir::Statement::DerefAssign {
+            reference,
+            value,
+            range,
+        } => Ok(qhir::Statement::DerefAssign {
+            reference: qualify_expr(q, module_name, reference)?,
+            value: qualify_expr(q, module_name, value)?,
+            range,
+        }),
         hhir::Statement::Declaration {
             name,
             range,

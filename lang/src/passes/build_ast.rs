@@ -987,21 +987,43 @@ fn build_statement<'run>(
         }
         Rule::assignment => {
             let mut a_inner = first.into_inner();
-            let name = a_inner
-                .next()
-                .missing("assignment name", inner_range)?
-                .as_str()
-                .to_string(); // identifier
-            let expr = build_expr(
-                ctx,
-                a_inner.next().missing("assignment type", inner_range)?,
-                src,
-            )?;
-            Ok(Statement::Assignment {
-                name: HirVar::Unqualified(name),
-                range: inner_range,
-                val: expr,
-            })
+            let target = a_inner.next().missing("assignment target", inner_range)?;
+            match target.as_rule() {
+                Rule::identifier => {
+                    let name = target.as_str().to_string();
+                    let expr = build_expr(
+                        ctx,
+                        a_inner.next().missing("assignment value", inner_range)?,
+                        src,
+                    )?;
+                    Ok(Statement::Assignment {
+                        name: HirVar::Unqualified(name),
+                        range: inner_range,
+                        val: expr,
+                    })
+                }
+                // `*r = e`: write-through. The reference is the deref's inner.
+                Rule::deref_expr => {
+                    let ref_pair = target
+                        .into_inner()
+                        .next()
+                        .missing("dereference target", inner_range)?;
+                    let reference = build_primary(ctx, ref_pair, src)?;
+                    let value = build_expr(
+                        ctx,
+                        a_inner.next().missing("assignment value", inner_range)?,
+                        src,
+                    )?;
+                    Ok(Statement::DerefAssign {
+                        reference,
+                        value,
+                        range: inner_range,
+                    })
+                }
+                other => internal_bug!(
+                    "assignment target was neither identifier nor deref_expr: {other:?}"
+                ),
+            }
         }
         Rule::expression => {
             let expr = build_expr(ctx, first, src)?;

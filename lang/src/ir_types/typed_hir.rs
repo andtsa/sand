@@ -81,6 +81,14 @@ pub enum Statement<'tcx> {
         val: Expr<'tcx>,
     },
 
+    /// Write-through `*reference = value` (Calculus §3.2). `reference : &mut
+    /// T`, `value : T`.
+    DerefAssign {
+        reference: Expr<'tcx>,
+        value: Expr<'tcx>,
+        range: Range,
+    },
+
     Expr(Expr<'tcx>),
 }
 
@@ -286,6 +294,12 @@ impl<'tcx> Hash for Statement<'tcx> {
             Assignment { name, val, .. } => {
                 name.hash(state);
                 val.hash(state);
+            }
+            DerefAssign {
+                reference, value, ..
+            } => {
+                reference.hash(state);
+                value.hash(state);
             }
             Expr(e) => e.hash(state),
         }

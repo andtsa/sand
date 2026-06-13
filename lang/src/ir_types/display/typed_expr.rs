@@ -171,6 +171,17 @@ impl<'fmt, 'tcx> Iterator for TypedExprFormatter<'fmt, 'tcx> {
                             .push(Token(self.ctx.uniq_variable_name(name), Space));
                         continue;
                     }
+                    Stmt::DerefAssign {
+                        reference, value, ..
+                    } => {
+                        // emission order: * reference = value ;
+                        self.stack.push(Token(";".into(), Newline(Same)));
+                        self.stack.push(Exp(&value.expr));
+                        self.stack.push(Token("=".into(), Space));
+                        self.stack.push(Exp(&reference.expr));
+                        self.stack.push(Token("*".into(), Space));
+                        continue;
+                    }
                     Stmt::LetTuple { elems, val, .. } => {
                         // emission order: let ( a, mut b ) = val ;
                         self.stack.push(Token(";".into(), Newline(Same)));

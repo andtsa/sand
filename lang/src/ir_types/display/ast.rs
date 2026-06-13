@@ -231,6 +231,14 @@ fn dump_statement<'tcx>(
             let _ = writeln!(out, "{} =", ctx.uniq_variable_name(name));
             dump_expr(out, val, ctx, level + 1);
         }
+        Statement::DerefAssign {
+            reference, value, ..
+        } => {
+            indent(out, level);
+            let _ = writeln!(out, "* (deref-assign) =");
+            dump_expr(out, reference, ctx, level + 1);
+            dump_expr(out, value, ctx, level + 1);
+        }
         Statement::Expr(e) => {
             dump_expr(out, e, ctx, level);
         }

@@ -177,3 +177,67 @@ fn a_borrow_is_released_at_the_end_of_its_block() {
          def main(): Int := 0",
     );
 }
+
+// ── R3: write-through (`*r = e`)
+// ──────────────────────────────────────────────
+
+#[test]
+fn write_through_a_mut_reference_type_checks() {
+    // `*r = e` stores through a `&mut`. (Observable mutation is validated via LLVM
+    // in `examples/write_through.sand`.)
+    typecheck(
+        "def incr(r: &mut Int): Unit := { *r = *r + 1; } \n \
+         def main(): Int := { let mut x = 5; incr(&mut x); x }",
+    );
+}
+
+#[test]
+fn write_through_a_shared_reference_is_rejected() {
+    // write-through requires `&mut`; writing through a shared `&T` is a type error.
+    typecheck_fails(
+        "def bad(r: &Int): Unit := { *r = 7; } \n \
+         def main(): Int := 0",
+    );
+}
+
+// ── R4: write-through is observable in both interpreters (cell-graph store)
+// ────
+
+#[test]
+fn write_through_mutates_the_callers_variable() {
+    // `incr` writes through a `&mut Int` it received; the mutation lands in the
+    // caller's `x` (5 -> 6). This is the interpreter counterpart of
+    // `examples/write_through.sand`, which validates the same via LLVM. `run_both`
+    // asserts the HIR and MIR interpreters agree.
+    assert_eq!(
+        run_both(
+            "def incr(r: &mut Int): Unit := { *r = *r + 1; } \n \
+             def main(): Int := { let mut x = 5; incr(&mut x); x }"
+        ),
+        Expression::Int(6)
+    );
+}
+
+#[test]
+fn write_through_a_local_mut_reference_is_observable() {
+    // a `&mut` taken and written within the same function still threads through
+    // shared storage: `*r = 9` updates `x`, read back as the block's result.
+    assert_eq!(
+        run_both("def main(): Int := { let mut x = 1; let r = &mut x; *r = 9; x }"),
+        Expression::Int(9)
+    );
+}
+
+#[test]
+fn repeated_write_through_accumulates() {
+    // two calls through the same `&mut` storage accumulate: 5 -> 6 -> 7. Each
+    // borrow is scoped to its own block so it is released before the next (the
+    // borrow checker releases `&mut` at block end, not after the call).
+    assert_eq!(
+        run_both(
+            "def incr(r: &mut Int): Unit := { *r = *r + 1; } \n \
+             def main(): Int := { let mut x = 5; { incr(&mut x); }; { incr(&mut x); }; x }"
+        ),
+        Expression::Int(7)
+    );
+}

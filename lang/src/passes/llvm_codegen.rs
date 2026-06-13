@@ -191,9 +191,13 @@ impl<'ctx> LlvmCodegen<'ctx> {
     ) -> Result<(), CodegenError> {
         match stmt {
             Statement::Assign { dst, value, .. } => {
-                let dst_ty = fn_ctx.local_tys[&dst.local];
+                // The destination type is the place's type (a `[Deref]` dst stores
+                // the *pointee* type, through the pointer's address). For a bare
+                // local this is the local's own type/slot, as before (R2/R3).
+                let dst_ty = Self::place_ty(dst, fn_ctx);
                 let val = self.emit_rvalue(value, dst_ty, fn_ctx, fns)?;
-                self.builder.build_store(fn_ctx.locals[&dst.local], val)?;
+                let addr = self.place_address(dst, fn_ctx)?;
+                self.builder.build_store(addr, val)?;
             }
             Statement::Eval { value, .. } => {
                 // Side-effecting call only; Aggregate/Field never appear here,
