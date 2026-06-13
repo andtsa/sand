@@ -93,6 +93,10 @@ impl Arenas {
         self.bump.alloc_slice_copy(tys)
     }
 
+    fn alloc_region_slice(&self, regions: &[Region]) -> &[Region] {
+        self.bump.alloc_slice_copy(regions)
+    }
+
     // The `typed_arena` allocators are invariant in their element lifetime, so
     // we store them as `'static` and transmute the borrow to `'tcx` on the way
     // out. This is sound: the returned reference cannot outlive `&'tcx self`,
@@ -135,8 +139,9 @@ pub struct CompileCtx<'tcx> {
     ty_interner: Map<TyKind<'tcx>, Ty<'tcx>>,
     /// Separate interner for tuple types, keyed by element lists.
     tuple_interner: Map<Vec<Ty<'tcx>>, Ty<'tcx>>,
-    /// Interner for generic enum instantiations, keyed by base enum + args.
-    app_interner: Map<(EnumRef<'tcx>, Vec<Ty<'tcx>>), Ty<'tcx>>,
+    /// Interner for generic enum instantiations, keyed by base enum + type args
+    /// + region args (so `Holder<'a>` and `Holder<'b>` are distinct types).
+    app_interner: Map<(EnumRef<'tcx>, Vec<Ty<'tcx>>, Vec<Region>), Ty<'tcx>>,
     /// Interner for region-ascribed types `T @ 'r`, keyed by inner type +
     /// region.
     region_ty_interner: Map<(Ty<'tcx>, Region), Ty<'tcx>>,
@@ -377,16 +382,22 @@ impl<'tcx> CompileCtx<'tcx> {
     /// must match the base enum's declared type-parameter count (callers check
     /// arity and report a user-facing error). Distinct argument lists intern to
     /// distinct types.
-    pub fn intern_app(&mut self, er: EnumRef<'tcx>, args: Vec<Ty<'tcx>>) -> Ty<'tcx> {
-        let key = (er, args);
+    pub fn intern_app(
+        &mut self,
+        er: EnumRef<'tcx>,
+        args: Vec<Ty<'tcx>>,
+        regions: Vec<Region>,
+    ) -> Ty<'tcx> {
+        let key = (er, args, regions);
         if let Some(&ty) = self.app_interner.get(&key) {
             return ty;
         }
-        let (er, args) = key;
+        let (er, args, regions) = key;
         let slice = self.arenas.alloc_ty_slice(&args);
-        let kind_ref = self.arenas.alloc_ty(TyKind::App(er, slice));
+        let region_slice = self.arenas.alloc_region_slice(&regions);
+        let kind_ref = self.arenas.alloc_ty(TyKind::App(er, slice, region_slice));
         let ty = Ty(kind_ref);
-        self.app_interner.insert((er, args), ty);
+        self.app_interner.insert((er, args, regions), ty);
         ty
     }
 
@@ -455,10 +466,22 @@ impl<'tcx> CompileCtx<'tcx> {
                 let elems: Vec<Ty<'tcx>> = elems.iter().map(|e| self.region_erase(*e)).collect();
                 self.intern_tuple(elems)
             }
-            TyKind::App(er, args) => {
+            TyKind::App(er, args, regions) => {
                 let er = *er;
                 let args: Vec<Ty<'tcx>> = args.iter().map(|a| self.region_erase(*a)).collect();
-                self.intern_app(er, args)
+                // canonicalise each region arg to the shared elided region.
+                let anon = self.anon_region();
+                let regions: Vec<Region> = regions
+                    .iter()
+                    .map(|r| {
+                        if matches!(r, Region::Static) {
+                            *r
+                        } else {
+                            anon
+                        }
+                    })
+                    .collect();
+                self.intern_app(er, args, regions)
             }
             TyKind::Region(inner, r) => {
                 let inner = self.region_erase(*inner);
@@ -497,11 +520,12 @@ impl<'tcx> CompileCtx<'tcx> {
                     elems.iter().map(|e| self.region_fill(*e, region)).collect();
                 self.intern_tuple(elems)
             }
-            TyKind::App(er, args) => {
+            TyKind::App(er, args, regions) => {
                 let er = *er;
                 let args: Vec<Ty<'tcx>> =
                     args.iter().map(|a| self.region_fill(*a, region)).collect();
-                self.intern_app(er, args)
+                let regions: Vec<Region> = regions.iter().map(pick).collect();
+                self.intern_app(er, args, regions)
             }
             TyKind::Region(inner, r) => {
                 let rr = pick(r);
@@ -595,6 +619,39 @@ impl<'tcx> CompileCtx<'tcx> {
         subst
     }
 
+    /// Infer the region arguments of a constructor `E#V(payload)` (R5c), in the
+    /// enum's declared region-parameter order. Each region parameter is pinned
+    /// by the actual payload's regions (unify the *declared* payload type,
+    /// which names the region params, against the *actual* payload type); a
+    /// parameter not pinned by the payload (e.g. a nullary variant, or a
+    /// phantom) is seeded from the expected type's region args when
+    /// available, else defaults to the call-site scope (the safe shortest
+    /// region).
+    pub fn infer_ctor_region_args(
+        &self,
+        region_params: &[RegionParam],
+        declared_payload: Option<Ty<'tcx>>,
+        actual_payload: Option<Ty<'tcx>>,
+        expected_region_args: Option<&[Region]>,
+    ) -> Vec<Region> {
+        let solve: Set<RegionVar> = region_params.iter().map(|p| p.region).collect();
+        let mut bound: Map<RegionVar, Vec<Region>> = Map::new();
+        if let (Some(decl), Some(actual)) = (declared_payload, actual_payload) {
+            collect_region_bindings(decl, actual, &solve, &mut bound);
+        }
+        let call_site = self.current_scope_region();
+        region_params
+            .iter()
+            .enumerate()
+            .map(|(i, p)| match bound.get(&p.region) {
+                Some(regions) => self.region_meet(regions, &[]),
+                None => expected_region_args
+                    .and_then(|regs| regs.get(i).copied())
+                    .unwrap_or(call_site),
+            })
+            .collect()
+    }
+
     /// Replace every region in `ty` that the call's region substitution
     /// ([`infer_region_subst`](Self::infer_region_subst)) solved, recursing
     /// through composites. Like [`region_fill`](Self::region_fill) but maps
@@ -609,13 +666,17 @@ impl<'tcx> CompileCtx<'tcx> {
                     .collect();
                 self.intern_tuple(elems)
             }
-            TyKind::App(er, args) => {
+            TyKind::App(er, args, regions) => {
                 let er = *er;
                 let args: Vec<Ty<'tcx>> = args
                     .iter()
                     .map(|a| self.region_subst_ty(*a, subst))
                     .collect();
-                self.intern_app(er, args)
+                let regions: Vec<Region> = regions
+                    .iter()
+                    .map(|r| apply_region_subst(*r, subst))
+                    .collect();
+                self.intern_app(er, args, regions)
             }
             TyKind::Region(inner, r) => {
                 let rr = apply_region_subst(*r, subst);
@@ -1310,7 +1371,13 @@ fn collect_region_bindings(
                 collect_region_bindings(*d, *a, solve, out);
             }
         }
-        (TyKind::App(_, ds), TyKind::App(_, as_)) if ds.len() == as_.len() => {
+        (TyKind::App(_, ds, dr), TyKind::App(_, as_, ar)) if ds.len() == as_.len() => {
+            // pair the region args positionally: a declared `Holder<'a>` parameter
+            // binds 'a from the actual argument's region (call-site inference for
+            // ADT-typed parameters). Bind before recursing — `bind` holds `out`.
+            for (dreg, areg) in dr.iter().zip(ar.iter()) {
+                bind(*dreg, *areg);
+            }
             for (d, a) in ds.iter().zip(*as_) {
                 collect_region_bindings(*d, *a, solve, out);
             }

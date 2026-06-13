@@ -547,9 +547,11 @@ fn generic_borrow_parameter_conflict_fails() {
 
 #[test]
 fn generic_enum_with_borrow_payload_instantiates() {
-    // a generic enum whose payload is a borrow: `T` is solved from `&5`,
-    // monomorphisation specialises and erases the borrow.
-    typecheck("type Holder<T> = H(&T) \n def main(): Int := { let h = Holder#H(&5); 0 }");
+    // a generic enum whose payload is a borrow must tie it to a region parameter
+    //
+    // `'r` and `T` are inferred from `&5`; mono specialises and erases both.
+    // The holder is used in-scope, so the (call-site) region does not escape.
+    typecheck("type Holder<'r, T> = H(&'r T) \n def main(): Int := { let h = Holder#H(&5); 0 }");
 }
 
 #[test]

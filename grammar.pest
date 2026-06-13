@@ -13,8 +13,11 @@ tag_type = { "#" ~ identifier ~ ("|" ~ "#" ~ identifier)* }
 // Tuple type: `(Int, Bool)`, arity >= 2 (one element is just grouping, handled by build_type)
 tuple_type = { "(" ~ type_ ~ ("," ~ type_)+ ~ ")" }
 
-// Generic enum instantiation at a use site: `Option<Int>`, `Either<Int, Bool>`.
-type_application = { identifier ~ "<" ~ type_ ~ ("," ~ type_)* ~ ">" }
+// Generic enum instantiation at a use site: `Option<Int>`, `Either<Int, Bool>`,
+// `Holder<'a>`, `Both<'a, Int>`. Region (lifetime) arguments come first, then
+// type arguments (the lifetimes-first convention; enforced in `build_type`).
+type_application = { identifier ~ "<" ~ type_app_arg ~ ("," ~ type_app_arg)* ~ ">" }
+type_app_arg = { lifetime | type_ }
 
 // a lifetime / region: `'r`, `'heap`, `'static`. atomic so no internal
 // whitespace is consumed between the tick and the name.

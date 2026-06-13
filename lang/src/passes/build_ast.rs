@@ -81,6 +81,26 @@ pub enum AstError {
     },
 
     #[error(
+        "type '{name}' expects {expected} lifetime argument(s) but {found} were given at {range}"
+    )]
+    RegionArgArityMismatch {
+        name: String,
+        expected: usize,
+        found: usize,
+        range: Range,
+    },
+
+    #[error(
+        "lifetime arguments must come before type arguments at {range} (write `{name}<'a, T>`, not `{name}<T, 'a>`)"
+    )]
+    RegionArgsNotFirst { name: String, range: Range },
+
+    #[error(
+        "a reference in a payload of type '{name}' at {range} must use a declared lifetime parameter (e.g. `type {name}<'a> = ...(&'a T)`) or `'static`; an elided `&` cannot be tracked"
+    )]
+    PayloadBorrowNeedsLifetime { name: String, range: Range },
+
+    #[error(
         "type argument for parameter '{param}' of '{type_name}' has kind {found:?}, but kind {expected:?} is required at {range}"
     )]
     KindArgMismatch {
@@ -281,7 +301,26 @@ pub fn build_program<'run>(
         let region_params = ctx.get_enum(er).region_params.clone();
         ctx.enter_type_param_scope(&params);
         ctx.enter_region_param_scope(&region_params);
+        let payload_range = Range::from(&payload_pair);
         let payload_ty = build_type(ctx, payload_pair)?;
+        // a borrow in a payload must name a declared region parameter (or
+        // `'static`) so its lifetime is tracked in the type; an elided `&`
+        // (the shared `anon` region) is region-opaque and would let a borrow
+        // escape undetected. Reject it at the declaration.
+        let mut payload_regions = Vec::new();
+        payload_ty.free_regions(&mut payload_regions);
+        for r in payload_regions {
+            let ok = match r {
+                Region::Static => true,
+                Region::Var(rv) => region_params.iter().any(|p| p.region == rv),
+            };
+            if !ok {
+                return Err(AstError::PayloadBorrowNeedsLifetime {
+                    name: ctx.get_enum(er).name.clone(),
+                    range: payload_range,
+                });
+            }
+        }
         ctx.set_variant_payload(er, idx, payload_ty);
     }
     ctx.end_type_params();
@@ -524,7 +563,7 @@ fn ty_mentions_param(ty: Ty<'_>, id: TypeParamId) -> bool {
     match ty.kind() {
         TyKind::Param(p) => *p == id,
         TyKind::Tuple(elems) => elems.iter().any(|e| ty_mentions_param(*e, id)),
-        TyKind::App(_, args) => args.iter().any(|a| ty_mentions_param(*a, id)),
+        TyKind::App(_, args, _) => args.iter().any(|a| ty_mentions_param(*a, id)),
         TyKind::Region(inner, _) | TyKind::Ref(_, inner) | TyKind::RefMut(_, inner) => {
             ty_mentions_param(*inner, id)
         }
@@ -706,7 +745,8 @@ fn build_core_type<'run>(
             Ok(ctx.enum_ty(er))
         }
         Some(inner) if inner.as_rule() == Rule::type_application => {
-            // type_application = { identifier ~ "<" ~ type_ ~ ("," ~ type_)* ~ ">" }
+            // type_application = { identifier ~ "<" ~ type_app_arg (~ "," ~ …)* ~ ">" }
+            // type_app_arg     = { lifetime | type_ }   (lifetimes first)
             let app_range = Range::from(&inner);
             let mut parts = inner.into_inner();
             let name = parts
@@ -714,9 +754,36 @@ fn build_core_type<'run>(
                 .missing("generic type name", app_range)?
                 .as_str()
                 .to_string();
-            let arg_tys = parts
-                .map(|p| build_type(ctx, p))
-                .collect::<Result<Vec<Ty<'run>>, _>>()?;
+
+            // Split args into region args (lifetimes) and type args, enforcing
+            // that all lifetimes precede the first type (the lifetimes-first
+            // convention, mirroring the declaration order).
+            let mut region_args: Vec<Region> = Vec::new();
+            let mut arg_tys: Vec<Ty<'run>> = Vec::new();
+            for arg in parts {
+                // `arg` is a `type_app_arg`; its sole child is a lifetime or a type_.
+                let child = arg
+                    .into_inner()
+                    .next()
+                    .missing("type-application argument", range)?;
+                match child.as_rule() {
+                    Rule::lifetime => {
+                        if !arg_tys.is_empty() {
+                            return Err(AstError::RegionArgsNotFirst { name, range });
+                        }
+                        let lt = child.as_str().trim_start_matches('\'');
+                        let region =
+                            ctx.resolve_region(lt)
+                                .ok_or_else(|| AstError::UnknownRegion {
+                                    name: lt.to_string(),
+                                    range,
+                                })?;
+                        region_args.push(region);
+                    }
+                    _ => arg_tys.push(build_type(ctx, child)?),
+                }
+            }
+
             let er = ctx
                 .lookup_enum_by_name(&name)
                 .ok_or_else(|| AstError::UnknownType {
@@ -724,11 +791,20 @@ fn build_core_type<'run>(
                     range,
                 })?;
             let params = ctx.get_enum(er).type_params.clone();
+            let region_params = ctx.get_enum(er).region_params.clone();
             if params.len() != arg_tys.len() {
                 return Err(AstError::TypeArgArityMismatch {
                     name,
                     expected: params.len(),
                     found: arg_tys.len(),
+                    range,
+                });
+            }
+            if region_params.len() != region_args.len() {
+                return Err(AstError::RegionArgArityMismatch {
+                    name,
+                    expected: region_params.len(),
+                    found: region_args.len(),
                     range,
                 });
             }
@@ -746,7 +822,7 @@ fn build_core_type<'run>(
                     });
                 }
             }
-            Ok(ctx.intern_app(er, arg_tys))
+            Ok(ctx.intern_app(er, arg_tys, region_args))
         }
         Some(inner) if inner.as_rule() == Rule::qualified_type => {
             // qualified_type = { identifier ~ "::" ~ identifier }
