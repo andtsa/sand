@@ -136,6 +136,14 @@ fn eval_rvalue<'tcx>(
     match rv {
         RValue::Use(op) => eval_operand(op, locals),
 
+        // References are transparent in the interpreter (R2 is reads-only): a
+        // reference's runtime value is the value of the place it points at, and a
+        // `[Deref]` read just reads that value back (see `eval_operand`). A real
+        // store/aliasing model arrives with R3 write-through.
+        RValue::Ref(place) => locals[place.local.0]
+            .clone()
+            .ok_or(MirInterpError::UninitializedLocal(place.local)),
+
         RValue::BinaryOp { op, left, right } => {
             let l = eval_operand(left, locals)?;
             let r = eval_operand(right, locals)?;

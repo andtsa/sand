@@ -71,6 +71,10 @@ pub fn compile(args: CompileArgs, dry_run: bool) -> Result<(), CompileCliError> 
         }
     });
 
+    if !args.emit_llvm && output_file.ends_with(".ll") {
+        eprintln!("If you want to emit LLVM IR, use the --emit-llvm flag");
+    }
+
     tracing::debug!(
         "outfile_name: {outfile_name}, output_file: {}",
         output_file.display()

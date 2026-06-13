@@ -21,6 +21,7 @@ use crate::ir_types::typed_hir::TypedFunction;
 use crate::ir_types::typed_hir::TypedMatchArm;
 use crate::ir_types::typed_hir::TypedProgram;
 use crate::lang::types::EnumRef;
+use crate::lang::types::Region;
 use crate::lang::types::Ty;
 use crate::lang::types::TyKind;
 use crate::passes::type_ast::generics::Subst;
@@ -205,10 +206,19 @@ impl<'tcx> Mono<'tcx> {
                 let spec_er = self.request_enum(ctx, base, args);
                 ctx.enum_ty(spec_er)
             }
-            // Regions and borrows have no distinct runtime representation: erase
-            // `T @ 'r`, `&'r T`, and `&'r mut T` to `T`.
-            TyKind::Region(inner, _) | TyKind::Ref(_, inner) | TyKind::RefMut(_, inner) => {
-                self.mono_ty(ctx, *inner, mapping)
+            // Region ascription `T @ 'r` has no runtime representation: erase to
+            // `T`. References ARE real pointers (R2): keep the `Ref`/`RefMut`
+            // constructor (so codegen/MIR see "pointer to T"), canonicalising the
+            // compile-time-only region to `'static` so distinct source regions
+            // monomorphise to the same runtime type.
+            TyKind::Region(inner, _) => self.mono_ty(ctx, *inner, mapping),
+            TyKind::Ref(_, inner) => {
+                let inner = self.mono_ty(ctx, *inner, mapping);
+                ctx.ref_ty(Region::Static, inner)
+            }
+            TyKind::RefMut(_, inner) => {
+                let inner = self.mono_ty(ctx, *inner, mapping);
+                ctx.ref_mut_ty(Region::Static, inner)
             }
             _ => ty,
         }
@@ -488,12 +498,11 @@ fn mangle_ty<'tcx>(ctx: &CompileCtx<'tcx>, ty: Ty<'tcx>) -> String {
             let inner: Vec<String> = elems.iter().map(|e| mangle_ty(ctx, *e)).collect();
             format!("Tup{}_{}", elems.len(), inner.join("_"))
         }
-        // regions and borrows are erased by `mono_ty` before mangling.
-        TyKind::Param(_)
-        | TyKind::App(..)
-        | TyKind::Region(..)
-        | TyKind::Ref(..)
-        | TyKind::RefMut(..) => {
+        // References are real pointers (R2) and may appear as type arguments.
+        TyKind::Ref(_, inner) => format!("Ref_{}", mangle_ty(ctx, *inner)),
+        TyKind::RefMut(_, inner) => format!("RefMut_{}", mangle_ty(ctx, *inner)),
+        // `Param`/`App`/`Region` are substituted / erased before mangling.
+        TyKind::Param(_) | TyKind::App(..) | TyKind::Region(..) => {
             internal_bug!("type argument is not concrete during mangling: {ty}")
         }
     }

@@ -123,7 +123,7 @@ impl<'tcx> FnCx<'tcx> {
     }
 
     pub(super) fn place(local: LocalId) -> Place {
-        Place { local }
+        Place::local(local)
     }
 
     pub(super) fn const_operand(expr: &th::Expr<'_>) -> Option<Operand> {
@@ -668,9 +668,44 @@ impl<'tcx> FnCx<'tcx> {
             return self.lower_effect(expr, unreachable);
         }
         match &expr.expr {
-            // a shared borrow is transparent at runtime: assign the referent.
-            th::Expression::Borrow(inner, _) => self.lower_assign(inner, dst, cont),
-            th::Expression::Deref(inner) => self.lower_assign(inner, dst, cont),
+            // `&inner` (Calculus §3.2): a real pointer (R2) to the referent's
+            // storage. A borrow of a *variable* points at that variable's local;
+            // a borrow of a *temporary* materialises it into a fresh local first,
+            // then points at that. The inverse of a `*` (`[Deref]`) projection.
+            th::Expression::Borrow(inner, _) => {
+                if let th::Expression::Var(v) = &inner.expr {
+                    let local = self.get_or_create_local(*v, inner.ty, inner.range);
+                    let stmt = self.assign_stmt(dst, RValue::Ref(Self::place(local)), expr.range);
+                    self.new_block(vec![stmt], Terminator::Goto { target: cont })
+                } else {
+                    let tmp = self.fresh_temp("borrow_operand", inner.ty, inner.range);
+                    let stmt = self.assign_stmt(dst, RValue::Ref(Self::place(tmp)), expr.range);
+                    let assign = self.new_block(vec![stmt], Terminator::Goto { target: cont });
+                    self.lower_assign(inner, tmp, assign)
+                }
+            }
+            // `*inner` (Calculus §3.2): a load through the reference — a `[Deref]`
+            // place reads the value the reference points at.
+            th::Expression::Deref(inner) => {
+                if let th::Expression::Var(v) = &inner.expr {
+                    let local = self.get_or_create_local(*v, inner.ty, inner.range);
+                    let stmt = self.assign_stmt(
+                        dst,
+                        RValue::Use(Operand::Copy(Place::deref(local))),
+                        expr.range,
+                    );
+                    self.new_block(vec![stmt], Terminator::Goto { target: cont })
+                } else {
+                    let tmp = self.fresh_temp("deref_operand", inner.ty, inner.range);
+                    let stmt = self.assign_stmt(
+                        dst,
+                        RValue::Use(Operand::Copy(Place::deref(tmp))),
+                        expr.range,
+                    );
+                    let assign = self.new_block(vec![stmt], Terminator::Goto { target: cont });
+                    self.lower_assign(inner, tmp, assign)
+                }
+            }
             th::Expression::If { cond, t, f } => {
                 let then_bb = self.lower_assign(t, dst, cont);
                 let else_bb = self.lower_assign(f, dst, cont);
