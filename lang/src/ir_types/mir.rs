@@ -93,9 +93,40 @@ pub enum Terminator {
     Unreachable,
 }
 
+/// A place: a local plus a (possibly empty) projection path. `projection` is
+/// empty for a plain local (`x`); `[Deref]` denotes going *through* the
+/// reference held in `local` (`*r`), the inverse of [`RValue::Ref`]. Reading a
+/// `[Deref]` place is a load through the pointer; writing one (R3) is a store
+/// through it.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Place {
     pub local: LocalId,
+    pub projection: Vec<ProjElem>,
+}
+
+impl Place {
+    /// A bare local place (no projection).
+    pub fn local(local: LocalId) -> Self {
+        Place {
+            local,
+            projection: Vec::new(),
+        }
+    }
+
+    /// A `*local` place: load/store through the reference held in `local`.
+    pub fn deref(local: LocalId) -> Self {
+        Place {
+            local,
+            projection: vec![ProjElem::Deref],
+        }
+    }
+}
+
+/// A single step in a [`Place`] projection path.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ProjElem {
+    /// Dereference the reference held by the place so far — `*r`.
+    Deref,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -121,6 +152,11 @@ pub enum Constant {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum RValue<'tcx> {
     Use(Operand),
+
+    /// Address-of: a pointer to `place`'s storage — `&place` / `&mut place`
+    /// (Calculus §3.2). The inverse of a `[Deref]` projection. With R2,
+    /// references are real pointers, so this yields the address, not a copy.
+    Ref(Place),
 
     /// Build an aggregate (enum variant or tuple) from a flat list of field
     /// operands. The destination local's type (available on [`LocalDecl::ty`])

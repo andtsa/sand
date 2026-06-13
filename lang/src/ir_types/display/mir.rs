@@ -65,7 +65,13 @@ fn fmt_local(id: &LocalId) -> String {
 }
 
 fn fmt_place(p: &Place) -> String {
-    fmt_local(&p.local)
+    let mut s = fmt_local(&p.local);
+    for elem in &p.projection {
+        match elem {
+            ProjElem::Deref => s = format!("(*{s})"),
+        }
+    }
+    s
 }
 
 fn fmt_constant(c: &Constant) -> String {
@@ -86,6 +92,7 @@ fn fmt_operand(o: &Operand) -> String {
 fn fmt_rvalue<'tcx>(rv: &RValue<'tcx>, ctx: &CompileCtx<'tcx>) -> String {
     match rv {
         RValue::Use(o) => fmt_operand(o),
+        RValue::Ref(p) => format!("&{}", fmt_place(p)),
         RValue::BinaryOp { op, left, right } => {
             format!("{} {} {}", fmt_operand(left), op, fmt_operand(right))
         }

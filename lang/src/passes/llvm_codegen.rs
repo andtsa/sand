@@ -219,6 +219,9 @@ impl<'ctx> LlvmCodegen<'ctx> {
         match rv {
             RValue::Use(op) => self.emit_operand(op, fn_ctx),
 
+            // `&place` / `&mut place`: the address of the place's storage (R2).
+            RValue::Ref(place) => Ok(self.place_address(place, fn_ctx)?.into()),
+
             RValue::BinaryOp {
                 op: Bop::Pow,
                 left,
@@ -282,9 +285,10 @@ impl<'ctx> LlvmCodegen<'ctx> {
         fn_ctx: &FnCtx<'_, 'ctx, '_>,
     ) -> Result<llvm::BasicValueEnum<'ctx>, CodegenError> {
         match op {
-            Operand::Copy(Place { local }) => {
-                let ty = self.llvm_type(fn_ctx.compile_ctx, fn_ctx.local_tys[local]);
-                Ok(self.builder.build_load(ty, fn_ctx.locals[local], "load")?)
+            Operand::Copy(place) => {
+                let ty = self.llvm_type(fn_ctx.compile_ctx, Self::place_ty(place, fn_ctx));
+                let addr = self.place_address(place, fn_ctx)?;
+                Ok(self.builder.build_load(ty, addr, "load")?)
             }
             Operand::Const(c) => Ok(self.emit_constant(c)),
         }
@@ -471,11 +475,53 @@ impl<'ctx> LlvmCodegen<'ctx> {
     /// Derive the MIR `Ty` of an operand without a type-check pass.
     fn operand_ty<'tcx>(op: &Operand, fn_ctx: &FnCtx<'_, '_, 'tcx>) -> Ty<'tcx> {
         match op {
-            Operand::Copy(Place { local }) => fn_ctx.local_tys[local],
+            Operand::Copy(place) => Self::place_ty(place, fn_ctx),
             Operand::Const(Constant::Int(_)) => fn_ctx.compile_ctx.types.int,
             Operand::Const(Constant::Bool(_)) => fn_ctx.compile_ctx.types.bool,
             Operand::Const(Constant::Unit) => fn_ctx.compile_ctx.types.unit,
         }
+    }
+
+    /// The LLVM address denoted by `place`: start at the local's alloca slot,
+    /// then follow one load per `Deref` projection (each `Deref` reads the
+    /// pointer stored there to get the next address). Empty projection → the
+    /// local's slot itself (so `&local` is its address, a read is a plain
+    /// load).
+    fn place_address<'tcx>(
+        &self,
+        place: &Place,
+        fn_ctx: &FnCtx<'_, 'ctx, 'tcx>,
+    ) -> Result<llvm::PointerValue<'ctx>, CodegenError> {
+        let mut addr = fn_ctx.locals[&place.local];
+        for elem in &place.projection {
+            match elem {
+                ProjElem::Deref => {
+                    let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+                    addr = self
+                        .builder
+                        .build_load(ptr_ty, addr, "deref")?
+                        .into_pointer_value();
+                }
+            }
+        }
+        Ok(addr)
+    }
+
+    /// The MIR `Ty` of a place after its projections (each `Deref` strips one
+    /// reference, yielding the pointee type).
+    fn place_ty<'tcx>(place: &Place, fn_ctx: &FnCtx<'_, '_, 'tcx>) -> Ty<'tcx> {
+        let mut ty = fn_ctx.local_tys[&place.local];
+        for elem in &place.projection {
+            match elem {
+                ProjElem::Deref => {
+                    ty = match ty.kind() {
+                        TyKind::Ref(_, t) | TyKind::RefMut(_, t) => *t,
+                        _ => internal_bug!("Deref projection on non-reference {ty:?}"),
+                    };
+                }
+            }
+        }
+        ty
     }
 
     /// Return a global `[N x ptr]` constant whose elements point to
@@ -655,6 +701,11 @@ impl<'ctx> LlvmCodegen<'ctx> {
                 let field_tys: Vec<_> = tys.iter().map(|t| self.llvm_type(ctx, *t)).collect();
                 self.context.struct_type(&field_tys, false).into()
             }
+            // References are real pointers (R2); the region carries no runtime data.
+            TyKind::Ref(..) | TyKind::RefMut(..) => self
+                .context
+                .ptr_type(inkwell::AddressSpace::default())
+                .into(),
             _ => internal_bug!("no LLVM type for {:?}", ty),
         }
     }
