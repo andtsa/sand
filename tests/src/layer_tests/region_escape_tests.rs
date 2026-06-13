@@ -61,6 +61,53 @@ fn borrowing_a_local_without_yielding_it_is_accepted() {
     typecheck("def f(): Int := { let y = 5; let r = &y; 0 } \n def main(): Int := 0");
 }
 
+// ── escape through a branch join (if / match)
+// ─────────────────────────────────
+//
+// A branch join takes the *meet* of its branches' regions, so a borrow of a
+// local escaping through *any* branch (not just the first/chosen one) surfaces
+// in the result type and is caught. Taking one branch verbatim (the first arm,
+// or the region-blind expected type) used to drop the other branches' regions.
+
+#[test]
+fn escape_through_a_match_arm_is_rejected() {
+    // the `false` arm yields `&x`, a borrow of a local; it escapes via the
+    // function's `&Int` return even though the `true` arm is a safe param borrow.
+    typecheck_fails(
+        "def pick(c: Bool, p: &Int): &Int := { let x = 5; match c { true => p, false => &x } } \n \
+         def main(): Int := 0",
+    );
+}
+
+#[test]
+fn escape_through_an_if_branch_is_rejected() {
+    // same hole via `if`: the `else` branch borrows a local.
+    typecheck_fails(
+        "def pick(c: Bool, p: &Int): &Int := { let x = 5; if c then p else &x } \n \
+         def main(): Int := 0",
+    );
+}
+
+#[test]
+fn a_joined_borrow_used_in_scope_is_accepted() {
+    // both branches borrow locals, but the joined borrow is consumed within the
+    // same block (never yielded), so there is no escape.
+    typecheck(
+        "def f(): Int := { let mut a = 1; let mut b = 2; let r = if true then &a else &b; 0 } \n \
+         def main(): Int := 0",
+    );
+}
+
+#[test]
+fn a_same_lifetime_parametric_branch_return_is_accepted() {
+    // both arms borrow at the same lifetime parameter `'r`, so their meet is `'r`
+    // (not a local scope), and returning the join is sound.
+    typecheck(
+        "def choose<'r>(c: Bool, p: &'r Int, q: &'r Int): &'r Int := if c then p else q \n \
+         def main(): Int := 0",
+    );
+}
+
 // ── the outlives solver: `'r ≥ 's` (Calculus §1.1)
 // ────────────────────────────
 //
