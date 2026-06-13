@@ -22,8 +22,8 @@ pub struct TypeParam {
     pub kind: Kind,
 }
 
-/// A parsed type-parameter declaration before an id is assigned — variance and
-/// kind already defaulted from the (possibly absent) annotations.
+/// A parsed type-parameter declaration before an id is assigned.
+/// variance and kind already defaulted from the (possibly absent) annotations.
 pub struct TypeParamSpec {
     pub name: String,
     pub range: Range,

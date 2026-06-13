@@ -344,8 +344,11 @@ fn qualify_expr<'tcx>(
         hhir::Expression::Bool(b) => qhir::Expression::Bool(b),
         hhir::Expression::Int(i) => qhir::Expression::Int(i),
         hhir::Expression::Unit => qhir::Expression::Unit,
-        hhir::Expression::Borrow(inner) => {
-            qhir::Expression::Borrow(Box::new(qualify_expr(q, module_name, *inner)?))
+        hhir::Expression::Borrow(inner, m) => {
+            qhir::Expression::Borrow(Box::new(qualify_expr(q, module_name, *inner)?), m)
+        }
+        hhir::Expression::Deref(inner) => {
+            qhir::Expression::Deref(Box::new(qualify_expr(q, module_name, *inner)?))
         }
         hhir::Expression::BinOp { left, op, right } => qhir::Expression::BinOp {
             left: Box::new(qualify_expr(q, module_name, *left)?),

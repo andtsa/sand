@@ -18,8 +18,9 @@ pub struct UniqVar<'tcx> {
     pub(in crate::compiler) orig: OriginalVarRef<'tcx>,
 }
 
-/// A `Copy` handle to an arena-allocated [`OriginalVar`] — the variable's
-/// declaration site in the source. Equality/hashing by pointer identity,
+/// A `Copy` handle to an arena-allocated [`OriginalVar`]
+///
+/// Equality/hashing by pointer identity,
 /// ordering by the monotonic registration `id`.
 #[derive(Copy, Clone)]
 pub struct OriginalVarRef<'tcx>(pub(in crate::compiler) &'tcx OriginalVar);

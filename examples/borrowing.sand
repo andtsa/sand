@@ -1,0 +1,28 @@
+//@TEST:{3}[]
+// Shared borrows are non-consuming and have no runtime representation:
+// an owned, non-Copy enum can be borrowed any number of times with `&e` or a
+// `let &x = e` binding, or passed to a `&T` parameter, and still be consumed
+// afterwards. Monomorphisation erases every borrow, so this lowers to a plain
+// integer `match`.
+
+type Color = Red | Green | Blue
+
+def rank(c: Color): Int :=
+    match c {
+        Color#Red => 1,
+        Color#Green => 2,
+        Color#Blue => 3,
+    }
+
+// takes a shared borrow; the borrowed value is left untouched.
+def peek(c: &Color): Int := 0
+
+def main(): Int := {
+    let c = Color#Blue;
+    {
+        let r = &c;       // borrow expression:  r : &Color
+        let &b = c;       // borrow binding:     b : &Color (does not consume c)
+        let _ = peek(&c); // pass a fresh borrow to a function
+    };
+    rank(c)           // c is still owned here, so it can be matched/consumed
+}

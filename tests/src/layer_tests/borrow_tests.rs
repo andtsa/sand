@@ -66,8 +66,22 @@ fn borrowing_an_int_then_a_bool() {
 
 #[test]
 fn borrowing_does_not_move_a_non_copy_value() {
-    // `&e` borrows `e` without moving it, so `e` may still be consumed later.
+    // `&e` borrows `e` without moving it: once the borrow's scope ends, `e` is
+    // still owned and may be consumed (Calculus §6.2). The borrow is scoped to an
+    // inner block so it is released before `e` is matched — a value may not be
+    // moved *while* borrowed (Calculus §6.2, item 12).
     typecheck(
+        "type E = A | B \n \
+         def f(e: E): Int := { { let r = &e; 0 }; match e { E#A => 1, E#B => 2 } } \n \
+         def main(): Int := 0",
+    );
+}
+
+#[test]
+fn move_while_borrowed_is_rejected() {
+    // a value may not be moved while a borrow of it is live: `match e` consumes
+    // `e` while `r` still borrows it (Calculus §6.2).
+    typecheck_fails(
         "type E = A | B \n \
          def f(e: E): Int := { let r = &e; match e { E#A => 1, E#B => 2 } } \n \
          def main(): Int := 0",
@@ -87,9 +101,10 @@ fn double_move_without_borrow_still_fails() {
 
 #[test]
 fn multiple_borrows_of_the_same_value() {
+    // several shared borrows of the same value coexist; none consumes it.
     typecheck(
         "type E = A | B \n \
-         def f(e: E): Int := { let a = &e; let b = &e; match e { E#A => 1, E#B => 2 } } \n \
+         def f(e: E): Int := { let a = &e; let b = &e; 0 } \n \
          def main(): Int := 0",
     );
 }
@@ -125,10 +140,11 @@ fn let_borrow_binding_type_checks() {
 
 #[test]
 fn let_borrow_binding_does_not_consume() {
-    // `let &r = e` borrows `e`, so a non-copy `e` stays usable afterwards.
+    // `let &r = e` borrows `e`; once its (inner-block) scope ends, a non-copy `e`
+    // is still usable. Scoped so the borrow is released before the match.
     typecheck(
         "type E = A | B \n \
-         def f(e: E): Int := { let &r = e; match e { E#A => 1, E#B => 2 } } \n \
+         def f(e: E): Int := { { let &r = e; 0 }; match e { E#A => 1, E#B => 2 } } \n \
          def main(): Int := 0",
     );
 }

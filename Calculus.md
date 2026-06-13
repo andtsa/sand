@@ -50,8 +50,8 @@ Kind           k  ::=  Owned
 ### 1.2 Subkinding
 
 The relation `k₁ <: k₂` reads "`k₁` is usable where `k₂` is expected."
-`Owned` is at the top, since it carries the most capability. The three borrow
-modes are mutually incomparable. `Never` is the bottom — a subkind of
+`Owned` is at the top, since it carries the most capability; the three borrow
+modes are mutually incomparable; `Never` is at the bottom, a subkind of
 everything, corresponding to the uninhabited type.
 
 ```
@@ -181,6 +181,8 @@ Type   T  ::=  a                        -- type variable (kind given by context)
             |  mod::F                   -- qualified type constructor
             |  ∀(a : k). T             -- kind-polymorphic type
             |  ∀'r. T                  -- region-polymorphic type
+            |  Slot<L>                  -- reuse token / husk        (Owned)
+                                        --   layout-indexed; see §6.10, §7.5
 ```
 
 The function arrow `→[k]` carries the *ownership mode of the function*:
@@ -190,8 +192,8 @@ T₁ →[Owned] T₂        -- consuming function: argument is moved in, single-
 T₁ →[Borrowed 'r] T₂  -- borrowing function: argument is borrowed, reusable
 ```
 
-This is how the owned and borrowed variants of `fmap` differ at the
-type level — the arrow kind, not just the argument kind:
+The owned and borrowed variants of `fmap` differ at the
+type level, via the arrow kind, not by the argument kind:
 
 ```
 -- owned map: consumes the container
@@ -382,6 +384,18 @@ F declared with parameter kinds k̄, result kind kF    Γ ⊢ T̄ : k̄
 Γ, 'r ⊢ T : k
 ─────────────────────  (K-ForallRegion)
 Γ ⊢ ∀'r. T : k
+
+
+F (mutually) recursive    Heaped impl exists for F
+──────────────────────────────────────────────────────  (K-HeapedRec)
+Γ ⊢ F<T̄> : Owned
+-- a recursive type constructor is well-kinded only with a `Heaped` impl;
+-- its values are an Owned pointer handle (§7.5)
+
+
+L a layout class
+─────────────────────  (K-Slot)
+Γ ⊢ Slot<L> : Owned
 ```
 
 ---
@@ -529,6 +543,32 @@ all arms agree on U and k
 Γ ⊢ match e { arm* } ⇒ U : k
 ```
 
+When the scrutinee `e` is a *consumed* `Heaped` value, the constructor pattern
+*drains* it: the bindings are *owned* (moved out via `take`, §7.5) and the arm
+may additionally bind a reuse token `cell : Slot<L>` (the husk). When `e` is only
+*borrowed*, the bindings are borrows (`borrow`, §7.5) and no `Slot` is produced.
+
+### 6.10 In-Place Reuse
+
+A reuse token (husk) drained from a `Heaped` node may be rebuilt into, with no
+allocation, provided the new constructor's layout matches.
+
+```
+Γ ⊢ cell ⇒ Slot<L> : Owned    layout(#C) = L    Γ ⊢ ēᵢ ⇐ fieldᵢ(#C)
+─────────────────────────────────────────────────────────────────────  (Reuse)
+Γ ⊢ (reuse cell as #C(ē)) ⇒ T_{#C} : Owned
+-- consumes the token and the arguments; allocates nothing. An unused `Slot`
+-- is dropped (frees the husk) like any other Owned value.
+```
+
+### 6.11 Drop Elaboration (conditional moves)
+
+`drop` insertion is implicit (RAII): an Owned binding is dropped at the end of
+the innermost block where it is still owned, in reverse declaration order. When a
+value is moved on some branches of an `if`/`match` but not others, a *completing*
+`drop` is inserted on the branches where it is still owned, so it is uniformly
+consumed at the merge — no runtime drop flags, no leak.
+
 ---
 
 ## 7. Standard Typeclasses
@@ -620,6 +660,44 @@ typeclass Copy<T : Owned> requires Clone<T> {}
 
 Primitive types (`Int`, `Bool`, `Unit`) implement `Copy` automatically.
 Heap-allocated types (`Box<T>`) do not, and require explicit `clone()`.
+
+### 7.5 Heaped — Allocation Strategies
+
+`Heaped` is the lang-item typeclass that gives a type a heap representation. A
+(mutually) recursive `type` is well-formed only if it implements `Heaped`; the
+impl supplies the finite-size handle and the allocation/reclamation strategy,
+declared once at the type: `type List<+a> : Heaped(Unique)`. The compiler knows
+the typeclass by name (to emit calls) but nothing about allocation policy —
+`Box`/`Rc`/arenas are library strategies. The hierarchy encodes the
+reuse-vs-share tradeoff structurally:
+
+```
+typeclass Heaped<T> {
+  type Handle                      -- the pointer-sized runtime representation
+  alloc   : Node          → T      -- construct: store a node, return the handle
+  borrow  : &T            → &Node  -- deref: read/match (borrow into the root)
+  release : T             → Unit   -- drop: Unique frees; Shared decs (free at 0)
+}
+
+typeclass HeapedUnique<T> requires Heaped<T> {
+  borrow_mut : &mut T → &mut Node       -- exclusive (Unique-only) mutation
+  take       : T      → (Node, Slot<L>) -- owning drain → fields + reuse husk
+  reuse      : (Slot<L>, Node) → T      -- rebuild into a husk, no allocation
+}
+
+typeclass HeapedShared<T> requires Heaped<T> {
+  share : &T → T                        -- duplicate the handle (refcount ++)
+}
+```
+
+`take`/`reuse`/`borrow_mut` are `HeapedUnique`-only: moving out of, or mutating,
+shared storage would need a runtime uniqueness check, excluded by design. So **a
+Unique type can `reuse`, a Shared type can `share`, never both — enforced by the
+hierarchy.** The user writes `#C(ē)`, `match`, `reuse`, `.share()` and lets values
+drop; the compiler lowers these to the methods above; the core library writes the
+bodies (over `Ptr`, raw alloc/free, `drop_in_place`, and interior mutation for
+the Shared counter). The single non-affine note: a Shared handle stays affine;
+`.share()` returns a fresh handle (so the compiler inserts no implicit dups).
 
 ---
 
@@ -718,6 +796,25 @@ borrow_expr = { "&" ~ "mut"? ~ expression }
 
 Add `borrow_expr` to `primary`. Produces a `Borrowed` or `BorrowedMut`
 reference to the sub-expression.
+
+### 8.7b Heaped Types, Reuse, and Husk Patterns
+
+```
+-- a recursive type declares its allocation strategy once, at the type
+heaped_ann  = { ":" ~ "Heaped" ~ "(" ~ identifier ~ ")" }   -- e.g.  : Heaped(Unique)
+-- attach `heaped_ann?` to `type_alias` (after `type_params?`)
+
+-- in-place reuse: rebuild a drained husk with no allocation
+reuse_expr  = { "reuse" ~ expression ~ "as" ~ constructor }
+-- add `reuse_expr` to `primary`
+
+-- husk-capturing as-pattern: bind the reuse token of a drained node
+--   (legal only in a consuming match)
+as_pattern  = { identifier ~ "@" ~ pattern }   -- e.g.  cell @ #cons(x, rest)
+```
+
+`.share()` is an ordinary method call (no new grammar). New keywords: `reuse`,
+`as`; `Heaped` appears in the type-annotation position.
 
 ### 8.8 Typeclass Declaration
 
@@ -893,6 +990,7 @@ KEYWORD = {
   | "typeclass" | "impl"       -- typeclass system
   | "requires" | "for"         -- typeclass relations
   | "where"                    -- constraints
+  | "reuse" | "as"             -- in-place reuse
 }
 
 ```

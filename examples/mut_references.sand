@@ -1,0 +1,27 @@
+//@TEST:{42}[]
+// Exclusive (mutable) references passed into functions.
+//
+// `&mut x` is an *exclusive* borrow: it requires `x` to be mutable and that no
+// other borrow of `x` is live while it is. A function receiving a `&mut T`
+// parameter reads through it with `*r`, and lifetime parameters (`<'a>`) over
+// exclusive borrows are inferred at the call site. Borrows carry no runtime
+// data, so this lowers to plain integer code.
+//
+// (Writing *through* a mutable reference — `*r = e` — is a separate, still
+// in-progress feature, so these functions read their exclusive borrows.)
+
+// reads an exclusively-borrowed Int twice and sums it.
+def doubled(r: &mut Int): Int := *r + *r
+
+// region-parametric over the exclusive borrows' shared lifetime.
+def sum_pair<'a>(x: &'a mut Int, y: &'a mut Int): Int := *x + *y
+
+def main(): Int := {
+    let mut a = 7;
+    let s = doubled(&mut a); // exclusive borrow for the call: 7 + 7 = 14
+
+    let mut b = 13;
+    let mut c = 15;
+    // each `&mut` is the only live borrow of its own variable, so this is sound.
+    s + sum_pair(&mut b, &mut c) // 14 + (13 + 15) = 42
+}

@@ -1,10 +1,10 @@
-//! Step 6 — region variables and `T @ 'r` ascription.
+//! region variables and `T @ 'r` ascription.
 //!
 //! This step is structural plumbing (Calculus §1.1, §2.3): lifetime syntax
 //! parses and round-trips, `T @ 'r` is a distinct interned type, and
 //! monomorphisation erases regions so codegen is unaffected. There are no
 //! borrow semantics yet, so region-ascribed values cannot be *created* from
-//! literals — they appear only in signatures.
+//! literals; they appear only in signatures.
 
 use lang::ir_types::typed_hir::Expression;
 use lang::lang::types::Region;

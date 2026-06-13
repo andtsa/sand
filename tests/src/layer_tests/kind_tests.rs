@@ -1,4 +1,4 @@
-//! Step 4 — the `{Owned, Never}` kind system and divergence.
+//! Step 4 the `{Owned, Never}` kind system and divergence.
 //!
 //! Every ordinary value is `Owned`; a statically-infinite loop (`while true`,
 //! the language has no `break`) is `Never`, the uninhabited kind, and so
@@ -56,7 +56,7 @@ fn infinite_loop_inhabits_bool() {
 
 #[test]
 fn divergent_if_branch_takes_other_type() {
-    // the diverging `else` does not constrain the result type — it is `Int`.
+    // the diverging `else` does not constrain the result type.
     typecheck("def f(c: Bool): Int := if c then 5 else (while true do {}) \n def main(): Int := 0");
 }
 

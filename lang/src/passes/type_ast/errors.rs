@@ -75,7 +75,7 @@ pub enum AstTypeError<'tcx> {
         range: Range,
     },
     #[error(
-        "constructor '{enum_name}#{variant}' at {range}: payload mismatch — variant {} a payload, but the call {}",
+        "constructor '{enum_name}#{variant}' at {range}: payload mismatch, variant {} a payload, but the call {}",
         if *expected_payload { "expects" } else { "does not expect" },
         if *expected_payload { "has none" } else { "supplies one" }
     )]
@@ -93,7 +93,7 @@ pub enum AstTypeError<'tcx> {
     )]
     CannotInferTypeArguments { enum_name: String, range: Range },
     #[error(
-        "pattern '{enum_name}#{variant}' at {range}: payload mismatch — variant {} a payload, but the pattern {}",
+        "pattern '{enum_name}#{variant}' at {range}: payload mismatch, variant {} a payload, but the pattern {}",
         if *expected_payload { "carries" } else { "does not carry" },
         if *expected_payload { "doesn't destructure it" } else { "tries to destructure one" }
     )]
@@ -101,7 +101,7 @@ pub enum AstTypeError<'tcx> {
         enum_name: String,
         variant: String,
         /// `true` if the variant is declared with a payload (so the pattern
-        /// should — but doesn't — destructure it); `false` if the variant is
+        /// should, but doesn't, destructure it); `false` if the variant is
         /// nullary (so the pattern's sub-pattern is unexpected).
         expected_payload: bool,
         range: Range,
@@ -117,7 +117,7 @@ pub enum AstTypeError<'tcx> {
     #[error("pattern type error at {range}: {message}")]
     PatternTypeMismatch { message: String, range: Range },
     #[error(
-        "literal pattern '{enum_name}::{variant}' at {range} cannot appear in a nested (payload/tuple) position — enum variant patterns, bindings, wildcards, and tuple-destructuring are all supported in nested position, but integer and boolean literals are not"
+        "literal pattern '{enum_name}::{variant}' at {range} cannot appear in a nested (payload/tuple) position. enum variant patterns, bindings, wildcards, and tuple-destructuring are all supported in nested position, but integer and boolean literals are not"
     )]
     RefutableNestedPattern {
         enum_name: String,
@@ -140,4 +140,19 @@ pub enum AstTypeError<'tcx> {
         "`let E#V(…) = … else fallback` at {range}: the else expression must be a constructor of the same variant as the LHS pattern so that destructuring the fallback always succeeds"
     )]
     LetPatternElseNotIrrefutable { range: Range },
+
+    #[error(
+        "borrow at {range} would escape its scope: the value it refers to does not live long enough (Calculus §6.3)"
+    )]
+    RegionEscape { range: Range },
+
+    #[error(
+        "cannot mutably borrow immutable variable '{name}' at {range}: declare it `let mut {name}` (or a `mut` parameter)"
+    )]
+    MutBorrowOfImmutable { name: String, range: Range },
+
+    #[error(
+        "cannot dereference value of type {ty} at {range}: `*` requires a reference (`&T` or `&mut T`)"
+    )]
+    DerefOfNonReference { ty: Ty<'tcx>, range: Range },
 }

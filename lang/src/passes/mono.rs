@@ -205,9 +205,11 @@ impl<'tcx> Mono<'tcx> {
                 let spec_er = self.request_enum(ctx, base, args);
                 ctx.enum_ty(spec_er)
             }
-            // Regions and shared borrows have no distinct runtime
-            // representation: erase `T @ 'r` and `&'r T` to `T`.
-            TyKind::Region(inner, _) | TyKind::Ref(_, inner) => self.mono_ty(ctx, *inner, mapping),
+            // Regions and borrows have no distinct runtime representation: erase
+            // `T @ 'r`, `&'r T`, and `&'r mut T` to `T`.
+            TyKind::Region(inner, _) | TyKind::Ref(_, inner) | TyKind::RefMut(_, inner) => {
+                self.mono_ty(ctx, *inner, mapping)
+            }
             _ => ty,
         }
     }
@@ -224,7 +226,8 @@ impl<'tcx> Mono<'tcx> {
             Expression::Bool(b) => Expression::Bool(*b),
             Expression::Unit => Expression::Unit,
             Expression::Var(v) => Expression::Var(*v),
-            Expression::Borrow(inner) => Expression::Borrow(self.boxed(ctx, inner, mapping)),
+            Expression::Borrow(inner, m) => Expression::Borrow(self.boxed(ctx, inner, mapping), *m),
+            Expression::Deref(inner) => Expression::Deref(self.boxed(ctx, inner, mapping)),
             Expression::If { cond, t, f } => Expression::If {
                 cond: self.boxed(ctx, cond, mapping),
                 t: self.boxed(ctx, t, mapping),
@@ -486,7 +489,11 @@ fn mangle_ty<'tcx>(ctx: &CompileCtx<'tcx>, ty: Ty<'tcx>) -> String {
             format!("Tup{}_{}", elems.len(), inner.join("_"))
         }
         // regions and borrows are erased by `mono_ty` before mangling.
-        TyKind::Param(_) | TyKind::App(..) | TyKind::Region(..) | TyKind::Ref(..) => {
+        TyKind::Param(_)
+        | TyKind::App(..)
+        | TyKind::Region(..)
+        | TyKind::Ref(..)
+        | TyKind::RefMut(..) => {
             internal_bug!("type argument is not concrete during mangling: {ty}")
         }
     }

@@ -120,8 +120,12 @@ pub enum Expression<'tcx> {
     Int(i64),
     Bool(bool),
     Unit,
-    /// shared borrow `&e` (Calculus §3.2).
-    Borrow(Box<Expr<'tcx>>),
+    /// borrow `&e` (shared) or `&mut e` (exclusive, the `bool` is `true`)
+    /// (Calculus §3.2).
+    Borrow(Box<Expr<'tcx>>, bool),
+    /// dereference `*e`: read through a reference (`&T`/`&mut T` -> T).
+    /// Transparent at runtime (borrows are erased), so it lowers like `Borrow`.
+    Deref(Box<Expr<'tcx>>),
     Block {
         statements: Vec<Statement<'tcx>>,
         expr: Option<Box<Expr<'tcx>>>,
@@ -172,7 +176,7 @@ pub enum QPattern<'tcx> {
     IntLit(i64),
     /// boolean literal in pattern position: `true` or `false`.
     BoolLit(bool),
-    /// a variable binding (already uniquified — `var` is a `UniqVar`)
+    /// a variable binding already uniquified
     Binding { var: UniqVar<'tcx>, range: Range },
     /// Wildcard `_`
     Wildcard,

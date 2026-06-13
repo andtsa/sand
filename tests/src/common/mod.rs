@@ -21,7 +21,7 @@ use lang::ir_types::typed_hir::Expr;
 use lang::ir_types::typed_hir::Expression;
 use lang::ir_types::typed_hir::TypedProgram;
 
-/// Wrap a bare `Expression` into an `Expr` with placeholder `ty`/`range` —
+/// Wrap a bare `Expression` into an `Expr` with placeholder `ty`/`range`
 /// only the `expr` field participates in `Expr`'s `PartialEq` impl, so these
 /// placeholders are sound when the result is solely used for comparison
 /// against the HIR interpreter's output (see `mir_value_to_expr`).

@@ -1,0 +1,19 @@
+//@TEST:{42}[]
+// Exclusive (mutable) borrows (Step 9). `&mut x` requires `x` to be mutable and
+// that no other borrow of `x` is live; shared borrows (`&x`) may alias freely.
+// Exclusivity is checked statically (this program is well-formed); borrows carry
+// no runtime data, so everything lowers to plain integer arithmetic.
+
+def via_shared(r: &Int): Int := 0
+
+def main(): Int := {
+    let a = 10;
+    let r1 = &a; // shared borrows may coexist…
+    let r2 = &a; // …so two of them are fine
+    let _ = via_shared(&a);
+
+    let mut b = 32;
+    let m = &mut b; // a single exclusive borrow of b (no other borrow is live)
+
+    a + b // 10 + 32 = 42 — using a value is fine; only aliasing borrows conflict
+}

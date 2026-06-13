@@ -16,6 +16,18 @@ pub enum OwnershipState {
     Moved { at: Range },
 }
 
+/// the outstanding-borrow state of a place (variable), used to enforce the
+/// mutable-borrow exclusivity invariant (Calculus §1.2, Step 9b). A place may
+/// have any number of shared borrows *or* a single exclusive borrow, never
+/// both. `Mut` dominates `Shared` when merging branches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BorrowState {
+    /// one or more live shared (`&x`) borrows.
+    Shared,
+    /// a live exclusive (`&mut x`) borrow.
+    Mut,
+}
+
 /// the ownership environment is a map from every in-scope variable to its
 /// current ownership state
 ///
@@ -24,6 +36,11 @@ pub enum OwnershipState {
 #[derive(Debug, Clone, Default)]
 pub struct OwnershipEnv<'tcx> {
     states: Map<UniqVar<'tcx>, OwnershipState>,
+    /// outstanding borrows of each place, for the exclusivity invariant.
+    /// Borrows are lexically scoped: snapshotted on block entry and
+    /// restored on exit, so borrows created inside a block are released
+    /// when it closes.
+    borrows: Map<UniqVar<'tcx>, BorrowState>,
 }
 
 impl<'tcx> OwnershipEnv<'tcx> {
@@ -51,10 +68,39 @@ impl<'tcx> OwnershipEnv<'tcx> {
         self.states.insert(var, OwnershipState::Moved { at });
     }
 
+    /// the current borrow state of `var`, if any.
+    pub fn borrow_state(&self, var: &UniqVar<'tcx>) -> Option<BorrowState> {
+        self.borrows.get(var).copied()
+    }
+
+    /// record a borrow of `var`. A second shared borrow leaves the state
+    /// `Shared`; exclusivity conflicts are checked by the caller *before*
+    /// calling this.
+    pub fn add_borrow(&mut self, var: UniqVar<'tcx>, mutable: bool) {
+        let state = if mutable {
+            BorrowState::Mut
+        } else {
+            BorrowState::Shared
+        };
+        self.borrows.insert(var, state);
+    }
+
+    /// snapshot the outstanding borrows (taken on block entry).
+    pub fn borrows_snapshot(&self) -> Map<UniqVar<'tcx>, BorrowState> {
+        self.borrows.clone()
+    }
+
+    /// restore the borrows to a snapshot (on block exit), releasing every
+    /// borrow created within the block.
+    pub fn restore_borrows(&mut self, snapshot: Map<UniqVar<'tcx>, BorrowState>) {
+        self.borrows = snapshot;
+    }
+
     /// conservative join of two post-branch environments.
     ///
     /// a variable is `Owned` in the result only if it is `Owned` in *both*
-    /// branches
+    /// branches; a borrow live in *either* branch is live in the result (with
+    /// `Mut` dominating `Shared`).
     pub fn merge(left: &Self, right: &Self) -> Self {
         // start from the left env, adjust any variable that right moved
         let mut merged = left.clone();
@@ -69,6 +115,17 @@ impl<'tcx> OwnershipEnv<'tcx> {
                     merged.states.entry(*var).or_insert(OwnershipState::Owned);
                 }
             }
+        }
+        for (var, state) in &right.borrows {
+            merged
+                .borrows
+                .entry(*var)
+                .and_modify(|s| {
+                    if *state == BorrowState::Mut {
+                        *s = BorrowState::Mut;
+                    }
+                })
+                .or_insert(*state);
         }
         merged
     }

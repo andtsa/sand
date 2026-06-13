@@ -1,0 +1,7 @@
+//@TEST:{1}[]
+
+def is_odd(n: Int): Bool := (n && 1) == 1
+
+def both_odd(a: Int, b: Int): Bool := is_odd(a) and is_odd(b)
+
+def main(): Int := if both_odd(7, 9) then 1 else 0

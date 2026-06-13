@@ -1,0 +1,18 @@
+//@TEST:{42}[]
+// A borrow program that actually *uses* its borrows. References can now be read
+// through with `*r`, so a function can inspect borrowed data; lifetime
+// parameters (`<'a>`) are inferred at the call site, so `max` is callable with
+// ordinary borrows. Borrows are non-consuming and are erased before codegen.
+
+// compares two Ints through shared borrows and returns the larger.
+def max<'a>(x: &'a Int, y: &'a Int): Int := if *x > *y then *x else *y
+
+// doubles a borrowed Int (reads it twice; the borrow consumes nothing).
+def double(r: &Int): Int := *r + *r
+
+def main(): Int := {
+    let a = 21;
+    let b = 7;
+    // max(&a, &b) = 21, double(&b) = 14, plus b again = 21 + 14 + 7 = 42.
+    max(&a, &b) + double(&b) + b
+}

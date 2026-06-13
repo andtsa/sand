@@ -61,9 +61,9 @@ pub enum Statement<'tcx> {
     /// `let E#V(payload) = expr else fallback`
     ///
     /// The `pattern` is always a `MatchPattern::Variant` (its sub-pattern is
-    /// irrefutable — only bindings/wildcards/tuples inside). `else_branch` has
-    /// the same type as `val`; its outermost expression is guaranteed by the
-    /// type checker to be `Constructor { variant_idx == pattern.variant_idx }`.
+    /// irrefutable). `else_branch` has the same type as `val`; its outermost
+    /// expression is guaranteed by the type checker to be
+    /// `Constructor { variant_idx == pattern.variant_idx }`.
     ///
     /// MIR lowering desugars to a discriminant branch: if the discriminant
     /// matches, extract from `val`; otherwise evaluate `else_branch` and
@@ -128,8 +128,12 @@ pub enum Expression<'tcx> {
     Int(i64),
     Bool(bool),
     Unit,
-    /// shared borrow `&e` (Calculus §3.2).
-    Borrow(Box<Expr<'tcx>>),
+    /// borrow `&e` (shared) or `&mut e` (exclusive, the `bool` is `true`)
+    /// (Calculus §3.2).
+    Borrow(Box<Expr<'tcx>>, bool),
+    /// dereference `*e`: read through a reference (`&T`/`&mut T` -> T).
+    /// Transparent at runtime (borrows are erased), so it lowers like `Borrow`.
+    Deref(Box<Expr<'tcx>>),
     Block {
         statements: Vec<Statement<'tcx>>,
         expr: Option<Box<Expr<'tcx>>>,
@@ -159,7 +163,7 @@ pub struct TypedMatchArm<'tcx> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum MatchPattern<'tcx> {
     Variant {
-        /// the enum type — the type of the value matched against this pattern.
+        /// the enum type
         /// Carried for the same reason `Tuple` carries its `ty` and `Binding`
         /// carries its `ty`: MIR lowering operates without `CompileCtx` access
         /// and needs the type to correctly allocate extraction temporaries when
@@ -169,10 +173,10 @@ pub enum MatchPattern<'tcx> {
         variant_idx: usize,
         /// `Some((payload_ty, sub_pattern))` when the pattern destructures
         /// the variant's payload. `payload_ty` is the variant's *declared*
-        /// payload type — carried here for the same reason as `ty`.
+        /// payload type
         payload: Option<(Ty<'tcx>, Box<MatchPattern<'tcx>>)>,
     },
-    /// tuple destructuring `(p1, p2, ...)`. `ty` is the tuple's own type —
+    /// tuple destructuring `(p1, p2, ...)`. `ty` is the tuple's own type,
     /// needed by MIR lowering for the same reason `Variant.payload` carries
     /// its type (typing extraction temporaries for nested destructuring,
     /// e.g. the inner tuple in `Wrap((x, y))`).

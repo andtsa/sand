@@ -116,7 +116,7 @@ impl<'tcx> Expr<'tcx> {
     /// optional payload and `Tuple` into its elements. `Block` is
     /// deliberately *excluded*: its children are `Statement`s rather than
     /// bare `Expr`s and visiting it requires scope bookkeeping that only the
-    /// caller (e.g. `uniquify`) knows how to do — so callers must match on
+    /// caller (e.g. `uniquify`) knows how to do, so callers must match on
     /// `Block` themselves before falling back to this traversal.
     ///
     /// This is the Rust analogue of a `Traversal'` from the Haskell `lens`
@@ -148,7 +148,7 @@ impl<'tcx> Expr<'tcx> {
     /// cases to be written out by hand. It borrows `self` (mirroring the
     /// existing borrow-and-rebuild style of the passes) and calls `f` once
     /// per immediate child, cloning only the non-recursive payload of each
-    /// node — exactly as much cloning as the hand-written version did.
+    /// node
     pub fn traverse_subexprs<E>(
         &self,
         mut f: impl FnMut(&Self) -> Result<Self, E>,
@@ -172,7 +172,8 @@ impl<'tcx> Expr<'tcx> {
                 op: *op,
                 right: Box::new(f(right)?),
             },
-            Expression::Borrow(inner) => Expression::Borrow(Box::new(f(inner)?)),
+            Expression::Borrow(inner, m) => Expression::Borrow(Box::new(f(inner)?), *m),
+            Expression::Deref(inner) => Expression::Deref(Box::new(f(inner)?)),
             Expression::Call { fn_name, args } => Expression::Call {
                 fn_name: fn_name.clone(),
                 args: args.iter().map(&mut f).collect::<Result<_, _>>()?,
@@ -223,7 +224,7 @@ impl<'tcx> Expr<'tcx> {
             | Expression::Int(_)
             | Expression::Bool(_)
             | Expression::Unit) => (*leaf).clone(),
-            // `Block` mixes `Statement` children and scoping concerns —
+            // `Block` mixes `Statement` children and scoping concerns.
             // callers must handle it before delegating here.
             block @ Expression::Block { .. } => (*block).clone(),
         };
@@ -262,8 +263,12 @@ pub enum Expression<'tcx> {
     Int(i64),
     Bool(bool),
     Unit,
-    /// shared borrow `&e` (Calculus §3.2).
-    Borrow(Box<Expr<'tcx>>),
+    /// borrow `&e` (shared) or `&mut e` (exclusive, the `bool` is `true`)
+    /// (Calculus §3.2).
+    Borrow(Box<Expr<'tcx>>, bool),
+    /// dereference `*e`: read through a reference (`&T`/`&mut T` -> T).
+    /// Transparent at runtime (borrows are erased), so it lowers like `Borrow`.
+    Deref(Box<Expr<'tcx>>),
     Block {
         statements: Vec<Statement<'tcx>>,
         expr: Option<Box<Expr<'tcx>>>,

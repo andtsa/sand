@@ -118,7 +118,7 @@ fn execute_statement<'tcx>(
             Ok(())
         }
         Statement::Eval { value, .. } => {
-            // Eval is only for side-effecting calls — Aggregate/Field never
+            // Eval is only for side-effecting calls: Aggregate/Field never
             // appear here, so the result_ty is irrelevant; use UNIT as dummy.
             eval_rvalue(value, ctx.types.unit, locals, prog, ctx)?;
             Ok(())

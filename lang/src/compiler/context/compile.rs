@@ -151,9 +151,18 @@ pub struct CompileCtx<'tcx> {
     cur_regions: Map<String, RegionVar>,
     /// The single region shared by all elided borrows (`&T`/`&e` with no
     /// lifetime), allocated lazily. Shared so that an elided `&T` type and an
-    /// elided `&e` value compare equal; lexically-scoped elision regions arrive
-    /// with the escape check in Step 8b.
+    /// elided `&e` value compare equal at the type level; the borrow's actual
+    /// scope is carried in its `Kind` (`Borrowed(region)`) for the escape
+    /// check.
     anon_region_var: Option<RegionVar>,
+    /// Stack of region variables for the lexically-nested scopes (the function,
+    /// then each enclosing block) currently being type-checked (Step 8b). Used
+    /// by the borrow escape check to compare lifetimes by nesting depth.
+    region_scope_stack: Vec<RegionVar>,
+    /// Nesting depth of each lexical scope region (0 = function scope, deeper =
+    /// inner blocks). Regions absent here: region parameters, `'static`, the
+    /// elided-borrow region, are treated as depth 0: outermost, never escaping
+    region_depths: Map<RegionVar, usize>,
 
     // type parameters
     /// Number of type parameters allocated so far.
@@ -170,8 +179,9 @@ pub struct CompileCtx<'tcx> {
     /// assigns each a stable monotonic `id` used for ordering.
     var_count: usize,
     pub variable_usages: Map<OriginalVarRef<'tcx>, Set<Range>>,
-    /// Number of uniquified variables registered so far — assigns each a stable
-    /// `idx` distinguishing shadowing re-bindings of the same declaration.
+    /// Number of uniquified variables registered so far.
+    /// assigns each a stable `idx` distinguishing shadowing
+    /// re-bindings of the same declaration.
     uniq_count: usize,
 
     // functions
@@ -297,6 +307,8 @@ impl<'tcx> CompileCtx<'tcx> {
             region_count: 0,
             cur_regions: Default::default(),
             anon_region_var: None,
+            region_scope_stack: Vec::new(),
+            region_depths: Default::default(),
             type_param_count: 0,
             type_param_names: Default::default(),
             cur_type_params: Default::default(),
@@ -375,11 +387,13 @@ impl<'tcx> CompileCtx<'tcx> {
     /// # get the _kind of a type_
     /// returns the default kind for a value of that type
     /// (see Calculus§5 kinding judgment).
-    /// A shared reference `&'r T` has kind `Borrowed 'r`
-    /// (`K-Borrow`); everything else is `Owned`.
+    /// A shared reference `&'r T` has kind `Borrowed 'r` (`K-Borrow`); an
+    /// exclusive reference `&'r mut T` has kind `BorrowedMut 'r`
+    /// (`K-BorrowMut`); everything else is `Owned`.
     pub fn kind_of(&self, ty: Ty<'tcx>) -> Kind {
         match ty.kind() {
             TyKind::Ref(r, _) => Kind::Borrowed(*r),
+            TyKind::RefMut(r, _) => Kind::BorrowedMut(*r),
             _ => Kind::Owned,
         }
     }
@@ -389,8 +403,8 @@ impl<'tcx> CompileCtx<'tcx> {
     /// Resolve a *declared* lifetime name to its [`Region`], or `None` if no
     /// region by that name is in scope. `'static` is always available; any
     /// other name must be a region parameter of the current declaration
-    /// (`def f<'r>(...)`). Elided borrows do not go through here — they call
-    /// [`Self::anon_region`] directly.
+    /// (`def f<'r>(...)`). Elided borrows do not go through here, instead they
+    /// call [`Self::anon_region`] directly.
     pub fn resolve_region(&self, name: &str) -> Option<Region> {
         if name == "static" {
             return Some(Region::Static);
@@ -415,6 +429,48 @@ impl<'tcx> CompileCtx<'tcx> {
         self.intern_ty(TyKind::Ref(region, inner))
     }
 
+    /// Intern an exclusive reference type `&region mut inner` (Calculus §2.3).
+    pub fn ref_mut_ty(&mut self, region: Region, inner: Ty<'tcx>) -> Ty<'tcx> {
+        self.intern_ty(TyKind::RefMut(region, inner))
+    }
+
+    /// Canonicalise the region of every reference (`&'r T`, `&'r mut T`) in
+    /// `ty` to the shared anonymous region. Reference types carry no
+    /// *type-level* region constraints — region safety is the lexical
+    /// escape check, which reads the borrow's `Kind`, not its type — so at
+    /// a call boundary a `&'r T` parameter accepts any `&_ T` argument
+    /// (regions are inferred away). This is the type-checker's region
+    /// inference; `T @ 'r` ascriptions keep their own region but their
+    /// pointee is still canonicalised.
+    pub fn region_erase(&mut self, ty: Ty<'tcx>) -> Ty<'tcx> {
+        match ty.kind() {
+            TyKind::Tuple(elems) => {
+                let elems: Vec<Ty<'tcx>> = elems.iter().map(|e| self.region_erase(*e)).collect();
+                self.intern_tuple(elems)
+            }
+            TyKind::App(er, args) => {
+                let er = *er;
+                let args: Vec<Ty<'tcx>> = args.iter().map(|a| self.region_erase(*a)).collect();
+                self.intern_app(er, args)
+            }
+            TyKind::Region(inner, r) => {
+                let inner = self.region_erase(*inner);
+                self.region_ty(inner, *r)
+            }
+            TyKind::Ref(_, inner) => {
+                let inner = self.region_erase(*inner);
+                let r = self.anon_region();
+                self.ref_ty(r, inner)
+            }
+            TyKind::RefMut(_, inner) => {
+                let inner = self.region_erase(*inner);
+                let r = self.anon_region();
+                self.ref_mut_ty(r, inner)
+            }
+            _ => ty,
+        }
+    }
+
     /// The shared anonymous region used for elided borrows (`&e`, `&T` with no
     /// explicit lifetime). All elided borrows share one region for now, so that
     /// an elided `&T` type and an elided `&e` value compare equal. Per-borrow
@@ -429,10 +485,102 @@ impl<'tcx> CompileCtx<'tcx> {
         Region::Var(rv)
     }
 
-    /// Discharge a set of outlives constraints. A trivially-satisfied stub
-    /// until the constraint solver lands in Step 8.
-    pub fn solve_outlives(&self, _constraints: &[RegionConstraint]) -> bool {
-        true
+    // ---- lexical region scopes + the outlives solver (Step 8b) --------------
+
+    /// Enter a fresh lexical region scope (a function body or a block),
+    /// returning its region. Each scope nests one level deeper than its parent.
+    pub fn enter_region_scope(&mut self) -> Region {
+        let depth = self.region_scope_stack.len();
+        let rv = RegionVar(self.region_count);
+        self.region_count += 1;
+        self.region_depths.insert(rv, depth);
+        self.region_scope_stack.push(rv);
+        Region::Var(rv)
+    }
+
+    /// Leave the innermost lexical region scope (see
+    /// [`Self::enter_region_scope`]).
+    pub fn exit_region_scope(&mut self) {
+        self.region_scope_stack.pop();
+    }
+
+    /// The innermost (current) lexical scope region, or `'static` if no scope
+    /// is open. Borrows of temporaries and freshly bound locals live here.
+    pub fn current_scope_region(&self) -> Region {
+        self.region_scope_stack
+            .last()
+            .map(|&rv| Region::Var(rv))
+            .unwrap_or(Region::Static)
+    }
+
+    /// The lexical nesting depth of a region. `'static` and any region without
+    /// a recorded scope (region parameters, the elided-borrow region) are
+    /// depth 0: they outlive every lexical scope, so borrows into them
+    /// never escape.
+    pub fn region_depth(&self, r: Region) -> usize {
+        match r {
+            Region::Static => 0,
+            Region::Var(rv) => self.region_depths.get(&rv).copied().unwrap_or(0),
+        }
+    }
+
+    /// Whether `r` is a real lexical scope region (allocated by
+    /// [`Self::enter_region_scope`]) as opposed to a region parameter, the
+    /// elided-borrow region, or `'static`.
+    fn is_scope_region(&self, r: Region) -> bool {
+        matches!(r, Region::Var(rv) if self.region_depths.contains_key(&rv))
+    }
+
+    /// Does `longer` outlive `shorter` (`longer ≥ shorter`; Calculus §1.1)?
+    ///
+    /// `'static` outlives everything and every region outlives itself; a
+    /// shallower lexical scope outlives a deeper (inner) one; and `assumptions`
+    /// (a function's `where 'a >= 'b` clauses) add further edges, closed
+    /// transitively.
+    pub fn outlives(
+        &self,
+        longer: Region,
+        shorter: Region,
+        assumptions: &[RegionConstraint],
+    ) -> bool {
+        if longer == shorter || longer == Region::Static {
+            return true;
+        }
+        // scope nesting: a shallower lexical scope outlives a deeper one.
+        if self.is_scope_region(longer)
+            && self.is_scope_region(shorter)
+            && self.region_depth(longer) < self.region_depth(shorter)
+        {
+            return true;
+        }
+        // transitive closure over the assumed `where` edges.
+        let mut worklist = vec![longer];
+        let mut seen: Set<Region> = Set::new();
+        while let Some(r) = worklist.pop() {
+            if !seen.insert(r) {
+                continue;
+            }
+            for c in assumptions {
+                if c.longer == r {
+                    if c.shorter == shorter {
+                        return true;
+                    }
+                    worklist.push(c.shorter);
+                }
+            }
+        }
+        false
+    }
+
+    /// Are all `required` outlives constraints satisfied, given `assumptions`?
+    pub fn satisfies_outlives(
+        &self,
+        required: &[RegionConstraint],
+        assumptions: &[RegionConstraint],
+    ) -> bool {
+        required
+            .iter()
+            .all(|c| self.outlives(c.longer, c.shorter, assumptions))
     }
 
     /// The [`Ty`] handle for the enum type `er`.

@@ -106,7 +106,7 @@ pub enum Operand {
 
 /// A compile-time constant.
 ///
-/// Enum discriminants are just `Int` — there is no separate `EnumVariant`
+/// Enum discriminants are just `Int`, there is no separate `EnumVariant`
 /// constant. In MIR, all enum values (including nullary variants) are
 /// constructed via [`RValue::Aggregate`] with a discriminant integer as their
 /// first field; match dispatch extracts that field with [`RValue::Field`] and
@@ -127,14 +127,13 @@ pub enum RValue<'tcx> {
     /// determines what kind of aggregate is produced:
     ///
     /// - **enum variant** (`TyKind::Enum`): `fields[0]` is always
-    ///   `Const(Int(variant_idx))` — the discriminant. For a payload-carrying
-    ///   variant, `fields[1]` is the payload operand. Nullary variants have
-    ///   only `fields[0]`.
+    ///   `Const(Int(variant_idx))`. For a payload-carrying variant, `fields[1]`
+    ///   is the payload operand. Nullary variants have only `fields[0]`.
     /// - **tuple** (`TyKind::Tuple`): `fields[i]` is the `i`-th element. No
     ///   discriminant.
     ///
     /// This encoding is the reason `Constant::EnumVariant` no longer exists:
-    /// every aggregate — including nullary enum variants — is now built via
+    /// every aggregate, including nullary enum variants, is now built via
     /// `Aggregate` rather than represented as an `Operand::Const`. The
     /// uniformity lets every downstream consumer (LLVM codegen, interpreters,
     /// display) use a single code path for all aggregate types.
@@ -148,7 +147,7 @@ pub enum RValue<'tcx> {
     /// - **tuple**: index `i` → element `i`.
     ///
     /// This is deliberately a plain integer index rather than a typed
-    /// `ProjectionKind` enum — the type system already encodes whether an
+    /// `ProjectionKind` enum. the type system already encodes whether an
     /// aggregate is a tuple or an enum, so the index alone is sufficient and
     /// no separate kind tag is needed.
     Field {
