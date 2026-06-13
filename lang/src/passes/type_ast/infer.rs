@@ -214,6 +214,37 @@ pub(super) fn escape_check<'tcx>(
     Ok(())
 }
 
+/// Result type of a branch join (`if`/`match`): the common structural type
+/// (`structural`, which is region-blind-equal to every branch) with all its
+/// regions stamped to the **meet** (shortest-lived GLB) of the branches'
+/// regions — the same per-argument `meet` the call path applies (§6.3, item 8).
+///
+/// This is the soundness fix for branch joins: taking one branch's type
+/// verbatim (the first arm, or the region-blind `expected`) drops the regions
+/// of the *other* branches, so a borrow of a local escaping through a
+/// non-chosen branch slipped past the enclosing escape check. Stamping the join
+/// with the meet makes the result outlive *no* branch, so an escape in **any**
+/// branch surfaces in the result type and is caught (Calculus §6.3, §6.9 "all
+/// arms agree"). Diverging branches (kind `Never`) yield no value, so they do
+/// not constrain the region.
+pub(super) fn join_region_ty<'tcx>(
+    ctx: &mut CompileCtx<'tcx>,
+    structural: Ty<'tcx>,
+    branches: &[(Ty<'tcx>, Kind)],
+) -> Ty<'tcx> {
+    let mut regions = Vec::new();
+    for (ty, kind) in branches {
+        if *kind != Kind::Never {
+            ty.free_regions(&mut regions);
+        }
+    }
+    if regions.is_empty() {
+        return structural; // no borrows in play — nothing to constrain
+    }
+    let meet = ctx.region_meet(&regions, &[]);
+    ctx.region_fill(structural, meet)
+}
+
 pub(super) fn infer_statement<'tcx>(
     ctx: &mut CompileCtx<'tcx>,
     env: &mut TypeEnv<'tcx>,
@@ -707,6 +738,13 @@ pub(super) fn infer<'tcx>(
             };
 
             let kind = t_expr.kind.join(f_expr.kind);
+            // Stamp the join with the meet of the branch regions so a borrow
+            // escaping through *either* branch is caught (see `join_region_ty`).
+            let ty = join_region_ty(
+                ctx,
+                ty,
+                &[(t_expr.ty, t_expr.kind), (f_expr.ty, f_expr.kind)],
+            );
             Ok(typed_hir::Expr {
                 expr: typed_hir::Expression::If {
                     cond: Box::new(cond_expr),
@@ -948,10 +986,17 @@ pub(super) fn infer<'tcx>(
             let scrut_expr = infer(ctx, env, scrutinee)?;
             let typed_arms =
                 type_check_match_arms(ctx, env, arms, scrut_expr.ty, None, expr.range)?;
-            let result_ty = typed_arms
+            let structural = typed_arms
                 .first()
                 .map(|a| a.body.ty)
                 .unwrap_or(ctx.types.unit);
+            // Stamp the join with the meet of the arm regions so a borrow
+            // escaping through *any* arm is caught (see `join_region_ty`).
+            let branches: Vec<(Ty<'tcx>, Kind)> = typed_arms
+                .iter()
+                .map(|a| (a.body.ty, a.body.kind))
+                .collect();
+            let result_ty = join_region_ty(ctx, structural, &branches);
             // The match diverges only if every arm does.
             let kind = typed_arms
                 .iter()

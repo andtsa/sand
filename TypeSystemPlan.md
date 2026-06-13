@@ -738,9 +738,15 @@ do not outlive their source region. Validate the outlives relation
 >   transitivity).
 >
 > **Known limitations (acceptable for this step; full borrow-checking is later):**
-> - A borrow flowing through an `if`/`match` join loses its region (the kind
->   lattice joins `Borrowed(r)` with anything unequal down to `Owned`), so an
->   escape *through* a branch is not caught. Direct and let-bound returns are.
+> - ~~A borrow flowing through an `if`/`match` join loses its region, so an escape
+>   *through* a branch is not caught.~~ **✅ Closed (post-R1).** A branch join now
+>   stamps its result type with the **meet** (shortest-lived GLB) of the branches'
+>   regions (`infer::join_region_ty`, wired into both modes of `if` and `match`),
+>   mirroring the call path's per-argument meet. A borrow escaping through *any*
+>   branch (not just the first/chosen one) therefore surfaces in the result type
+>   and is caught by the enclosing escape check. (Conservative: a multi-lifetime
+>   return through branches that needs `where 'a >= 'b` reasoning is rejected
+>   rather than inferred — see the next bullet.)
 > - `where 'r >= 's` is parsed/stored/solvable but **not yet checked at call
 >   sites**, and explicit-region functions still cannot be *called* with an
 >   elided borrow — both need call-site region instantiation (region

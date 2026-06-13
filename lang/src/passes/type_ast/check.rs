@@ -17,6 +17,7 @@ use crate::passes::type_ast::infer::escape_check;
 use crate::passes::type_ast::infer::infer;
 use crate::passes::type_ast::infer::infer_constructor;
 use crate::passes::type_ast::infer::infer_statement;
+use crate::passes::type_ast::infer::join_region_ty;
 
 /// Variable bindings introduced by a pattern: each is the uniquified variable,
 /// the type bound to it, and its declaration range.
@@ -873,13 +874,21 @@ pub(super) fn check<'tcx>(
             let t_expr = check(ctx, env, t, expected)?;
             let f_expr = check(ctx, env, f, expected)?;
             let kind = t_expr.kind.join(f_expr.kind);
+            // `check` ignores regions (`eq_modulo_regions`), so the branches may
+            // each carry a different real region; stamp the join with their meet
+            // so a borrow escaping through either branch is caught.
+            let ty = join_region_ty(
+                ctx,
+                expected,
+                &[(t_expr.ty, t_expr.kind), (f_expr.ty, f_expr.kind)],
+            );
             Ok(typed_hir::Expr {
                 expr: typed_hir::Expression::If {
                     cond: Box::new(cond_expr),
                     t: Box::new(t_expr),
                     f: Box::new(f_expr),
                 },
-                ty: expected,
+                ty,
                 range: expr.range,
                 kind,
             })
@@ -935,12 +944,19 @@ pub(super) fn check<'tcx>(
                 .iter()
                 .map(|a| a.body.kind)
                 .fold(Kind::Never, Kind::join);
+            // Stamp the join with the meet of the arm regions so a borrow
+            // escaping through *any* arm is caught (see `join_region_ty`).
+            let branches: Vec<(Ty<'tcx>, Kind)> = typed_arms
+                .iter()
+                .map(|a| (a.body.ty, a.body.kind))
+                .collect();
+            let ty = join_region_ty(ctx, expected, &branches);
             Ok(typed_hir::Expr {
                 expr: typed_hir::Expression::Match {
                     scrutinee: Box::new(scrut_expr),
                     arms: typed_arms,
                 },
-                ty: expected,
+                ty,
                 range: expr.range,
                 kind,
             })
