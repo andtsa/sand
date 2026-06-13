@@ -89,6 +89,19 @@ impl<'tcx> OwnershipChecker<'_, 'tcx> {
                 Ok(())
             }
 
+            // `*r = e` write-through: the RHS is moved into the pointee; the
+            // reference itself is read (not consumed) to write through, so a
+            // plain reference variable is a non-consuming use (mirrors `Deref`).
+            th::Statement::DerefAssign {
+                reference, value, ..
+            } => {
+                self.check_expr(value, env)?;
+                if !matches!(reference.expr, th::Expression::Var(_)) {
+                    self.check_expr(reference, env)?;
+                }
+                Ok(())
+            }
+
             th::Statement::LetTuple { elems, val, .. } => {
                 self.check_expr(val, env)?;
                 for (name, ..) in elems {

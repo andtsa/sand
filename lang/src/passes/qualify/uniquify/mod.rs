@@ -387,6 +387,16 @@ fn uniquify_stmt<'tcx>(
             })
         }
 
+        Statement::DerefAssign {
+            reference,
+            value,
+            range,
+        } => Ok(Statement::DerefAssign {
+            reference: uniquify_expr(reference, u)?,
+            value: uniquify_expr(value, u)?,
+            range: *range,
+        }),
+
         Statement::LetTuple {
             elems,
             ty,

@@ -208,7 +208,9 @@ declaration = {
     "let" ~ (let_constructor | let_tuple | borrow_binding | mut_kw? ~ (identifier | empty_identifier)) ~ (":" ~ type_)? ~ "=" ~ expression ~ ("else" ~ expression)?
 }
 
-assignment = { identifier ~ "=" ~ expression }
+// `x = e` (reseat / variable write) or `*r = e` (write-through a `&mut`). The
+// `=` disambiguates from a bare `*r` expression statement.
+assignment = { (deref_expr | identifier) ~ "=" ~ expression }
 
 // statements are the imperative elements of the language
 statement = {

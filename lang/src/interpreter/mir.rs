@@ -1,4 +1,25 @@
 //! an interpreter for the MIR
+//!
+//! ## Store model (R4)
+//!
+//! Faithful to the Calculus's `BorrowedMut` semantics (§3.2, §6.4): a mutable
+//! borrow denotes a *storage location*, not a copied value, and a write through
+//! it mutates that location observably to every alias — exactly what the LLVM
+//! backend does with `alloca` slots + `load`/`store`.
+//!
+//! We model storage as a graph of mutable **cells**. Each local owns a cell; a
+//! reference value ([`MirValue::Ref`]) is a *shared handle* to a cell. `&place`
+//! ([`RValue::Ref`]) yields the cell; a `[Deref]` projection
+//! ([`ProjElem::Deref`]) follows the handle; reads load the cell, writes store
+//! into it. Because a reference handle is passed by value into a callee's
+//! parameter cell, the callee's `*r = e` mutates the *caller's* storage —
+//! cross-frame write-through, just like a real pointer. The `Rc` is a
+//! meta-level implementation detail of the interpreter, not language-level GC:
+//! the static region/escape checker already guarantees no dangling, so the
+//! interpreter never models deallocation.
+
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use crate::compiler::context::CompileCtx;
 use crate::compiler::structure::FunRef;
@@ -12,6 +33,10 @@ use crate::lang::types::EnumRef;
 use crate::lang::types::Ty;
 use crate::lang::types::TyKind;
 
+/// A storage cell: shared, interior-mutable, possibly uninitialised. A local
+/// owns one; a [`MirValue::Ref`] is a shared handle to one.
+type Cell<'tcx> = Rc<RefCell<Option<MirValue<'tcx>>>>;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum MirValue<'tcx> {
     Int(i64),
@@ -23,6 +48,9 @@ pub enum MirValue<'tcx> {
         payload: Option<Box<MirValue<'tcx>>>,
     },
     Tuple(Vec<MirValue<'tcx>>),
+    /// A reference: a shared handle to the cell it points at. Produced by
+    /// [`RValue::Ref`], consumed by reads/writes through a `[Deref]` place.
+    Ref(Cell<'tcx>),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -59,12 +87,16 @@ impl<'tcx> MirProgram<'tcx> {
     ) -> Result<MirValue<'tcx>, MirInterpError> {
         let func = &self.functions[&fun];
 
-        // initialise locals: all unset to start
-        let mut locals: Vec<Option<MirValue<'tcx>>> = vec![None; func.locals.len()];
+        // initialise locals: one fresh, distinct cell per local, all unset.
+        let locals: Vec<Cell<'tcx>> = (0..func.locals.len())
+            .map(|_| Rc::new(RefCell::new(None)))
+            .collect();
 
-        // bind parameters
+        // bind parameters by storing the arg value into the param's cell. A
+        // `MirValue::Ref` arg shares its `Rc` into the param cell, so the callee
+        // points at the *caller's* storage (cross-frame write-through).
         for (param, val) in func.params.iter().zip(args.iter()) {
-            locals[param.local.0] = Some(val.clone());
+            *locals[param.local.0].borrow_mut() = Some(val.clone());
         }
 
         // execute blocks
@@ -73,7 +105,7 @@ impl<'tcx> MirProgram<'tcx> {
             let block = &func.blocks[current.0];
 
             for stmt in &block.statements {
-                execute_statement(stmt, &mut locals, &func.locals, self, ctx)?;
+                execute_statement(stmt, &locals, &func.locals, self, ctx)?;
             }
 
             match &block.terminator {
@@ -105,16 +137,21 @@ impl<'tcx> MirProgram<'tcx> {
 
 fn execute_statement<'tcx>(
     stmt: &Statement,
-    locals: &mut [Option<MirValue<'tcx>>],
+    locals: &[Cell<'tcx>],
     local_decls: &[LocalDecl<'tcx>],
     prog: &MirProgram<'tcx>,
     ctx: &CompileCtx<'tcx>,
 ) -> Result<(), MirInterpError> {
     match stmt {
         Statement::Assign { dst, value, .. } => {
-            let dst_ty = local_decls[dst.local.0].ty;
+            // The result type is the *place* type: each `[Deref]` strips a
+            // reference, so a write-through `*r = e` reconstructs an aggregate at
+            // the pointee type, not the reference type.
+            let dst_ty = place_ty(dst, local_decls);
             let v = eval_rvalue(value, dst_ty, locals, prog, ctx)?;
-            locals[dst.local.0] = Some(v);
+            // store into the cell the place names (a `[Deref]` follows the
+            // reference held in the local — write-through).
+            *place_cell(dst, locals)?.borrow_mut() = Some(v);
             Ok(())
         }
         Statement::Eval { value, .. } => {
@@ -126,23 +163,56 @@ fn execute_statement<'tcx>(
     }
 }
 
+/// Resolve a [`Place`] to the storage cell it names, following each `[Deref]`
+/// projection through the reference held in the cell so far.
+fn place_cell<'tcx>(place: &Place, locals: &[Cell<'tcx>]) -> Result<Cell<'tcx>, MirInterpError> {
+    let mut cell = locals[place.local.0].clone();
+    for elem in &place.projection {
+        match elem {
+            ProjElem::Deref => {
+                let target = match cell.borrow().as_ref() {
+                    Some(MirValue::Ref(target)) => target.clone(),
+                    Some(v) => internal_bug!("Deref projection on non-reference value {:?}", v),
+                    None => return Err(MirInterpError::UninitializedLocal(place.local)),
+                };
+                cell = target;
+            }
+        }
+    }
+    Ok(cell)
+}
+
+/// The `Ty` of a place after its projections (each `[Deref]` strips one
+/// reference, yielding the pointee type). Mirrors `llvm_codegen::place_ty`.
+fn place_ty<'tcx>(place: &Place, local_decls: &[LocalDecl<'tcx>]) -> Ty<'tcx> {
+    let mut ty = local_decls[place.local.0].ty;
+    for elem in &place.projection {
+        match elem {
+            ProjElem::Deref => {
+                ty = match ty.kind() {
+                    TyKind::Ref(_, t) | TyKind::RefMut(_, t) => *t,
+                    _ => internal_bug!("Deref projection on non-reference type {ty:?}"),
+                };
+            }
+        }
+    }
+    ty
+}
+
 fn eval_rvalue<'tcx>(
     rv: &RValue,
     result_ty: Ty<'tcx>,
-    locals: &mut [Option<MirValue<'tcx>>],
+    locals: &[Cell<'tcx>],
     prog: &MirProgram<'tcx>,
     ctx: &CompileCtx<'tcx>,
 ) -> Result<MirValue<'tcx>, MirInterpError> {
     match rv {
         RValue::Use(op) => eval_operand(op, locals),
 
-        // References are transparent in the interpreter (R2 is reads-only): a
-        // reference's runtime value is the value of the place it points at, and a
-        // `[Deref]` read just reads that value back (see `eval_operand`). A real
-        // store/aliasing model arrives with R3 write-through.
-        RValue::Ref(place) => locals[place.local.0]
-            .clone()
-            .ok_or(MirInterpError::UninitializedLocal(place.local)),
+        // Address-of: yield a shared handle to the cell the place names (not a
+        // copy of its value). Reads/writes through a `[Deref]` of this handle hit
+        // that same cell, so write-through is observable across aliases.
+        RValue::Ref(place) => Ok(MirValue::Ref(place_cell(place, locals)?)),
 
         RValue::BinaryOp { op, left, right } => {
             let l = eval_operand(left, locals)?;
@@ -234,7 +304,7 @@ fn eval_rvalue<'tcx>(
 
 fn eval_operand<'tcx>(
     op: &Operand,
-    locals: &[Option<MirValue<'tcx>>],
+    locals: &[Cell<'tcx>],
 ) -> Result<MirValue<'tcx>, MirInterpError> {
     match op {
         Operand::Const(c) => Ok(match c {
@@ -242,7 +312,10 @@ fn eval_operand<'tcx>(
             Constant::Bool(b) => MirValue::Bool(*b),
             Constant::Unit => MirValue::Unit,
         }),
-        Operand::Copy(place) => locals[place.local.0]
+        // Read the cell the place names. A `[Deref]` projection loads *through*
+        // the reference held in the local (the inverse of `RValue::Ref`).
+        Operand::Copy(place) => place_cell(place, locals)?
+            .borrow()
             .clone()
             .ok_or(MirInterpError::UninitializedLocal(place.local)),
     }
@@ -433,5 +506,11 @@ fn fmt_value<'tcx>(v: &MirValue<'tcx>, ctx: &CompileCtx<'tcx>) -> String {
                 .join(", ");
             format!("({inner})")
         }
+        // a reference prints as the value it points at (matches its transparent
+        // display in the typed-HIR interpreter and the `&`-erased surface).
+        MirValue::Ref(cell) => match cell.borrow().as_ref() {
+            Some(v) => format!("&{}", fmt_value(v, ctx)),
+            None => "&<uninit>".to_string(),
+        },
     }
 }

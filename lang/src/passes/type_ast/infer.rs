@@ -285,6 +285,50 @@ pub(super) fn infer_statement<'tcx>(
                 val: val_expr,
             })
         }
+        qhir::Statement::DerefAssign {
+            reference,
+            value,
+            range,
+        } => {
+            // `*reference = value` (Calculus §3.2): write-through requires a
+            // *mutable* reference; a shared `&T` deref is a read-only place.
+            let ref_expr = infer(ctx, env, reference)?;
+            let (pointee_ty, ref_region) = match ref_expr.ty.kind() {
+                TyKind::RefMut(r, t) => (*t, *r),
+                TyKind::Ref(..) => {
+                    return Err(AstTypeError::TypeError {
+                        message: format!(
+                            "cannot write through a shared reference of type {}: \
+                             write-through requires `&mut`",
+                            ctx.display_ty(ref_expr.ty)
+                        ),
+                        expected: ref_expr.ty,
+                        found: ref_expr.ty,
+                        range: *range,
+                    });
+                }
+                _ => {
+                    return Err(AstTypeError::DerefOfNonReference {
+                        ty: ref_expr.ty,
+                        range: *range,
+                    });
+                }
+            };
+            // RHS checked against the pointee type.
+            let val_expr = check(ctx, env, value, pointee_ty)?;
+            // Write-through escape (Calculus §6.3, item 11): the stored value must
+            // outlive the region the reference points into, else it would dangle.
+            let mut regions = Vec::new();
+            val_expr.ty.free_regions(&mut regions);
+            if regions.iter().any(|&r| !ctx.outlives(r, ref_region, &[])) {
+                return Err(AstTypeError::RegionEscape { range: *range });
+            }
+            Ok(typed_hir::Statement::DerefAssign {
+                reference: ref_expr,
+                value: val_expr,
+                range: *range,
+            })
+        }
         qhir::Statement::LetTuple {
             elems,
             ty: annotation,

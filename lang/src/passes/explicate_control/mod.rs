@@ -96,6 +96,12 @@ fn collect_locals<'tcx>(cx: &mut FnCx<'tcx>, expr: &th::Expr<'tcx>) {
                         collect_locals(cx, val);
                     }
                     th::Statement::Assignment { val, .. } => collect_locals(cx, val),
+                    th::Statement::DerefAssign {
+                        reference, value, ..
+                    } => {
+                        collect_locals(cx, reference);
+                        collect_locals(cx, value);
+                    }
                     th::Statement::LetTuple { elems, val, .. } => {
                         for (name, ty, _, range) in elems {
                             cx.get_or_create_local(*name, *ty, *range);

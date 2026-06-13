@@ -210,6 +210,30 @@ fn build_cfg_expr<'tcx>(
 
                         current_node = rhs_entry;
                     }
+                    Statement::DerefAssign {
+                        reference, value, ..
+                    } => {
+                        // write-through: traverse the value then the reference;
+                        // it mutates through a pointer, not a named local.
+                        let v_entry = build_cfg_expr(
+                            graph,
+                            value,
+                            module,
+                            current_node,
+                            function_entries,
+                            function_exits,
+                            Some(mutations.clone().unwrap_or_default()),
+                        );
+                        current_node = build_cfg_expr(
+                            graph,
+                            reference,
+                            module,
+                            v_entry,
+                            function_entries,
+                            function_exits,
+                            Some(mutations.clone().unwrap_or_default()),
+                        );
+                    }
                     Statement::LetTuple { elems, val, .. } => {
                         let rhs_entry = build_cfg_expr(
                             graph,

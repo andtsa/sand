@@ -174,6 +174,11 @@ impl fmt::Display for Statement<'_> {
             Statement::Assignment { name, val, .. } => {
                 write!(f, "{:?} = {}", name, val.expr)
             }
+            Statement::DerefAssign {
+                reference, value, ..
+            } => {
+                write!(f, "*{} = {}", reference.expr, value.expr)
+            }
             Statement::LetTuple { elems, ty, val, .. } => {
                 let names: Vec<String> = elems
                     .iter()
