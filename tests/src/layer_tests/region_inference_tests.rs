@@ -8,6 +8,7 @@ use lang::ir_types::typed_hir::Expression;
 use crate::common::run_hir;
 use crate::common::run_mir_as_expr;
 use crate::common::typecheck;
+use crate::common::typecheck_fails;
 
 fn run_both(src: &str) -> Expression<'static> {
     let hir = run_hir(src);
@@ -71,5 +72,29 @@ fn region_parametric_result_flows_into_a_binding() {
              def main(): Int := { let a = 5; let r = id_ref(&a); *r + 1 }"
         ),
         Expression::Int(6)
+    );
+}
+
+#[test]
+fn returning_a_call_result_over_a_local_is_rejected() {
+    // the call result's region is the `meet` of its argument regions (item 8), so
+    // a result tied to a *local* borrow names a local region and cannot be
+    // returned (Calculus §6.3, frame boundary).
+    typecheck_fails(
+        "def longest<'a>(x: &'a Int, y: &'a Int): &'a Int := if true then x else y \n \
+         def f(): &Int := { let a = 1; longest(&a, &a) } \n \
+         def main(): Int := 0",
+    );
+}
+
+#[test]
+fn returning_a_call_result_tied_to_a_parameter_is_accepted() {
+    // `wrapper` forwards a reference *parameter* through a call; the `meet`
+    // instantiates the result to the parameter's region, which outlives the call,
+    // so it is returnable (Calculus §6.3, item 8 reconciliation).
+    typecheck(
+        "def id_ref<'r>(x: &'r Int): &'r Int := x \n \
+         def wrapper<'r>(r: &'r Int): &'r Int := id_ref(r) \n \
+         def main(): Int := 0",
     );
 }

@@ -252,7 +252,7 @@ pub(super) fn infer_statement<'tcx>(
             })
         }
         qhir::Statement::Assignment { name, val, range } => {
-            let (var_ty, _kind, is_mutable, _home) =
+            let (var_ty, _kind, is_mutable, home) =
                 env.get(name)
                     .copied()
                     .ok_or_else(|| AstTypeError::UnboundVariable {
@@ -268,6 +268,17 @@ pub(super) fn infer_statement<'tcx>(
             // Use check() so that bare tags are resolved against the variable's
             // known type (e.g. `result = #gt` when result: #gt | #lt | #eq).
             let val_expr = check(ctx, env, val, var_ty)?;
+            // Reseat-escape (Calculus §6.3, item 11): the new value must live at
+            // least as long as the variable it is assigned into — re-pointing an
+            // *outer* reference at an *inner*-scope borrow would dangle, and no
+            // scope *result* crosses a boundary to trigger the escape check, so it
+            // is caught here: every free region of the RHS must outlive the
+            // variable's home region.
+            let mut regions = Vec::new();
+            val_expr.ty.free_regions(&mut regions);
+            if regions.iter().any(|&r| !ctx.outlives(r, home, &[])) {
+                return Err(AstTypeError::RegionEscape { range: *range });
+            }
             Ok(typed_hir::Statement::Assignment {
                 name: *name,
                 range: *range,
@@ -698,11 +709,12 @@ pub(super) fn infer<'tcx>(
             let raw_expected: Vec<Ty<'tcx>> = fun_sig.args.iter().map(|p| p.1).collect();
             let raw_ret = fun_sig.ret_ty;
             // Region inference: a callee's reference regions are inferred at the
-            // call site, so match arguments and form the result region-blind —
-            // `f<'r>(x: &'r T)` becomes callable with any borrow.
+            // call site, so arguments match region-*blind* (`f<'r>(x: &'r T)` is
+            // callable with any borrow); the *result* region is the `meet` of the
+            // argument regions (Calculus §6.3, item 8), stamped onto the return
+            // type once the arguments are typed.
             let expected_tys: Vec<Ty<'tcx>> =
                 raw_expected.iter().map(|t| ctx.region_erase(*t)).collect();
-            let ret_ty = ctx.region_erase(raw_ret);
 
             if args.len() != expected_tys.len() {
                 // Arity mismatch: infer args just for the error message.
@@ -736,6 +748,13 @@ pub(super) fn infer<'tcx>(
                     .zip(&expected_tys)
                     .map(|(arg, &expected_ty)| check(ctx, env, arg, expected_ty))
                     .collect::<Result<Vec<_>, _>>()?;
+                // result region = meet of the argument regions (item 8).
+                let mut arg_regions = Vec::new();
+                for a in &arg_exprs {
+                    a.ty.free_regions(&mut arg_regions);
+                }
+                let meet = ctx.region_meet(&arg_regions, &[]);
+                let ret_ty = ctx.region_fill(raw_ret, meet);
                 return Ok(typed_hir::Expr {
                     expr: typed_hir::Expression::Call {
                         fn_name: *fn_name,
@@ -777,9 +796,15 @@ pub(super) fn infer<'tcx>(
                     })?;
                 }
             }
-            // substitute the solved type parameters into the (already
-            // region-erased) return type.
-            let ret_ty = subst(ctx, ret_ty, &mapping);
+            // result region = meet of the argument regions (item 8), stamped onto
+            // the return type, then the solved type parameters substituted in.
+            let mut arg_regions = Vec::new();
+            for a in &arg_exprs {
+                a.ty.free_regions(&mut arg_regions);
+            }
+            let meet = ctx.region_meet(&arg_regions, &[]);
+            let filled_ret = ctx.region_fill(raw_ret, meet);
+            let ret_ty = subst(ctx, filled_ret, &mapping);
 
             Ok(typed_hir::Expr {
                 expr: typed_hir::Expression::Call {
