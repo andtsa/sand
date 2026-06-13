@@ -1372,8 +1372,9 @@ programs are now rejected (their tests flip). Implements NORMATIVE items 1–12:
   `borrows` map already has the data).
 - **Tests / flips**: all of item 7's consequences (owned/primitive return
   accepted, `&'a`-parameter return accepted, `&local`/`&by_value_param` return
-  rejected, `if c then &x else &y` return rejected, returned tuple/enum holding a
-  local borrow rejected); `longest`/`wrapper` `meet` behaviour; **move-while-
+  rejected, `if c then &x else &y` return rejected, returned *tuple* holding a
+  local borrow rejected — *enum/ADT* payloads are deferred to R5, not R1);
+  `longest`/`wrapper` `meet` behaviour; **move-while-
   borrowed rejected** (item 12); **outer-reference reseating rejected** (item 11
   example) and the symmetric `*pmut = &local` write-through-into-outer case.
   Step 8b/9 tests on the *old lenient* rule flip:
@@ -1439,6 +1440,149 @@ pointer runtime.
   end-to-end `examples/*.sand` that mutates through a reference and exits with the
   mutated value.
 
+#### Phase R4 — interpreter store model ✅ (done)
+
+Both interpreters model storage as a graph of mutable cells (`Rc<RefCell<…>>`); a
+reference value is a shared handle to a cell, so `*r = e` is observable across
+aliases and across calls (faithful to §3.2/§6.4). TypedHIR gained a dedicated
+runtime `Value` type with a boundary `Value → Expression` conversion. See
+`interpreter/{mir,typed_hir}.rs`, `mut_borrow_tests` R4 cases.
+
+**Soundness follow-ons ✅ (done, post-R1):** the `if`/`match`-join escape gap
+(`join_region_ty` region meet), call-site region inference + `where 'a >= 's`
+checking (`infer_region_subst` / `region_subst_ty` / `instantiate_call_regions`,
+`outlives` depth generalisation), and the *tuple* case of escape-via-data
+(check-mode `Tuple` now carries real element regions).
+
+#### Phase R5 — region-parameterized ADTs (close escape-via-data for ADTs)
+
+**The hole.** A reference stored in an ADT payload is *region-opaque*:
+`TyKind::Enum`/`App` carry no region for a borrow inside the payload (`App` holds
+only type arguments; the `&` lives in the `EnumDef`), so `freeRegions` finds
+nothing and `def f(): Holder := { let y = 5; Holder#H(&y) }` is wrongly accepted —
+it returns a dangling reference. (R1's test list over-claimed this as closed; it
+was only ever closed for *tuples*, and only after the check-mode `Tuple` fix.)
+
+**The fix (approach A, Rust's model).** A borrow inside an ADT must be tied to a
+**region parameter of that type**, and the parameter is threaded into the type at
+instantiation (`Holder<'a>`), so the lifetime is part of the type and therefore
+part of every *signature* — the contract a caller reasons from without seeing the
+body (the modularity property our call-site region inference already relies on).
+Rust requires this (`struct Holder<'a> { x: &'a i32 }`) for exactly these reasons:
+complete/modular signatures, multiple independent lifetimes, composition through
+generics, and variance. A value-level "meet region" (approach B) is unsound across
+a function boundary unless the region is in the signature anyway, at which point it
+is a strictly weaker (one-lifetime, non-composing) A — so we do A.
+
+**Soundness invariant.** After R5, `freeRegions(T)` for any ADT type `T` exposes
+every region a value of `T` may borrow from; the existing block + function-return
+escape checks then catch an ADT-of-local-borrow exactly as they do a bare `&local`.
+
+**Representation.** Extend the instantiation node with a region-argument slice:
+`TyKind::App(EnumRef, &'tcx [Ty], &'tcx [Region])`. A type constructor with *any*
+parameter (type or region) is represented as `App` when used (either slice may be
+empty); `TyKind::Enum` remains only for fully non-parametric enums. The
+`app_interner` key gains the region args, so `Holder<'a>` and `Holder<'b>` are
+distinct interned types (distinct `freeRegions`).
+
+**Use-site syntax + the lifetimes-first convention.** Extend `type_application` to
+accept lifetime arguments interleaved with type arguments, **lifetimes first**
+(as in Rust): `Holder<'a>`, `Pair<'a, 'b>`, `Both<'a, Int>`. Declaration parameter
+lists already allow `<'a, T>`; enforce lifetimes-before-types at *both* declaration
+and use so the positional mapping of args→params is unambiguous. `build_type`
+routes each arg to the region- or type-arg list and arity-checks both against the
+enum's `region_params` / `type_params`.
+
+**Declaration-time lifetime requirement.** During payload resolution, a reference
+in a payload must name a declared region parameter of the enum (or `'static`); an
+elided/`anon` region is an error (new `AstError::PayloadBorrowNeedsLifetime`).
+Check by walking the resolved payload's `freeRegions`: each must be one of the
+enum's region-param vars or `Static`. (Breaks the lone existing case
+`type Holder<T> = H(&T)` → update to `type Holder<'r, T> = H(&'r T)`.)
+
+**Constructor region inference.** Typing `Holder#H(e)` infers the enum's region
+params by unifying the *declared* payload type (`&'r Int`, `'r` = the enum's region
+param) against the *actual* payload type (`&'actual Int`) — reusing
+`collect_region_bindings` with `solve` = the enum's region params — and builds
+`App(er, type_args, [region_args])`. Unbound (phantom) region params default to the
+call-site scope (as `infer_region_subst` already does). Type-arg inference is
+unchanged.
+
+**`match` region substitution.** For a scrutinee `App(er, tyargs, [r…])`,
+`enum_instantiation` additionally builds a region map (enum region-param var →
+region arg, positionally) and applies it (via `region_subst_ty`) to each variant
+payload type, so a binding `H(x)` gets `x : &'r_actual Int`. This closes the
+*extraction* sub-hole (match a borrow out of an ADT and return it).
+
+**Region-machinery extension (the mechanical ripple — every `TyKind::App` site).**
+- `free_regions(App)`: recurse type args (existing) **and** push/recurse region
+  args → ADT regions become visible to the escape check.
+- `region_erase` / `region_fill` / `region_subst_ty` (`compile.rs`): also map the
+  region args (canonicalise / fill / substitute), mirroring their `Ref` arms.
+- `collect_region_bindings`: pair the region args of a declared `Holder<'a>`
+  parameter with the actual call argument's region args → call-site region
+  inference works for ADT-typed parameters (modular cross-function use).
+- `eq_modulo_regions(App)`: compare type args modulo regions and **ignore** the
+  region args (region-blind at check boundaries, like `Ref`), so regions are
+  inferred at call sites, not matched structurally.
+- `mono_ty(App)` (`passes/mono.rs`): **drop** the region args (specialise on type
+  args only; regions are compile-time, already erased by mono).
+- `subst` / `unify` (`generics.rs`), `has_param`, `compatible`, `Display`, and the
+  `App` arms in `ir_types/display/*` — thread the third field (Display shows
+  `Holder<'a, Int>`).
+
+**Edge cases (no open holes):**
+- *Multiple independent lifetimes* (`Pair<'a,'b>`): a list of region args, tracked
+  separately — A's key advantage over the meet collapse.
+- *Mixed type+region params* (`Both<'a, T>`): lifetimes-first positional mapping.
+- *Nested ADTs* (`Outer<'a> = O(Holder<'a>)`): region flows through the inner
+  `App`'s region args; `freeRegions` recurses.
+- *`'static` payload* (`H(&'static Int)`): allowed; region arg `Static` (depth 0,
+  never escapes).
+- *Phantom region param*: unbound at construction → call-site default (conservative).
+- *`&'a mut` payload*: handled like `&'a`; **true region variance** (covariant
+  `&`, invariant `&mut` on ADT region args) is **deferred** with the Step 13
+  variance follow-up — sound today because there is no region-subtyping coercion
+  (boundaries are region-blind + inferred), so no unsound widening exists.
+- *Bare use of a region-parametric enum* (`Holder` with no args): arity error —
+  region args are required wherever type args are (preserves signature modularity);
+  no silent elision into an untracked region.
+- *Recursive ADTs holding borrows* (`List<'a> = Cons(&'a Int, List<'a>)`): the
+  type-level region threading works here, but **constructing/representing**
+  recursive values is gated by the separate `Heaped` work (recursive types need a
+  `Heaped` impl, Memory Step C) — so this composes later, no new hole.
+- *Anonymous tag unions* (`#a | #b`): no region params; unaffected.
+- *`T @ 'r` ascription on an ADT*: orthogonal; the `Region` wrapper around an `App`
+  still works and `freeRegions` sees both.
+
+**Sub-phasing (each ends green):**
+- **R5a — representation.** Add the (initially always-empty) region-arg slice to
+  `App`; update every match site + interner + region machinery to thread it.
+  Behaviour-preserving (all slices empty). Isolates the big mechanical ripple.
+- **R5b — use-site syntax.** Grammar + `build_type` for `Holder<'a>`
+  (lifetimes-first), producing `App` with region args; arity-check against
+  `region_params`. Region-parametric ADTs become expressible in signatures.
+- **R5c — declaration check + constructor inference.** Require payload borrows to
+  name a region param (reject elided); infer region args at constructor sites. **The
+  hole closes here** — `freeRegions` now exposes ADT regions, so returning an
+  ADT-of-local-borrow is rejected. Update the `Holder<T>` test.
+- **R5d — `match` region substitution.** Payload bindings get the instantiated
+  region; closes the extraction sub-hole.
+- **R5e — call-site inference for ADT params + verification.** Confirm
+  `collect_region_bindings` over `App` region args gives modular cross-function
+  behaviour; full test sweep.
+
+**Test plan.** Reject: return an ADT (enum *and* nested) holding a borrow of a
+local; match a local borrow out and return it. Accept: an ADT holding a *parameter*
+borrow returned (`def make<'a>(x: &'a Int): Holder<'a> := Holder#H(x)`); an
+ADT-of-`'static`-borrow; an ADT-of-local-borrow used only in-scope; `Pair<'a,'b>`
+keeping two lifetimes distinct (extract the `'a` field, use past `'b`). Plus a
+`where`-clause-on-ADT-region case for the call-site path.
+
+**Out of scope (R5):** true region variance on ADT params (Step 13 follow-up);
+region elision at ADT use sites (always explicit for now); recursive ADT *values*
+(gated by `Heaped`, Memory C).
+
 **Out of scope**: NLL (non-lexical lifetimes), reborrow-through-deref return,
 field places (`s.f = e`), `Drop` on overwrite (no `Drop` yet), two-phase borrows.
 
@@ -1448,17 +1592,29 @@ The borrow/region examples (`borrowing`, `regions`, `variance`, `operators`)
 predate the usability pass; `references.sand` is the post-pass showcase. The
 remaining gaps:
 
-- **Escape check through `if`/`match` joins** and **escape via data** (a
-  returned tuple/enum holding a local borrow) are **no longer open gaps** — both
-  are closed by the Reference-Representation Step's type-based `freeRegions`
-  escape check (NORMATIVE item 6–7). Until that step lands they remain Step 8b
-  kind-lattice limitations; the `typecheck_fails` cases for
-  `def f(): &Int := if c then &y else &z` and `def f(): (&Int, Int) := (&y, 0)`
-  are listed in that step's test plan.
+- **Escape check through `if`/`match` joins** — ✅ **closed** (`join_region_ty`
+  region meet; `region_escape_tests::escape_through_an_if_branch_is_rejected` /
+  `escape_through_a_match_arm_is_rejected`).
+- **Escape via data** (a returned aggregate holding a local borrow) — **partially
+  closed.** *Tuples* are now caught: the `freeRegions` check recurses tuple types
+  and the check-mode `Tuple` arm carries the elements' real regions
+  (`region_escape_tests::returning_a_tuple_holding_a_local_borrow_is_rejected`).
+  ⚠ **`enum`/ADT payloads are still an OPEN soundness hole:** a reference stored
+  in an ADT payload (`type Holder = H(&Int)`, `Holder#H(&local)`) is *region-
+  opaque* — `TyKind::Enum`/`App` carry no region for a borrow inside the payload
+  (`App` holds only type arguments; the `&` lives in the `EnumDef`), so
+  `freeRegions` finds nothing and the escape is not caught. Closing this needs
+  **region-parameterized ADTs** (region arguments threaded into instantiations +
+  `freeRegions` recursion through payloads), a real unimplemented feature — see
+  the design note below. Until then, returning an ADT that holds a borrow of a
+  local is wrongly accepted.
 - **Variance in consumer positions** — already tracked in Step 13's
   "Variance follow-up": function-argument (contravariant) positions enable the
   `-a` accept / `+a` reject and nested-composition tests Step 5 could only
   scaffold.
+- **Write-through (`*r = e`) / assignment through a `&mut`** — ✅ **closed** by R3
+  (typecheck) + R4 (observable in both interpreters): `mut_borrow_tests`
+  write-through cases and `examples/write_through.sand`.
 
 ---
 
