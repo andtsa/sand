@@ -98,3 +98,54 @@ fn returning_a_call_result_tied_to_a_parameter_is_accepted() {
          def main(): Int := 0",
     );
 }
+
+// ── `where 'a >= 'b` checked at call sites (Calculus §1.1, §8.10)
+// ─────────────
+//
+// The call's region substitution maps each callee lifetime parameter to the
+// actual argument region; the callee's `where` clauses are then checked under
+// it, using the *enclosing* function's own `where` clauses as assumptions.
+
+#[test]
+fn satisfied_where_clause_param_outlives_local_is_accepted() {
+    // `pick` needs `'a >= 'b`; the call binds 'a to a caller lifetime parameter
+    // and 'b to a local — a parameter outlives a local, so the constraint holds.
+    typecheck(
+        "def pick<'a, 'b>(x: &'a Int, y: &'b Int): &'a Int where 'a >= 'b := x \n \
+         def f<'o>(o: &'o Int): &'o Int := { let inner = 2; pick(o, &inner) } \n \
+         def main(): Int := 0",
+    );
+}
+
+#[test]
+fn violated_where_clause_is_rejected() {
+    // `evil` is sound only under `'b >= 'a` (it returns the 'b borrow as 'a). The
+    // call binds 'b to a local and 'a to a parameter, so `'b >= 'a` does not hold.
+    typecheck_fails(
+        "def evil<'a, 'b>(x: &'a Int, y: &'b Int): &'a Int where 'b >= 'a := y \n \
+         def f<'o>(o: &'o Int): &'o Int := { let inner = 2; evil(o, &inner) } \n \
+         def main(): Int := 0",
+    );
+}
+
+#[test]
+fn caller_where_clause_discharges_callee_constraint() {
+    // `fwd` cannot relate 'p and 'q by nesting, but its own `where 'p >= 'q` is an
+    // assumption that discharges pick's `'a >= 'b` once 'a↦'p, 'b↦'q.
+    typecheck(
+        "def pick<'a, 'b>(x: &'a Int, y: &'b Int): &'a Int where 'a >= 'b := x \n \
+         def fwd<'p, 'q>(x: &'p Int, y: &'q Int): &'p Int where 'p >= 'q := pick(x, y) \n \
+         def main(): Int := 0",
+    );
+}
+
+#[test]
+fn missing_caller_assumption_rejects_callee_constraint() {
+    // without `fwd`'s `where`, 'p and 'q are incomparable, so pick's `'a >= 'b`
+    // cannot be discharged at the call site.
+    typecheck_fails(
+        "def pick<'a, 'b>(x: &'a Int, y: &'b Int): &'a Int where 'a >= 'b := x \n \
+         def fwd<'p, 'q>(x: &'p Int, y: &'q Int): &'p Int := pick(x, y) \n \
+         def main(): Int := 0",
+    );
+}

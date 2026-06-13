@@ -163,6 +163,11 @@ pub struct CompileCtx<'tcx> {
     /// inner blocks). Regions absent here: region parameters, `'static`, the
     /// elided-borrow region, are treated as depth 0: outermost, never escaping
     region_depths: Map<RegionVar, usize>,
+    /// The `where 'a >= 's` constraints of the function currently being
+    /// type-checked. Used as *assumptions* when checking a callee's `where`
+    /// clauses at a call site (a generic caller can discharge a callee
+    /// constraint with its own). Set by `infer_function`, restored on exit.
+    cur_where_constraints: Vec<RegionConstraint>,
 
     // type parameters
     /// Number of type parameters allocated so far.
@@ -309,6 +314,7 @@ impl<'tcx> CompileCtx<'tcx> {
             anon_region_var: None,
             region_scope_stack: Vec::new(),
             region_depths: Default::default(),
+            cur_where_constraints: Vec::new(),
             type_param_count: 0,
             type_param_names: Default::default(),
             cur_type_params: Default::default(),
@@ -543,6 +549,108 @@ impl<'tcx> CompileCtx<'tcx> {
         result
     }
 
+    /// Infer the region substitution for a call: map each callee region
+    /// parameter (and the shared elided/anon region) to the **meet** of the
+    /// actual argument regions it aligns with. This is the region analogue of
+    /// type-parameter [`unify`](crate::passes::type_ast::generics::unify) — the
+    /// declared parameter types are walked in parallel with the actual argument
+    /// types and each solved region collects the actual regions in its
+    /// position; a region bound from several arguments meets them (so the
+    /// result outlives none of them). A solved region with no binding
+    /// defaults to the call-site scope (the safe, shortest region). Regions
+    /// are *solved* here, not constrained; the callee's `where` clauses are
+    /// checked separately.
+    ///
+    /// The elided region is included among the solved variables so that a
+    /// non-region-parametric forwarder (`def id(x: &Int): &Int := x`) still
+    /// ties its result to the actual argument region (preserving the escape
+    /// check).
+    pub fn infer_region_subst(
+        &self,
+        decls: &[Ty<'tcx>],
+        actuals: &[Ty<'tcx>],
+        region_params: &[RegionParam],
+    ) -> Map<RegionVar, Region> {
+        // the region variables we solve for: the declared params + the shared
+        // elided-borrow region.
+        let mut solve: Set<RegionVar> = region_params.iter().map(|p| p.region).collect();
+        if let Some(rv) = self.anon_region_var {
+            solve.insert(rv);
+        }
+
+        let mut collected: Map<RegionVar, Vec<Region>> = Map::new();
+        for (d, a) in decls.iter().zip(actuals) {
+            collect_region_bindings(*d, *a, &solve, &mut collected);
+        }
+
+        let call_site = self.current_scope_region();
+        let mut subst: Map<RegionVar, Region> = Map::new();
+        for rv in &solve {
+            let region = match collected.get(rv) {
+                Some(regions) => self.region_meet(regions, &[]),
+                None => call_site, // unbound → conservative shortest region
+            };
+            subst.insert(*rv, region);
+        }
+        subst
+    }
+
+    /// Replace every region in `ty` that the call's region substitution
+    /// ([`infer_region_subst`](Self::infer_region_subst)) solved, recursing
+    /// through composites. Like [`region_fill`](Self::region_fill) but maps
+    /// each region individually rather than collapsing all to one;
+    /// `'static` and unmapped regions are preserved.
+    pub fn region_subst_ty(&mut self, ty: Ty<'tcx>, subst: &Map<RegionVar, Region>) -> Ty<'tcx> {
+        match ty.kind() {
+            TyKind::Tuple(elems) => {
+                let elems: Vec<Ty<'tcx>> = elems
+                    .iter()
+                    .map(|e| self.region_subst_ty(*e, subst))
+                    .collect();
+                self.intern_tuple(elems)
+            }
+            TyKind::App(er, args) => {
+                let er = *er;
+                let args: Vec<Ty<'tcx>> = args
+                    .iter()
+                    .map(|a| self.region_subst_ty(*a, subst))
+                    .collect();
+                self.intern_app(er, args)
+            }
+            TyKind::Region(inner, r) => {
+                let rr = apply_region_subst(*r, subst);
+                let inner = self.region_subst_ty(*inner, subst);
+                self.region_ty(inner, rr)
+            }
+            TyKind::Ref(r, inner) => {
+                let rr = apply_region_subst(*r, subst);
+                let inner = self.region_subst_ty(*inner, subst);
+                self.ref_ty(rr, inner)
+            }
+            TyKind::RefMut(r, inner) => {
+                let rr = apply_region_subst(*r, subst);
+                let inner = self.region_subst_ty(*inner, subst);
+                self.ref_mut_ty(rr, inner)
+            }
+            _ => ty,
+        }
+    }
+
+    /// Enter a function's `where` constraints as the current outlives
+    /// assumptions (used when checking callee `where` clauses at call sites),
+    /// returning the previous set to restore on exit.
+    pub fn set_where_assumptions(
+        &mut self,
+        constraints: Vec<RegionConstraint>,
+    ) -> Vec<RegionConstraint> {
+        std::mem::replace(&mut self.cur_where_constraints, constraints)
+    }
+
+    /// The outlives assumptions of the function currently being checked.
+    pub fn where_assumptions(&self) -> &[RegionConstraint] {
+        &self.cur_where_constraints
+    }
+
     /// The shared anonymous region used for elided borrows (`&e`, `&T` with no
     /// explicit lifetime). All elided borrows share one region for now, so that
     /// an elided `&T` type and an elided `&e` value compare equal. Per-borrow
@@ -622,11 +730,13 @@ impl<'tcx> CompileCtx<'tcx> {
         if longer == shorter || longer == Region::Static {
             return true;
         }
-        // scope nesting: a shallower lexical scope outlives a deeper one.
-        if self.is_scope_region(longer)
-            && self.is_scope_region(shorter)
-            && self.region_depth(longer) < self.region_depth(shorter)
-        {
+        // Lexical nesting: a shallower region outlives a deeper one. Depth is the
+        // nesting level, with region parameters, the elided region, and `'static`
+        // all at depth 0 (outermost) — so a caller lifetime or the function frame
+        // outlives every inner block. Conversely nothing is concluded to outlive
+        // a depth-0 region here (it stays conservative: only equality, `'static`,
+        // or an explicit assumption can).
+        if self.region_depth(longer) < self.region_depth(shorter) {
             return true;
         }
         // transitive closure over the assumed `where` edges.
@@ -1151,5 +1261,60 @@ impl std::fmt::Display for TyDisplay<'_, '_> {
             }
             _ => write!(f, "{}", self.ty),
         }
+    }
+}
+
+/// Apply a call's region substitution to a single region: a solved region
+/// variable is replaced by its inferred region; `'static` and unsolved regions
+/// are left as-is.
+fn apply_region_subst(r: Region, subst: &Map<RegionVar, Region>) -> Region {
+    match r {
+        Region::Var(rv) => subst.get(&rv).copied().unwrap_or(r),
+        Region::Static => Region::Static,
+    }
+}
+
+/// Walk a declared parameter type against an actual argument type in parallel,
+/// recording — for every region position whose declared region is one of the
+/// `solve` variables — the actual region found there. The accumulated
+/// candidates are later met per variable (see
+/// [`CompileCtx::infer_region_subst`]). Region positions whose declared region
+/// is not solved (e.g. `'static`) are ignored; structural mismatches simply
+/// stop the recursion (the type checker has already verified the shapes agree
+/// modulo regions).
+fn collect_region_bindings(
+    decl: Ty<'_>,
+    actual: Ty<'_>,
+    solve: &Set<RegionVar>,
+    out: &mut Map<RegionVar, Vec<Region>>,
+) {
+    let mut bind = |dr: Region, ar: Region| {
+        if let Region::Var(rv) = dr
+            && solve.contains(&rv)
+        {
+            out.entry(rv).or_default().push(ar);
+        }
+    };
+    match (decl.kind(), actual.kind()) {
+        (TyKind::Ref(dr, di), TyKind::Ref(ar, ai))
+        | (TyKind::RefMut(dr, di), TyKind::RefMut(ar, ai)) => {
+            bind(*dr, *ar);
+            collect_region_bindings(*di, *ai, solve, out);
+        }
+        (TyKind::Region(di, dr), TyKind::Region(ai, ar)) => {
+            bind(*dr, *ar);
+            collect_region_bindings(*di, *ai, solve, out);
+        }
+        (TyKind::Tuple(ds), TyKind::Tuple(as_)) if ds.len() == as_.len() => {
+            for (d, a) in ds.iter().zip(*as_) {
+                collect_region_bindings(*d, *a, solve, out);
+            }
+        }
+        (TyKind::App(_, ds), TyKind::App(_, as_)) if ds.len() == as_.len() => {
+            for (d, a) in ds.iter().zip(*as_) {
+                collect_region_bindings(*d, *a, solve, out);
+            }
+        }
+        _ => {}
     }
 }

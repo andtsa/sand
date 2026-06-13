@@ -284,8 +284,15 @@ impl<'tcx> Program<'tcx> {
                 })?;
             for function in um.functions {
                 let qf = qualify_function(&mut q, &um.module_name, function)?;
-                q.compile_ctx
-                    .set_fun_sig(qf.name, FunSig::with(&qf.parameters, qf.ret_type));
+                q.compile_ctx.set_fun_sig(
+                    qf.name,
+                    FunSig::with(
+                        &qf.parameters,
+                        qf.ret_type,
+                        qf.region_params.clone(),
+                        qf.where_constraints.clone(),
+                    ),
+                );
                 functions.insert(qf.name, qf);
             }
         }

@@ -493,6 +493,26 @@ pub fn type_error_to_diagnostic<'tcx>(
             );
         }
 
+        RegionConstraintUnsatisfied {
+            longer,
+            shorter,
+            range,
+        } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    message: format!(
+                        "call does not satisfy the callee's lifetime constraint `'{longer} >= '{shorter}`"
+                    ),
+                    range: *range,
+                    related: vec![],
+                    file: Some(file),
+                    ..Default::default()
+                },
+            );
+        }
+
         MutBorrowOfImmutable { name, range } => {
             diagnostics.add_one(
                 file,
