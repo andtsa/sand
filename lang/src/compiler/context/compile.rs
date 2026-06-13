@@ -526,9 +526,13 @@ impl<'tcx> CompileCtx<'tcx> {
     }
 
     /// Whether `r` is a real lexical scope region (allocated by
-    /// [`Self::enter_region_scope`]) as opposed to a region parameter, the
-    /// elided-borrow region, or `'static`.
-    fn is_scope_region(&self, r: Region) -> bool {
+    /// [`Self::enter_region_scope`]) — i.e. a *local* region (the function
+    /// frame or a block) — as opposed to a *region parameter*, the
+    /// elided-borrow region, or `'static` (all of which outlive the frame).
+    /// Used by the function-return escape check: only non-scope (outer)
+    /// regions may be named by a returned value's type (Calculus §6.3,
+    /// frame boundary).
+    pub fn is_scope_region(&self, r: Region) -> bool {
         matches!(r, Region::Var(rv) if self.region_depths.contains_key(&rv))
     }
 

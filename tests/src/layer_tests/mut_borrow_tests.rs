@@ -119,8 +119,11 @@ fn returning_a_mut_borrow_of_a_local_is_rejected() {
 }
 
 #[test]
-fn returning_a_mut_borrow_of_a_parameter_is_accepted() {
-    typecheck("def f(mut x: Int): &mut Int := { &mut x } \n def main(): Int := 0");
+fn returning_a_mut_borrow_of_a_by_value_parameter_is_rejected() {
+    // a by-value parameter lives in the frame, so a `&mut` of it would dangle
+    // when the call returns (Calculus §6.3, frame boundary). A `&'a mut` tied to
+    // a lifetime parameter is returnable.
+    typecheck_fails("def f(mut x: Int): &mut Int := { &mut x } \n def main(): Int := 0");
 }
 
 // ── Step 9b: the exclusivity invariant

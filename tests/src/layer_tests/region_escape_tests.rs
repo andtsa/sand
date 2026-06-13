@@ -34,23 +34,25 @@ fn returning_a_borrow_from_a_nested_block_is_rejected() {
     typecheck_fails("def f(): &Int := { let y = 5; { &y } } \n def main(): Int := 0");
 }
 
-// ── borrows that do not outlive their source are accepted
-// ─────────────────────
+// ── return-escape: a borrow of a by-value parameter or a local is rejected at
+//    the frame boundary; a borrow tied to a *lifetime parameter* (`&'a`) is
+//    returnable (see `region_inference_tests::id_ref` / `longest`) ────────────
 
 #[test]
-fn returning_a_borrow_of_a_parameter_is_accepted() {
-    // a parameter outlives the call, so a borrow of it may be returned.
-    typecheck("def f(x: Int): &Int := { &x } \n def main(): Int := 0");
+fn returning_a_borrow_of_a_by_value_parameter_is_rejected() {
+    // a by-value parameter lives in the frame and is dropped when the call
+    // returns, so a borrow of it would dangle (Calculus §6.3, frame boundary).
+    typecheck_fails("def f(x: Int): &Int := { &x } \n def main(): Int := 0");
 }
 
 #[test]
-fn returning_a_borrow_of_a_parameter_without_a_block_is_accepted() {
-    typecheck("def f(x: Int): &Int := &x \n def main(): Int := 0");
+fn returning_a_borrow_of_a_by_value_parameter_without_a_block_is_rejected() {
+    typecheck_fails("def f(x: Int): &Int := &x \n def main(): Int := 0");
 }
 
 #[test]
-fn returning_a_let_bound_borrow_of_a_parameter_is_accepted() {
-    typecheck("def f(x: Int): &Int := { let r = &x; r } \n def main(): Int := 0");
+fn returning_a_let_bound_borrow_of_a_by_value_parameter_is_rejected() {
+    typecheck_fails("def f(x: Int): &Int := { let r = &x; r } \n def main(): Int := 0");
 }
 
 #[test]
