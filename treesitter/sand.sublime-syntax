@@ -1,0 +1,449 @@
+%YAML 1.2
+---
+name: Sand
+file_extensions: [sand]
+scope: source.sand
+version: 2
+
+variables:
+  ident: '[A-Za-z_][A-Za-z_0-9]*'
+  # lookahead used to avoid matching `:=` or `::` as a type annotation colon
+  colon_ann: ':(?![:=])'
+
+contexts:
+
+  # ── prototype (auto-included everywhere) ──────────────────────────────────
+
+  prototype:
+    - include: comments
+
+  main:
+    - include: module-decl
+    - include: type-alias
+    - include: function-def
+    - include: statements
+
+  # ── comments ──────────────────────────────────────────────────────────────
+
+  comments:
+    - match: '//'
+      scope: punctuation.definition.comment.line.sand
+      push: line-comment
+    - match: '/\*'
+      scope: punctuation.definition.comment.block.begin.sand
+      push: block-comment
+
+  line-comment:
+    - meta_scope: comment.line.double-slash.sand
+    - match: $
+      pop: true
+
+  block-comment:
+    - meta_scope: comment.block.sand
+    - match: '\*/'
+      scope: punctuation.definition.comment.block.end.sand
+      pop: true
+    - match: '/\*'
+      push: block-comment  # nested /* … */
+
+  # ── top-level: module ─────────────────────────────────────────────────────
+
+  module-decl:
+    - match: '\bmodule\b'
+      scope: keyword.declaration.namespace.sand
+      push:
+        - match: '{{ident}}'
+          scope: entity.name.namespace.sand
+        - match: ';'
+          scope: punctuation.terminator.sand
+          pop: true
+        - match: '(?=\S)'
+          pop: true
+
+  # ── top-level: type alias ─────────────────────────────────────────────────
+
+  type-alias:
+    - match: '\btype\b'
+      scope: keyword.declaration.sand
+      push: type-alias-head
+
+  type-alias-head:
+    - match: '{{ident}}'
+      scope: entity.name.type.sand
+      set: type-alias-after-name
+    - match: '(?=\S)'
+      pop: true
+
+  type-alias-after-name:
+    - include: generic-params
+    - match: '='
+      scope: keyword.operator.assignment.sand
+      set: type-alias-body
+    - match: '(?=\S)'
+      pop: true
+
+  type-alias-body:
+    - match: '({{ident}})(\()'
+      captures:
+        1: entity.name.tag.sand
+        2: punctuation.section.parens.begin.sand
+      push:
+        - match: '\)'
+          scope: punctuation.section.parens.end.sand
+          pop: true
+        - include: type-expr
+    - match: '{{ident}}'
+      scope: entity.name.tag.sand
+    - match: '\|'
+      scope: punctuation.separator.sand
+    - match: ';'
+      scope: punctuation.terminator.sand
+      pop: true
+    - match: '(?=\bdef\b|\bmodule\b|\btype\b)'
+      pop: true
+
+  # ── top-level: function definition ────────────────────────────────────────
+
+  function-def:
+    - match: '\bdef\b'
+      scope: keyword.declaration.function.sand
+      push:
+        - match: '{{ident}}'
+          scope: entity.name.function.sand
+          set: function-signature
+        - match: '(?=\S)'
+          pop: true
+
+  function-signature:
+    - include: generic-params
+    - include: where-clause
+    - match: '\('
+      scope: punctuation.section.parameters.begin.sand
+      push: parameter-list
+    - match: '{{colon_ann}}'
+      scope: punctuation.separator.annotation.sand
+      push: type-expr
+    - match: ':='
+      scope: keyword.operator.assignment.sand
+      set: function-body
+    - match: '(?=\bdef\b|\bmodule\b|\btype\b)'
+      pop: true
+
+  parameter-list:
+    - match: '\)'
+      scope: punctuation.section.parameters.end.sand
+      pop: true
+    - match: '\bmut\b'
+      scope: storage.modifier.sand
+    - match: '_(?!\w)'
+      scope: variable.language.wildcard.sand
+    - match: '{{ident}}(?=\s*{{colon_ann}})'
+      scope: variable.parameter.sand
+    - match: '{{colon_ann}}'
+      scope: punctuation.separator.annotation.sand
+      push: type-expr
+    - match: ','
+      scope: punctuation.separator.sand
+
+  function-body:
+    - match: '(?=\bdef\b|\bmodule\b|\btype\b)'
+      pop: true
+    - include: statements
+
+  # ── generic parameters & where clauses ────────────────────────────────────
+
+  generic-params:
+    - match: '<'
+      scope: punctuation.definition.generic.begin.sand
+      push: generic-params-inner
+
+  generic-params-inner:
+    - meta_scope: meta.generic.sand
+    - match: '>'
+      scope: punctuation.definition.generic.end.sand
+      pop: true
+    - match: "'{{ident}}"
+      scope: variable.other.lifetime.sand
+    - match: '[+-]'
+      scope: keyword.operator.variance.sand
+    - match: '\b(?:Owned|Never)\b'
+      scope: support.type.kind.sand
+    - match: '{{ident}}'
+      scope: variable.other.type-parameter.sand
+    - match: '{{colon_ann}}'
+      scope: punctuation.separator.sand
+    - match: ','
+      scope: punctuation.separator.sand
+
+  where-clause:
+    - match: '\bwhere\b'
+      scope: keyword.other.constraint.sand
+      push:
+        - match: "'{{ident}}"
+          scope: variable.other.lifetime.sand
+        - match: '>='
+          scope: keyword.operator.comparison.sand
+        - match: ','
+          scope: punctuation.separator.sand
+        - match: '(?=:=|\bdef\b)'
+          pop: true
+
+  # ── type expressions ──────────────────────────────────────────────────────
+
+  # Entered after a `:` annotation marker; pops when we reach something that
+  # cannot be part of a type (assignment, closing bracket, semicolon, etc.).
+  type-expr:
+    - match: "'{{ident}}"
+      scope: variable.other.lifetime.sand
+    - match: '\bInt\b|\bBool\b|\bUnit\b'
+      scope: support.type.builtin.sand
+    - match: '&'
+      scope: keyword.operator.borrow.sand
+    - match: '\bmut\b'
+      scope: storage.modifier.sand
+    - match: '@'
+      scope: keyword.operator.region.sand
+    - match: '#{{ident}}'
+      scope: entity.name.tag.sand
+    - match: '({{ident}})(::)({{ident}})'
+      captures:
+        1: entity.name.namespace.sand
+        2: punctuation.accessor.sand
+        3: entity.name.type.sand
+    - match: '{{ident}}'
+      scope: entity.name.type.sand
+    - match: '<'
+      scope: punctuation.definition.generic.begin.sand
+      push:
+        - match: '>'
+          scope: punctuation.definition.generic.end.sand
+          pop: true
+        - include: type-expr
+        - match: ','
+          scope: punctuation.separator.sand
+    - match: '\('
+      scope: punctuation.section.parens.begin.sand
+      push:
+        - match: '\)'
+          scope: punctuation.section.parens.end.sand
+          pop: true
+        - include: type-expr
+        - match: ','
+          scope: punctuation.separator.sand
+    - match: '\|'
+      scope: punctuation.separator.sand
+    - match: '(?=[=\){};,]|:=|\bthen\b|\bdo\b|\belse\b|\bwhere\b)'
+      pop: true
+
+  # ── statements ────────────────────────────────────────────────────────────
+
+  statements:
+    - include: let-decl
+    - include: block
+    - include: expressions
+
+  let-decl:
+    - match: '\blet\b'
+      scope: keyword.declaration.sand
+      push: let-binding
+
+  let-binding:
+    - match: '\bmut\b'
+      scope: storage.modifier.sand
+    - match: '&'
+      scope: keyword.operator.borrow.sand
+    - match: '_(?!\w)'
+      scope: variable.language.wildcard.sand
+    # constructor pattern: Enum#Variant(sub-binding)
+    - match: '({{ident}})(#)({{ident}})'
+      captures:
+        1: entity.name.type.sand
+        2: punctuation.accessor.sand
+        3: entity.name.tag.sand
+      set: let-after-binding
+    # tuple pattern: (a, b, ...)
+    - match: '\('
+      scope: punctuation.section.parens.begin.sand
+      push:
+        - match: '\)'
+          scope: punctuation.section.parens.end.sand
+          pop: true
+        - match: '\bmut\b'
+          scope: storage.modifier.sand
+        - match: '_(?!\w)'
+          scope: variable.language.wildcard.sand
+        - match: '{{ident}}'
+          scope: variable.other.definition.sand
+        - match: ','
+          scope: punctuation.separator.sand
+    - match: '{{ident}}'
+      scope: variable.other.definition.sand
+      set: let-after-binding
+    - match: '(?=\S)'
+      pop: true
+
+  let-after-binding:
+    # optional payload sub-binding for constructor patterns: E#V(x)
+    - match: '\('
+      scope: punctuation.section.parens.begin.sand
+      push:
+        - match: '\)'
+          scope: punctuation.section.parens.end.sand
+          pop: true
+        - match: '_(?!\w)'
+          scope: variable.language.wildcard.sand
+        - match: '{{ident}}'
+          scope: variable.other.definition.sand
+        - match: ','
+          scope: punctuation.separator.sand
+    - match: '{{colon_ann}}'
+      scope: punctuation.separator.annotation.sand
+      push: type-expr
+    - match: '='
+      scope: keyword.operator.assignment.sand
+      set: expr-until-semicolon
+    - match: '(?=\S)'
+      pop: true
+
+  # expression that runs until the trailing `;` of a statement
+  expr-until-semicolon:
+    - match: ';'
+      scope: punctuation.terminator.sand
+      pop: true
+    - include: expressions
+
+  block:
+    - match: '\{'
+      scope: punctuation.section.block.begin.sand
+      push:
+        - meta_scope: meta.block.sand
+        - match: '\}'
+          scope: punctuation.section.block.end.sand
+          pop: true
+        - include: statements
+
+  # ── expressions ───────────────────────────────────────────────────────────
+
+  expressions:
+    - include: keywords-control
+    - include: literals
+    - include: lifetimes
+    - include: borrow-deref
+    - include: enum-constructors
+    - include: function-calls
+    - include: operators
+    - include: parens
+    - include: identifiers
+    - match: ','
+      scope: punctuation.separator.sand
+    - match: ';'
+      scope: punctuation.terminator.sand
+
+  keywords-control:
+    - match: '\b(?:if|then|else)\b'
+      scope: keyword.control.conditional.sand
+    - match: '\b(?:while|do)\b'
+      scope: keyword.control.loop.sand
+    - match: '\bmatch\b'
+      scope: keyword.control.match.sand
+    - match: '=>'
+      scope: keyword.operator.arrow.sand
+    - match: '\band\b'
+      scope: keyword.operator.logical.sand
+
+  literals:
+    - match: '\b(?:true|false)\b'
+      scope: constant.language.boolean.sand
+    - match: '\b[0-9]+\b'
+      scope: constant.numeric.integer.sand
+    - match: '\(\)'
+      scope: constant.language.unit.sand
+
+  lifetimes:
+    - match: "'{{ident}}"
+      scope: variable.other.lifetime.sand
+
+  borrow-deref:
+    - match: '&(?:\s*\bmut\b)?'
+      scope: keyword.operator.borrow.sand
+    - match: '\*(?=[A-Za-z_(])'
+      scope: keyword.operator.deref.sand
+
+  enum-constructors:
+    # mod::Enum#Variant
+    - match: '({{ident}})(::)({{ident}})(#)({{ident}})'
+      captures:
+        1: entity.name.namespace.sand
+        2: punctuation.accessor.sand
+        3: entity.name.type.sand
+        4: punctuation.accessor.sand
+        5: entity.name.tag.sand
+    # Enum#Variant
+    - match: '({{ident}})(#)({{ident}})'
+      captures:
+        1: entity.name.type.sand
+        2: punctuation.accessor.sand
+        3: entity.name.tag.sand
+    # #Tag  (bare tag)
+    - match: '#{{ident}}'
+      scope: entity.name.tag.sand
+
+  function-calls:
+    # mod::func(
+    - match: '({{ident}})(::)({{ident}})(?=\s*\()'
+      captures:
+        1: entity.name.namespace.sand
+        2: punctuation.accessor.sand
+        3: variable.function.sand
+    # func(
+    - match: '({{ident}})(?=\s*\()'
+      captures:
+        1: variable.function.sand
+
+  operators:
+    - match: ':='
+      scope: keyword.operator.assignment.sand
+    - match: '==|≠|!=|>=|≥|<=|≤'
+      scope: keyword.operator.comparison.sand
+    - match: '>(?!>)|<(?!<)'
+      scope: keyword.operator.comparison.sand
+    - match: '&&'
+      scope: keyword.operator.logical.sand
+    - match: '[|⊕¡]'
+      scope: keyword.operator.logical.sand
+    - match: '!'
+      scope: keyword.operator.unary.sand
+    - match: '\+'
+      scope: keyword.operator.arithmetic.sand
+    - match: '-'
+      scope: keyword.operator.arithmetic.sand
+    - match: '\*'
+      scope: keyword.operator.arithmetic.sand
+    - match: '/'
+      scope: keyword.operator.arithmetic.sand
+    - match: '\^'
+      scope: keyword.operator.arithmetic.sand
+    - match: '='
+      scope: keyword.operator.assignment.sand
+    - match: '::'
+      scope: punctuation.accessor.sand
+    - match: '{{colon_ann}}'
+      scope: punctuation.separator.annotation.sand
+      push: type-expr
+
+  parens:
+    - match: '\('
+      scope: punctuation.section.parens.begin.sand
+      push:
+        - match: '\)'
+          scope: punctuation.section.parens.end.sand
+          pop: true
+        - include: statements
+
+  identifiers:
+    - match: '\bInt\b|\bBool\b|\bUnit\b'
+      scope: support.type.builtin.sand
+    - match: '_(?!\w)'
+      scope: variable.language.wildcard.sand
+    - match: '{{ident}}'
+      scope: variable.other.sand

@@ -472,6 +472,77 @@ impl<'tcx> CompileCtx<'tcx> {
         }
     }
 
+    /// Replace every (non-`'static`) reference / ascription region in `ty` with
+    /// `region`, recursing through composites. Used at a call boundary to stamp
+    /// the callee's return type with the call's computed result region (the
+    /// [`region_meet`](Self::region_meet)), replacing the region-blind
+    /// `region_erase`. `'static` regions are preserved.
+    pub fn region_fill(&mut self, ty: Ty<'tcx>, region: Region) -> Ty<'tcx> {
+        let pick = |r: &Region| {
+            if matches!(r, Region::Static) {
+                *r
+            } else {
+                region
+            }
+        };
+        match ty.kind() {
+            TyKind::Tuple(elems) => {
+                let elems: Vec<Ty<'tcx>> =
+                    elems.iter().map(|e| self.region_fill(*e, region)).collect();
+                self.intern_tuple(elems)
+            }
+            TyKind::App(er, args) => {
+                let er = *er;
+                let args: Vec<Ty<'tcx>> =
+                    args.iter().map(|a| self.region_fill(*a, region)).collect();
+                self.intern_app(er, args)
+            }
+            TyKind::Region(inner, r) => {
+                let rr = pick(r);
+                let inner = self.region_fill(*inner, region);
+                self.region_ty(inner, rr)
+            }
+            TyKind::Ref(r, inner) => {
+                let rr = pick(r);
+                let inner = self.region_fill(*inner, region);
+                self.ref_ty(rr, inner)
+            }
+            TyKind::RefMut(r, inner) => {
+                let rr = pick(r);
+                let inner = self.region_fill(*inner, region);
+                self.ref_mut_ty(rr, inner)
+            }
+            _ => ty,
+        }
+    }
+
+    /// The result region of a call (Calculus §6.3, item 8): the greatest lower
+    /// bound (shortest-lived) of the argument regions, so the result cannot
+    /// outlive any borrowed argument. Argument regions live at the call site,
+    /// so the GLB is well-defined; mutually-incomparable regions fall back
+    /// to the call-site scope (a sound common lower bound). With no
+    /// reference arguments the result has no region to fill, so the
+    /// call-site scope is returned harmlessly. This is a *conservative*
+    /// meet over all argument regions (it does not yet instantiate each
+    /// lifetime parameter separately).
+    pub fn region_meet(&self, regions: &[Region], assumptions: &[RegionConstraint]) -> Region {
+        let call_site = self.current_scope_region();
+        let mut it = regions.iter().copied();
+        let Some(mut result) = it.next() else {
+            return call_site;
+        };
+        for r in it {
+            if self.outlives(result, r, assumptions) {
+                result = r; // r is shorter-lived → closer to the GLB
+            } else if self.outlives(r, result, assumptions) {
+                // result is already the shorter-lived → keep it
+            } else {
+                result = call_site; // incomparable → safe common lower bound
+            }
+        }
+        result
+    }
+
     /// The shared anonymous region used for elided borrows (`&e`, `&T` with no
     /// explicit lifetime). All elided borrows share one region for now, so that
     /// an elided `&T` type and an elided `&e` value compare equal. Per-borrow

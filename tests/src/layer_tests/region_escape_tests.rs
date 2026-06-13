@@ -146,3 +146,26 @@ fn satisfies_outlives_checks_a_constraint_set() {
     assert!(ctx.satisfies_outlives(&required, &assumptions));
     assert!(!ctx.satisfies_outlives(&required, &[]));
 }
+
+// ── assignment reseat-escape (item 11) ───────────────────────────────────────
+
+#[test]
+fn reseating_an_outer_reference_to_an_inner_borrow_is_rejected() {
+    // re-pointing an outer reference at a borrow from an inner block would dangle
+    // once the inner block closes (Calculus §6.3, item 11): the assignment's RHS
+    // region must outlive the variable it is assigned into.
+    typecheck_fails(
+        "def f(): Int := { let a = 1; let mut o = &a; { let i = 2; o = &i; 0 }; *o } \n \
+         def main(): Int := 0",
+    );
+}
+
+#[test]
+fn reseating_a_reference_within_the_same_scope_is_accepted() {
+    // re-pointing a reference at another borrow from the *same* scope is fine —
+    // both live equally long.
+    typecheck(
+        "def g(): Int := { let a = 1; let b = 2; let mut o = &a; o = &b; *o } \n \
+         def main(): Int := 0",
+    );
+}
