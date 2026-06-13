@@ -525,7 +525,9 @@ fn ty_mentions_param(ty: Ty<'_>, id: TypeParamId) -> bool {
         TyKind::Param(p) => *p == id,
         TyKind::Tuple(elems) => elems.iter().any(|e| ty_mentions_param(*e, id)),
         TyKind::App(_, args) => args.iter().any(|a| ty_mentions_param(*a, id)),
-        TyKind::Region(inner, _) | TyKind::Ref(_, inner) => ty_mentions_param(*inner, id),
+        TyKind::Region(inner, _) | TyKind::Ref(_, inner) | TyKind::RefMut(_, inner) => {
+            ty_mentions_param(*inner, id)
+        }
         _ => false,
     }
 }
@@ -665,17 +667,27 @@ fn build_core_type<'run>(
     let inner_opt = pair.clone().into_inner().next();
     match inner_opt {
         Some(inner) if inner.as_rule() == Rule::borrow_type => {
-            // borrow_type = { "&" ~ lifetime? ~ core_type }
-            let mut parts = inner.into_inner();
-            let first = parts.next().missing("borrow target", range)?;
-            let (region, core_pair) = if first.as_rule() == Rule::lifetime {
-                let r = resolve_lifetime(ctx, &first)?;
-                (r, parts.next().missing("borrow target type", range)?)
+            // borrow_type = { "&" ~ lifetime? ~ mut_kw? ~ core_type }
+            let mut parts = inner.into_inner().peekable();
+            let region = if parts.peek().map(|p| p.as_rule()) == Some(Rule::lifetime) {
+                let lt = parts.next().missing("lifetime", range)?;
+                resolve_lifetime(ctx, &lt)?
             } else {
-                (ctx.anon_region(), first)
+                ctx.anon_region()
             };
+            let mutable = if parts.peek().map(|p| p.as_rule()) == Some(Rule::mut_kw) {
+                parts.next();
+                true
+            } else {
+                false
+            };
+            let core_pair = parts.next().missing("borrow target type", range)?;
             let inner_ty = build_core_type(ctx, core_pair)?;
-            Ok(ctx.ref_ty(region, inner_ty))
+            Ok(if mutable {
+                ctx.ref_mut_ty(region, inner_ty)
+            } else {
+                ctx.ref_ty(region, inner_ty)
+            })
         }
         Some(inner) if inner.as_rule() == Rule::tuple_type => {
             // tuple_type = { "(" ~ type_ ~ ("," ~ type_)+ ~ ")" }
@@ -890,12 +902,21 @@ fn build_statement<'run>(
                 });
             }
 
-            // Borrow binding `let &x : T = e` (Calculus §6.4): desugar to
-            // `let x : &T = &e`, reusing the borrow-expression machinery — `e`
-            // is borrowed (not consumed) and `x` holds a shared reference.
+            // Borrow binding `let &x : T = e` (shared) or `let &mut x : T = e`
+            // (exclusive) (Calculus §6.4): desugar to `let x : &T = &e` /
+            // `let x : &mut T = &mut e`, reusing the borrow-expression
+            // machinery — `e` is borrowed (not consumed) and `x` holds the
+            // reference. A `&mut` binding is assignable (`x = e` writes through
+            // the borrow), so it is marked mutable.
             if first_child.as_rule() == Rule::borrow_binding {
-                let name_pair = first_child
-                    .into_inner()
+                let mut bb_inner = first_child.into_inner().peekable();
+                let mutable = if bb_inner.peek().map(|p| p.as_rule()) == Some(Rule::mut_kw) {
+                    bb_inner.next();
+                    true
+                } else {
+                    false
+                };
+                let name_pair = bb_inner
                     .next()
                     .missing("borrow binding name", inner_range)?;
                 let var = HirVar::Decl(ctx.new_original_variable(&name_pair, Rule::declaration)?);
@@ -905,8 +926,13 @@ fn build_statement<'run>(
                 let (ty, expr_pair) = if next.as_rule() == Rule::type_ {
                     let inner_ty = build_type(ctx, next)?;
                     let region = ctx.anon_region();
+                    let ref_ty = if mutable {
+                        ctx.ref_mut_ty(region, inner_ty)
+                    } else {
+                        ctx.ref_ty(region, inner_ty)
+                    };
                     (
-                        Some(ctx.ref_ty(region, inner_ty)),
+                        Some(ref_ty),
                         decl_inner
                             .next()
                             .missing("borrow declaration expression", inner_range)?,
@@ -917,14 +943,14 @@ fn build_statement<'run>(
                 let inner_expr = build_expr(ctx, expr_pair, src)?;
                 let expr_range = inner_expr.range;
                 let borrowed = Expr {
-                    expr: Expression::Borrow(Box::new(inner_expr)),
+                    expr: Expression::Borrow(Box::new(inner_expr), mutable),
                     range: expr_range,
                 };
                 return Ok(Statement::Declaration {
                     name: var,
                     range: inner_range,
                     ty,
-                    is_mutable: false,
+                    is_mutable: mutable,
                     val: borrowed,
                 });
             }
@@ -1365,15 +1391,34 @@ fn build_primary<'run>(
         .missing("inner expression", range)?;
     match inner.as_rule() {
         Rule::borrow_expr => {
-            // borrow_expr = { "&" ~ primary }
+            // borrow_expr = { "&" ~ mut_kw? ~ primary }
             let inner_range = Range::from(&inner);
-            let target = inner
-                .into_inner()
+            let mut parts = inner.into_inner().peekable();
+            let mutable = if parts.peek().map(|p| p.as_rule()) == Some(Rule::mut_kw) {
+                parts.next();
+                true
+            } else {
+                false
+            };
+            let target = parts
                 .next()
                 .missing("borrow target expression", inner_range)?;
             let e = build_primary(ctx, target, src)?;
             Ok(Expr {
-                expr: Expression::Borrow(Box::new(e)),
+                expr: Expression::Borrow(Box::new(e), mutable),
+                range,
+            })
+        }
+        Rule::deref_expr => {
+            // deref_expr = { "*" ~ primary }
+            let inner_range = Range::from(&inner);
+            let target = inner
+                .into_inner()
+                .next()
+                .missing("dereference target expression", inner_range)?;
+            let e = build_primary(ctx, target, src)?;
+            Ok(Expr {
+                expr: Expression::Deref(Box::new(e)),
                 range,
             })
         }

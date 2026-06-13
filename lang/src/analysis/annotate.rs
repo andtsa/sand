@@ -49,7 +49,8 @@ pub fn collect_dependencies<'tcx>(
         Expression::Var(name) => {
             dependencies.insert(*name);
         }
-        Expression::Borrow(inner) => collect_dependencies(&inner.expr, dependencies),
+        Expression::Borrow(inner, _) => collect_dependencies(&inner.expr, dependencies),
+        Expression::Deref(inner) => collect_dependencies(&inner.expr, dependencies),
         Expression::BinOp { left, right, .. } => {
             collect_dependencies(&left.expr, dependencies);
             collect_dependencies(&right.expr, dependencies);

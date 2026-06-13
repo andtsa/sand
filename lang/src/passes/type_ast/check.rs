@@ -13,6 +13,7 @@ use crate::passes::type_ast::TypeEnv;
 pub use crate::passes::type_ast::errors::AstTypeError;
 use crate::passes::type_ast::generics::Subst;
 use crate::passes::type_ast::generics::subst;
+use crate::passes::type_ast::infer::escape_check;
 use crate::passes::type_ast::infer::infer;
 use crate::passes::type_ast::infer::infer_constructor;
 use crate::passes::type_ast::infer::infer_statement;
@@ -350,10 +351,12 @@ fn type_check_match_arms_inner<'tcx>(
             }
         };
 
-        // extend the env with this arm's pattern bindings (immutable — D4)
+        // extend the env with this arm's pattern bindings (immutable — D4).
+        // Bindings live in the current lexical scope (the enclosing block).
         let mut arm_env = env.clone();
+        let home = ctx.current_scope_region();
         for (var, ty, _range) in &bindings {
-            arm_env.insert(*var, (*ty, Kind::Owned, false));
+            arm_env.insert(*var, (*ty, Kind::Owned, false, home));
         }
 
         // typecheck the arm body
@@ -887,15 +890,27 @@ pub(super) fn check<'tcx>(
             statements,
             expr: Some(ret),
         } => {
-            let (typed_statements, final_env) = statements.iter().try_fold(
-                (Vec::with_capacity(statements.len()), env.clone()),
-                |(mut stmts, mut env), stmt| {
-                    stmts.push(infer_statement(ctx, &mut env, stmt)?);
-                    Ok((stmts, env))
-                },
-            )?;
-            let typed_ret = check(ctx, &final_env, ret, expected)?;
+            // A block opens a fresh lexical region scope; the trailing
+            // expression may not yield a borrow of a local (Calculus §6.3).
+            let block_region = ctx.enter_region_scope();
+            let block_depth = ctx.region_depth(block_region);
+
+            let computed = (|| {
+                let (typed_statements, final_env) = statements.iter().try_fold(
+                    (Vec::with_capacity(statements.len()), env.clone()),
+                    |(mut stmts, mut env), stmt| {
+                        stmts.push(infer_statement(ctx, &mut env, stmt)?);
+                        Ok((stmts, env))
+                    },
+                )?;
+                let typed_ret = check(ctx, &final_env, ret, expected)?;
+                Ok::<_, AstTypeError<'tcx>>((typed_statements, typed_ret))
+            })();
+            ctx.exit_region_scope();
+
+            let (typed_statements, typed_ret) = computed?;
             let kind = typed_ret.kind;
+            escape_check(ctx, kind, block_depth, expr.range)?;
             Ok(typed_hir::Expr {
                 expr: typed_hir::Expression::Block {
                     statements: typed_statements,
@@ -1065,7 +1080,7 @@ fn check_let_pattern_inner<'tcx>(
         }
         _ => Err(AstTypeError::PatternTypeMismatch {
             message:
-                "let-pattern LHS must be a constructor pattern `E#V(...)` — use `match` for other patterns"
+                "let-pattern LHS must be a constructor pattern `E#V(...)`. use `match` for other patterns"
                     .to_string(),
             range,
         }),

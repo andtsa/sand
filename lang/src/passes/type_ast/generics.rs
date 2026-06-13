@@ -25,6 +25,21 @@ pub fn subst<'tcx>(ctx: &mut CompileCtx<'tcx>, ty: Ty<'tcx>, mapping: &Subst<'tc
             let args: Vec<Ty<'tcx>> = args.iter().map(|a| subst(ctx, *a, mapping)).collect();
             ctx.intern_app(er, args)
         }
+        // References and region ascriptions substitute their pointee/inner type
+        // and keep their region. (Regions themselves are not type parameters, so
+        // they are unaffected by `mapping`.)
+        TyKind::Region(inner, r) => {
+            let inner = subst(ctx, *inner, mapping);
+            ctx.region_ty(inner, *r)
+        }
+        TyKind::Ref(r, inner) => {
+            let inner = subst(ctx, *inner, mapping);
+            ctx.ref_ty(*r, inner)
+        }
+        TyKind::RefMut(r, inner) => {
+            let inner = subst(ctx, *inner, mapping);
+            ctx.ref_mut_ty(*r, inner)
+        }
         _ => ty,
     }
 }
@@ -72,6 +87,13 @@ pub fn unify<'tcx>(
             }
             Ok(())
         }
+        // References and region ascriptions unify their pointee/inner types. The
+        // regions are not constrained here — they carry no type parameters, are
+        // erased by monomorphisation, and call-site region inference is handled
+        // separately — so `&T` unifies against `&Int` regardless of region.
+        (TyKind::Ref(_, di), TyKind::Ref(_, ai)) => unify(*di, *ai, mapping),
+        (TyKind::RefMut(_, di), TyKind::RefMut(_, ai)) => unify(*di, *ai, mapping),
+        (TyKind::Region(di, _), TyKind::Region(ai, _)) => unify(*di, *ai, mapping),
         _ => {
             if declared.type_eq(actual) {
                 Ok(())

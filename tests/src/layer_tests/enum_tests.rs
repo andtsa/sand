@@ -23,7 +23,7 @@ fn enum_declaration_compiles() {
 ///
 /// `EnumRef` is an arena handle with pointer identity, so the two variants
 /// must be produced by a **single** compilation for their handles to be
-/// comparable — hence the tuple-returning program rather than two `run_mir`
+/// comparable, hence the tuple-returning program rather than two `run_mir`
 /// calls.
 #[test]
 fn qualified_constructor_first_variant() {
@@ -393,11 +393,11 @@ fn adhoc_single_tag() {
     }
 }
 
-/// Write order does not matter — `#lt | #gt | #eq` and `#gt | #lt | #eq` are
+/// Write order does not matter: `#lt | #gt | #eq` and `#gt | #lt | #eq` are
 /// the same structural type.
 #[test]
 fn adhoc_tag_write_order_irrelevant() {
-    // First function uses one order; second uses another — values must flow.
+    // First function uses one order; second uses another, values must flow.
     assert_eq!(
         run_mir(
             "def f(): #lt | #gt | #eq := #gt

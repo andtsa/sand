@@ -38,9 +38,10 @@ core_type = {
   | identifier // named enum type
 }
 
-// shared (immutable) reference type `&'r T` (Calculus §2.3). the lifetime is
-// optional; an absent one is assigned a fresh region.
-borrow_type = { "&" ~ lifetime? ~ core_type }
+// reference type `&'r T` (shared) or `&'r mut T` (exclusive) (Calculus §2.3).
+// the lifetime is optional; an absent one is assigned a fresh region. the
+// `mut` keyword marks an exclusive (mutable) borrow (Step 9).
+borrow_type = { "&" ~ lifetime? ~ mut_kw? ~ core_type }
 
 // a type, optionally ascribed to a region: `Int`, `Int @ 'r` (Calculus §2.3).
 // the `@ 'r` suffix is parsed here (rather than a left-recursive `region_type`)
@@ -143,12 +144,18 @@ tuple_expr = { "(" ~ expression ~ ("," ~ expression)+ ~ ")" }
 // todo: anonymous functions (lambdas) & first class functions
 
 // precedence chaining
-// shared borrow expression `&e` (Calculus §3.2 / §8.7). binds tightly (to a
-// primary), so `&x + 1` is `(&x) + 1`.
-borrow_expr = { "&" ~ primary }
+// borrow expression `&e` (shared) or `&mut e` (exclusive) (Calculus §3.2 /
+// §8.7). binds tightly (to a primary), so `&x + 1` is `(&x) + 1`.
+borrow_expr = { "&" ~ mut_kw? ~ primary }
+// dereference expression `*e`: read through a reference (`&T`/`&mut T` -> T).
+// like `borrow_expr` it binds to a primary, so `*x + 1` is `(*x) + 1`. the
+// prefix `*` is unambiguous with the infix multiply, which only appears
+// between operands.
+deref_expr = { "*" ~ primary }
 
 primary = {
     borrow_expr
+  | deref_expr
   | tuple_expr
   | ("(" ~ expression ~ ")")
   | ifstatement
@@ -190,9 +197,10 @@ let_binding_tuple = { "(" ~ let_binding_elem ~ ("," ~ let_binding_elem)+ ~ ")" }
 let_destructure   = { let_constructor | let_binding_tuple | let_binding_elem }
 let_constructor   = { identifier ~ "#" ~ identifier ~ ("(" ~ let_destructure ~ ")")? }
 
-// shared-borrow binding `let &x = e` (Calculus §3.2 / §6.4): `x` borrows `e`,
-// so it stays usable and `e` is not consumed.
-borrow_binding = { "&" ~ (identifier | empty_identifier) }
+// borrow binding `let &x = e` (shared) or `let &mut x = e` (exclusive)
+// (Calculus §3.2 / §6.4): `x` borrows `e`, so it stays usable and `e` is not
+// consumed.
+borrow_binding = { "&" ~ mut_kw? ~ (identifier | empty_identifier) }
 
 // variables, either a single binding, a flat tuple-pattern, a constructor-pattern, or bare binding
 // The `else` clause is required when the LHS is a refutable (constructor) pattern.

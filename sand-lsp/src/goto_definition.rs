@@ -32,13 +32,13 @@ pub fn definition_at_position<'tcx>(
             continue;
         }
 
-        // Cursor on the function name/header — already at the definition, nothing to
+        // Cursor on the function name/header, already at the definition, nothing to
         // jump to.
         if range_contains(fun.range, pos) {
             return None;
         }
 
-        // Cursor on a parameter — also already at the definition site.
+        // Cursor on a parameter, also already at the definition site.
         if fun.parameters.iter().any(|p| range_contains(p.range, pos)) {
             return None;
         }

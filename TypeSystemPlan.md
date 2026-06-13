@@ -38,6 +38,83 @@ from a later step, even if it seems natural to do so.
 
 ---
 
+## Implementation Roadmap (remaining work)
+
+The concrete, ordered sequence to implement from here. Full scope for each item is
+in its section further down; this is the execution order + dependencies.
+
+**Foundation — ✅ DONE:** Steps 0–9 (generics → monomorphisation → kinds → regions
+→ shared & mutable borrows) and the Usability pass (deref, call-site region
+inference).
+
+Legend: dependency in (parens); `path` = primary files to touch.
+
+### Phase 1 — Reference soundness & real pointers
+*Independent of the typeclass/memory tracks; do first — it closes the known
+escape-check soundness gaps and unblocks the real pointers that closures and
+write-through need. R1 → R2 → R3.*
+
+1. **Ref-Rep R1 — sound region checker** (type-level; runtime still erases).
+   Re-annotate reference types with real regions; `freeRegions(type)` escape check
+   at block close + function return; per-call `meet` replacing `region_erase`.
+   *Done when:* the eight `typecheck_passes`/`fails` cases in the Ref-Rep step pass.
+   `passes/type_ast/`, `compiler/context/`.
+2. **Ref-Rep R2 — pointer representation in the back-end** (R1). Stop erasing
+   `Ref`/`RefMut` in mono; `Place` projections + `RValue::Ref` in MIR; explicate +
+   LLVM `place_address`; store-based interpreters. Behaviour-preserving.
+   `passes/mono.rs`, `ir_types/mir.rs`, `passes/explicate_control`, `llvm_codegen.rs`.
+3. **Ref-Rep R3 — write-through** `*r = e` (R2). Place-LHS assignment; `&mut`-deref
+   is a writable place, `&`-deref read-only (error); lower to a store.
+
+### Phase 2 — Typeclasses
+*Foundation for the whole `Heaped` memory system. 4 → 5.*
+
+4. **Step 10 — typeclass declarations + impl + resolution.** `typeclass`/`impl`
+   grammar + IR; instance table + coherence + strict orphan rules; method-call
+   resolution; `where` parsing/storage (checked in Step 15).
+5. **Step 11 — higher-kinded type params** (Step 10). `Kind::Arrow`;
+   `F : Owned → Owned`; `Functor`/`Applicative`/`Monad` in `core.sand`; **define the
+   `Clone`/`Copy` (and `Display`) typeclasses** (integration is Step 14; lets
+   `Ty::TOP` be retired).
+
+### Phase 3 — Memory / allocation (the `Heaped` system)
+*Depends on Phase 2 for the typeclass machinery. A → B → C → D → E. A and B touch no
+typeclasses and may start before Step 10 if convenient.*
+
+6. **Memory A — substrate.** `Ptr<T>` primitive; `drop_in_place` intrinsic; `Heaped`
+   lang-item registration. (`malloc`/`free` = library over `Ptr` + FFI.)
+7. **Memory B — drop / RAII** (A). Formal drop insertion (reverse-decl); the
+   conditional-move **completing drop** (refine `OwnershipEnv::merge`); wire
+   `drop_in_place`. `passes/ownership/`.
+8. **Memory C — `Heaped` (Unique)** (Step 10 + A + B). The `Heaped`/`HeapedUnique`
+   typeclasses; recursive-type legality; rep `T` as `Unique<NodeOf<T>>`
+   (nullable-pointer niche); lower `#C`→`alloc`, `match`→`borrow`, `&mut`→
+   `borrow_mut`, drop→`release`; core-lib Box/Unique strategy. **Replaces Step 12.**
+9. **Memory D — `reuse`** (C). `take`/`reuse`/`Slot<L>` + husk as-pattern + layout
+   check; consuming-match drain. Lexical-only.
+10. **Memory E — `Heaped` (Shared)** (C + A). `HeapedShared` + `.share()` + refcount
+    strategy (counter via a raw `Ptr` write). Affine handles.
+
+### Phase 4 — Higher-level features
+*Depend on Phases 2–3.*
+
+11. **Step 13 — lambdas / first-class functions** (Memory C, for closure
+    environments). Lambda grammar/IR; capture analysis; fat-pointer codegen; the
+    deferred **variance follow-up** (contravariant function-argument positions).
+12. **Step 14 — `Clone`/`Copy` integration** (Step 11). Wire the typeclasses into
+    the ownership pass (implicit copy for `Copy`; explicit `.clone()` otherwise).
+13. **Step 15 — `where`-clause checking at call sites** (Step 11). Verify typeclass
+    constraints + superclass requirements per call; revive `where 'r >= 's` via the
+    Ref-Rep `meet`.
+
+### Deferred (not in this roadmap)
+The `fip`/`fbip` grade system + grade-polymorphism, first-class threadable `Slot`,
+the safe `InteriorMut` kind, user-authored custom `Heaped` strategies, the general
+`unsafe` model, reference cycles, and OOM/fallible allocation. See the Appendix and
+the memory-model design log.
+
+---
+
 ## Step 0 — Harden the Index Types ✅
 
 **Status**: Complete. `TyKind`/`Ty(usize)` split and all typed newtypes
@@ -631,6 +708,43 @@ do not outlive their source region. Validate the outlives relation
 >   (currently only its definition type-checks — see
 >   `region_parametric_function_definition_type_checks`).
 > - `ElisionRule` scaffolding enum.
+>
+> **✅ Step 8b — enforcement (DONE).** 528 tests pass, clippy clean.
+> - **Lexical region scopes**: `CompileCtx` now keeps a `region_scope_stack` +
+>   `region_depths`. `enter_region_scope`/`exit_region_scope` open/close a
+>   scope (depth 0 = the function, deeper = each nested block);
+>   `current_scope_region` / `region_depth` query it. `infer_function` opens
+>   the function scope (parameters live at depth 0); the `Block` arm of both
+>   `infer` and `check` opens a block scope, runs the body, then closes it.
+> - **Variable home regions**: `TypeEnv` entries gained a 4th field — the
+>   scope a binding was made in. Parameters get the function region; locals get
+>   their block's region. The `Var` arm now returns the binding's stored
+>   `Kind` (not always `Owned`), so a `let r = &local` remembers it is a borrow.
+> - **The escape check** (`escape_check`, Calculus §6.3): a borrow's *type*
+>   keeps the shared elided region (so `&e` still matches a `&T` annotation),
+>   while its *kind* `Borrowed(region)` carries the referent's real scope. When
+>   a block yields a value whose kind borrows a region at depth ≥ the block's,
+>   that borrow would dangle → `RegionEscape`. Catches returning `&local`,
+>   `let r = &local; r`, and nested-block escapes; a borrow of a parameter
+>   (depth 0) is always fine.
+> - **The outlives solver**: `outlives(longer, shorter, assumptions)` —
+>   reflexive, `'static` greatest, shallower-scope-outlives-deeper, and
+>   transitive closure over assumed `where` edges; `satisfies_outlives` checks
+>   a constraint set. (Replaces the old `solve_outlives` stub.)
+> - **`ElisionRule`** scaffolding enum added to `types.rs` (inert).
+> - Tests: `region_escape_tests.rs` — escape fires on local borrows (direct,
+>   let-laundered, nested-block) and is accepted for parameter borrows; the
+>   outlives relation accept/reject (reflexive, static, assumptions,
+>   transitivity).
+>
+> **Known limitations (acceptable for this step; full borrow-checking is later):**
+> - A borrow flowing through an `if`/`match` join loses its region (the kind
+>   lattice joins `Borrowed(r)` with anything unequal down to `Owned`), so an
+>   escape *through* a branch is not caught. Direct and let-bound returns are.
+> - `where 'r >= 's` is parsed/stored/solvable but **not yet checked at call
+>   sites**, and explicit-region functions still cannot be *called* with an
+>   elided borrow — both need call-site region instantiation (region
+>   inference), still deferred.
 
 ---
 
@@ -662,6 +776,78 @@ may exist.
 
 **Out of scope**: `InteriorMut`, two-phase borrows, borrow splitting.
 
+> **✅ Step split into 9a (structural) + 9b (exclusivity)**, mirroring 8a→8b.
+>
+> **✅ Step 9a — structural mutable borrows (DONE).** 546 tests pass, clippy
+> clean. No aliasing enforcement yet.
+> - **Kind**: `Kind::BorrowedMut(Region)` added; `is_subkind` adds
+>   `Owned <: BorrowedMut` (`SK-OwnedBorrowedMut`); `Borrowed`/`BorrowedMut`
+>   stay incomparable; `join` already yields `Borrowed ∨ BorrowedMut = Owned`.
+> - **Type**: `TyKind::RefMut(Region, Ty)` + `ref_mut_ty`; `kind_of(&'r mut T)
+>   = BorrowedMut 'r`; `&'r mut T` is **not** `Copy`; `has_param`/`compatible`/
+>   `Display` arms; mono erases `&'r mut T → T` (like `Ref`).
+> - **Grammar**: `mut_kw?` threaded into `borrow_type` (`&'r mut T`),
+>   `borrow_expr` (`&mut e`), and `borrow_binding` (`let &mut x`).
+> - **IR**: rather than a second variant, the existing `Expression::Borrow`
+>   gained an `is_mutable: bool` (`Borrow(Box<Expr>, bool)`) — every pass that
+>   treats `&e`/`&mut e` identically (mono, qualify, interpreters, explicate,
+>   annotate, lsp, traversal) just forwards the flag. Only `build_ast`, the
+>   type checker, and the displays branch on it.
+> - **Type checker**: the `Borrow` arm produces `RefMut`/`BorrowedMut` for a
+>   mutable borrow; the Step 8b escape check now fires for `BorrowedMut` too
+>   (returning `&mut local` is a `RegionEscape`). `let &mut x = e` desugars to
+>   `let x : &mut T = &mut e` and is marked mutable (so 9b's assignment-through
+>   has a binding to write to).
+> - Tests: `mut_borrow_tests.rs` (kind lattice incl. incomparability + join;
+>   `&mut e`/`&'r mut T`/`let &mut x` parse + type-check; non-consuming; erased
+>   run; escape check fires for `&mut local`, accepts `&mut param`).
+>
+> **Deferred to Step 9b — exclusivity (the rule):**
+> - The **exclusivity invariant** in the ownership pass (where move-tracking
+>   lives): `&mut x` requires `x` not otherwise borrowed; `&x` conflicts with a
+>   live `&mut x`; borrows released lexically at block exit. Scoped to mut-borrow
+>   exclusivity so it does not forbid the move-while-shared-borrowed that Step 7
+>   allows.
+> - A mutability requirement on `&mut x` (the place must be a `mut` binding).
+> - Assignment **through** a `&mut` binding (currently a `&mut` binding is just
+>   marked mutable; 9b gives it the intended write-through semantics/checks).
+> - Variance: reject a non-invariant annotation on a `BorrowedMut` kind
+>   parameter (needs `BorrowedMut` in the `kind_ann` grammar first).
+>
+> **✅ Step 9b — exclusivity (DONE).** 553 tests pass, clippy clean.
+> - **Exclusivity invariant** in the ownership pass (where move-tracking lives,
+>   so it gets block-scoping + if/match env-merge for free): `OwnershipEnv`
+>   gained a `borrows: Map<UniqVar, BorrowState{Shared,Mut}>`. The `Borrow` arm
+>   records a borrow of a *variable* and rejects a conflict — `&mut x` conflicts
+>   with **any** live borrow of `x`; `&x` conflicts with a live `&mut x`
+>   (`OwnershipError::ConflictingBorrow`). Borrows of *temporaries* are
+>   untracked (the borrower owns them). The check is borrow-vs-borrow only, so
+>   it does not forbid the move/use-while-shared-borrowed that Step 7 allows.
+> - **Lexical release**: the `Block` arm snapshots borrows on entry and restores
+>   them on exit, releasing borrows created inside the block; `merge` unions
+>   branch borrows (`Mut` dominates) so an if/match cannot smuggle a conflict
+>   past the merge.
+> - **Mutability requirement** in the type checker: `&mut x` of a variable
+>   requires `x` to be a `mut` binding/parameter, else
+>   `AstTypeError::MutBorrowOfImmutable` (borrowing a temporary is always fine).
+> - Tests (in `mut_borrow_tests.rs`): single `&mut` accepted; two `&mut` of the
+>   same place conflict; `&mut` after `&` and `&` after `&mut` conflict; two `&`
+>   coexist; `&mut` of an immutable variable rejected; a borrow released at block
+>   exit lets a later `&mut` succeed.
+>
+> **Deferred (documented, minor/representation-bound):**
+> - **Assignment through a `&mut` binding.** `let &mut x : T = e` follows the
+>   Step 7 precedent and binds `x : &mut T` (a reference), not the calculus's
+>   `x : T` kind `BorrowedMut`. So `x = v` (writing through) doesn't type-check
+>   (`v : T` vs `x : &mut T`) without a deref operator / the calculus binding
+>   representation. Revisit alongside deref (tracked in the Appendix's "Deferred
+>   test coverage").
+> - **Variance-invariance for `BorrowedMut` kind params** (`reject +a :
+>   BorrowedMut`). Needs `Borrowed`/`BorrowedMut` added to the `kind_ann`
+>   grammar (currently only `Owned`/`Never`) plus the polarity check; folds
+>   naturally into the Step 13 variance follow-up, which is already reworking
+>   `check_variance`.
+
 ---
 
 ## Step 10 — Typeclass Declarations and Instance Resolution
@@ -673,6 +859,10 @@ may exist.
 > `T: Display` constraint and remove `Ty::TOP` / `TyKind::Top` entirely.
 > If `Display` is not defined in this step, carry the note forward to
 > whichever step defines it.
+>
+> **Decision (deferred):** retiring `Ty::TOP` is explicitly deferred until we
+> implement the **core-library typeclasses** (i.e. after the rest of the
+> feature work is complete). `Ty::TOP` stays as-is until then.
 
 **Goal**: Add `typeclass` and `impl` declarations. Implement instance
 resolution during type checking. Enforce strict orphan rules.
@@ -738,6 +928,13 @@ can be added after this step as an additive extension), `InteriorMut`.
 
 ## Step 12 — `box` Intrinsic and Heap Allocation
 
+> **⚠ SUPERSEDED — folded into the Memory Model Steps (Step C, `Heaped`
+> Unique).** `box` is now "construct a `Heaped(Unique)` value"; heap allocation
+> goes through the `Heaped` hook protocol (`alloc`/`release`), not ad-hoc
+> malloc-in-codegen. `Box<T>` = `Unique<T>`, a library `Heaped` strategy. The
+> scope below is retained for reference; implement it as part of Step C, not as
+> a standalone step.
+>
 > **Pre-step note — MIR borrow representation:**
 > After Step 7, MIR locals can have type `&'r T` (a borrowed reference),
 > which lowers to a pointer in LLVM rather than an owned value. The plan
@@ -876,8 +1073,11 @@ The following are explicitly out of scope for this plan and should not
 be anticipated in any step's implementation:
 
 - `InteriorMut` kind and `Cell`-like types
-- Lifetime elision / region inference (scaffolded in Step 8, not
-  activated)
+- Lifetime elision / region inference — **partially done** (see the "Usability
+  pass" above): call-site region inference via type-level region erasure is
+  implemented, so borrows flow through calls without annotation. Still out of
+  scope: region-aware unification (needed to check `where` clauses at call
+  sites) and the `ElisionRule` activation.
 - Two-phase borrows
 - Borrow splitting (borrowing two fields of a struct independently)
 - `derive` macro system
@@ -887,6 +1087,481 @@ be anticipated in any step's implementation:
 - Pattern matching in lambda parameters
 - String and array primitives
 - Foreign function interface
+- **(Memory model)** General `unsafe` model + user-authored custom `Heaped`
+  strategies (the user-facing `Ptr`/alloc surface) — the closed `Heaped` set
+  (Steps C/E) ships first; extensibility is a deliberate later phase.
+- **(Memory model)** The `fip`/`fbip` allocation-grade *guarantee* layer (grade
+  lattice on the function arrow, grade polymorphism / effect inference) — the
+  `reuse` mechanism (Step D) ships without it; grades only document an existing
+  property.
+- **(Memory model)** First-class / threadable `Slot` reuse tokens (Step D ships
+  lexical-only); fat (offset / generational) `Heaped` handles (pointer-sized
+  ships first); the safe `InteriorMut` *kind* surfacing (trusted impls use a raw
+  `Ptr` write meanwhile).
+- **(Memory model)** Reference cycles without a tracing collector (impossible to
+  construct without interior mutability; revisited only with the `InteriorMut`
+  kind) and the out-of-memory / fallible-allocation model.
+
+## Usability pass — make regions & borrows usable ✅ (after Step 9)
+
+Steps 7–9 built borrows but left them barely usable: a `&T` value could be
+passed around but never *read*, and a `f<'r>(x: &'r T)` function could not be
+*called* with a borrow. This pass closed those gaps so complex programs can be
+written on top of the borrow foundation. 576 tests pass, clippy clean.
+
+- **✅ Generic-over-borrow.** `subst`/`unify` (`type_ast/generics.rs`) now
+  recurse through `Ref`/`RefMut`/`Region`, so `f<T>(x: &T)` infers `T`, enum
+  payloads can be `&T`, and these monomorphise and erase normally. Tests in
+  `generics_tests.rs`.
+- **✅ Deref (`*e`).** New `deref_expr` grammar + `Expression::Deref` threaded
+  through every IR; type rule `&T`/`&mut T → T`; transparent at runtime (lowers
+  like `Borrow`, erased by mono). The ownership pass rejects moving a non-`Copy`
+  value out of a borrow (`MoveOutOfBorrow`), so `*r` reads only `Copy` pointees.
+  This is what lets a function *use* its borrowed parameters
+  (`def add(a: &Int, b: &Int): Int := *a + *b`). Tests in `deref_tests.rs`.
+- **✅ Call-site region inference.** `CompileCtx::region_erase` canonicalises a
+  callee's reference regions at the call boundary, so `f<'r>(x: &'r T)` accepts
+  any `&_ T` argument (`longest<'a>(...)` is now callable + readable). Reference
+  regions never carried a type-level constraint — region *safety* is the lexical
+  escape check (which reads the borrow's `Kind`, not its type) — so erasing them
+  for matching is sound. Tests in `region_inference_tests.rs`;
+  `examples/references.sand` exercises the whole thing through LLVM.
+
+Still deferred from this pass (genuinely advanced / lower-value):
+- **`where 'r >= 's` checked *at call sites*.** Since reference types are
+  region-blind for matching, the call site can't map arguments back to a
+  callee's region parameters, so the stored `where` constraints aren't verified
+  against caller regions (they are still parsed, stored, and solvable). **Note:**
+  the Reference-Representation Step re-annotates reference types with real
+  regions and replaces `region_erase` with the per-call `meet`, at which point
+  call-site `where` checking falls out (NORMATIVE items 8–9) — this is the
+  designated way to revive it, *not* a separate region-unification effort.
+- **Deref of a generic `*r : T`** where `T` is an un-monomorphised parameter is
+  rejected (the ownership pass can't see `T`'s `Copy`-ness), so generic deref
+  only works once specialised. Acceptable; revisit with `Copy`-bound generics.
+
+---
+
+## Reference-Representation Step — references become real pointers + write-through
+
+**Goal**: give every reference (`&T` *and* `&mut T`) a real runtime
+representation — a pointer to the referent's memory — so that `*r` is a genuine
+load and `*r = e` is a genuine store that mutates the original. This replaces
+the current model where mono *erases* references to their pointee (pass-by-value
+copy), which makes write-through impossible. Consistent with every mainstream
+language: a reference is an address.
+
+> **Relation to the Memory Model Steps (A–E).** This step owns *reference
+> validity* only: regions stay **pure lexical lifetimes** (escape safety), fully
+> decoupled from *allocation* — which is the `Heaped` system's job (Steps C–E).
+> The two are orthogonal and may land in parallel. Because allocation no longer
+> rides on regions, **NLL becomes an unblocked (but still deferred) enhancement**
+> of this step's region model.
+
+**Design decision (set):** *both* shared and mutable references are pointers.
+Reads (`*r`) become loads regardless of mutability; only writes (`*r = e`) require
+`&mut`. Uniform representation keeps generic-over-borrow (`f<T>(x: &T)` vs
+`&mut`) simple and avoids two runtime reps.
+
+### ⚠ The critical consequence: the escape check becomes load-bearing
+
+Today references are erased to values, so `&x` yields a *copy* — returning it can
+never dangle, and Step 8b could approximate the escape check on the *kind*. Once
+references are real pointers, **a returned reference is a real address**, the
+approximation is unsound, and the borrow checker must become genuinely sound.
+This step is therefore two things bolted together: **(1) references-as-pointers**
+and **(2) a sound region/escape check**.
+
+The reference point is **Rust's lexical (pre-NLL) region discipline**, taken only
+as far as it agrees with `Calculus.md`. The escape rule is the *literal* Calculus
+rule (§6.3 Block, §6.4 Let-Borrow), `'r ∉ freeRegions(T)`, applied to the
+**type** — not, as Step 8b did, to the kind. Everything below follows from taking
+that literally.
+
+### The Sound Region Model (NORMATIVE — do not diverge)
+
+This subsection is the authoritative model. Any implementation choice that
+contradicts it is a bug, not a deviation.
+
+1. **Regions.** A region is one of: `'static`; a **lifetime parameter** `'a`
+   (signature-bound, via `<'a>` / Calculus `∀'a`); or a **scope region** — the
+   function **frame** `F` (where by-value parameters and the body live) and the
+   nested **blocks** `B₀ ⊃ B₁ ⊃ …` it contains.
+
+2. **Outlives lattice (`≥`).** `'static ≥` everything. Each lifetime parameter
+   `'a ≥ F` (a borrow handed in by the caller outlives the whole call). `F ≥ B₀
+   ≥ B₁ ≥ …` (an outer scope outlives an inner one). Lifetime parameters are
+   mutually incomparable unless a `where 'a >= 'b` clause says otherwise; `where`
+   clauses are extra assumed edges. "Outer" = `'static` and lifetime parameters
+   (they outlive the frame); "local" = the frame and all blocks.
+
+3. **Reference types carry their region** (`&'r T`, `&'r mut T`) — *not*
+   region-blind. (This **reverts** the usability-pass region erasure on types;
+   see "Reconciliation" below for how region inference survives.)
+
+4. **A borrow takes its referent's storage region.** `&v` where `v` is a local
+   in block `B` → `'B`; where `v` is a by-value parameter → `'F`; the pointee of
+   a reference parameter `r : &'a T` (i.e. `*r`) lives in `'a`.
+
+5. **Variance in the region.** Shared references are **covariant** in their
+   region: `&'r T <: &'s T` iff `'r ≥ 's` (a longer-lived borrow is usable where
+   a shorter one is wanted). Mutable references are **invariant** in their region
+   (`&'r mut T <: &'s mut T` iff `'r = 's`) — Calculus §2.1, `BorrowedMut`
+   invariant.
+
+6. **Escape check = `'r ∉ freeRegions(T)` on the *type*.** At any scope boundary
+   carrying region `'r` — a block close *or* the function return — the crossing
+   value's **type** must not name `'r` or any region inside it. Operationally,
+   give each scope region a depth (outer = smaller; `'static`/params are below
+   the frame). A boundary at depth `d` rejects a result whose type's free regions
+   include any region of depth `≥ d`; the **function return** is the frame
+   boundary, so it rejects a result whose type names **any** local (frame/block)
+   region, admitting only outer (`'static` / lifetime-parameter) regions.
+   Composite types propagate for free: `freeRegions((&'B T, Int)) = {'B}`,
+   `freeRegions(Option<&'B T>) = {'B}` — so **escape via data** (a returned
+   tuple/enum holding a reference) is caught with no extra machinery.
+
+7. **Consequences (these must all hold).**
+   - **Owned / primitive values are always returnable** — their types contain no
+     regions, so `freeRegions = ∅` and the check fires vacuously. The escape
+     check *only ever* rejects a type that names a *local* region.
+   - **Reference-parameter borrows are returnable** — `r : &'a T`'s region `'a`
+     is a parameter (outer), so `def f<'a>(r: &'a T): &'a T := r` is accepted.
+   - **Borrows of locals / by-value parameters are NOT returnable** — `&local`
+     and `&by_value_param` name a local region. `def f(x: Int): &Int := &x` is
+     rejected (it would dangle). This *tightens* the Step 8b rule, which wrongly
+     accepted `&by_value_param`.
+   - **`if`/`match` joins are caught** — the result *type* is `&'meet(rA,rB) T`,
+     so `freeRegions` sees the region even when the kind lattice would have
+     collapsed it to `Owned`. The kind lattice keeps doing only its real job
+     (capability: `Owned`/`Borrowed`/`Never` for subsumption + divergence);
+     region escape no longer piggy-backs on it.
+
+8. **Calls compute the result region as a `meet` (this replaces `region_erase`).**
+   For `f<'a>(x: &'a T): &'a T` applied to an argument of region `'r`, the inflow
+   constraint is `'r ≥ 'a` (the argument must outlive the parameter's lifetime),
+   so the result region for `'a` is the **meet** (shortest, by the lattice) of
+   the argument regions tied to `'a`. Thus `longest(&a, &b)` over two locals
+   yields a *local* result (correctly not returnable), while
+   `wrapper<'a>(r: &'a Int): &'a Int := get_ref(r)` yields `'a` (correctly
+   returnable). This is a per-call computation over the lattice, **not** an
+   iterative constraint solver.
+
+   *Why the result is always well-defined* (no undefined `meet`): the result is
+   the greatest lower bound of the tied argument regions **bounded below by the
+   call-site scope region**, which always exists because the call site is in
+   scope of every argument. For scope-region arguments (nested blocks are totally
+   ordered) it is the innermost; for two *incomparable* lifetime parameters it
+   bottoms out at the call-site scope (→ a local result, correctly
+   non-returnable). It is therefore *not* a naïve `meet` of two incomparable
+   lattice points — it is a GLB with a guaranteed lower bound, hence total.
+
+9. **Reconciliation — region inference survives.** Region-aware types (3) plus
+   the per-call `meet` (8) together give *both* soundness *and* the call-site
+   region inference the usability pass delivered: `f<'a>(x: &'a T)` stays callable
+   with any borrow (the `meet` instantiates `'a`), but the result is the real
+   meet region rather than an erased blank, so the escape check on the caller
+   side stays sound. `where 'a >= 'b` checking at call sites also falls out — the
+   argument regions must satisfy the `where` edges.
+
+10. **Accepted limitations (sound, more conservative than Rust).** Borrows are
+    **lexical to their block** (no NLL — a borrow lives to the end of its block).
+    No **reborrow-through-deref return**: `&*r` is a fresh frame borrow and is not
+    returnable; return `r` itself.
+
+11. **Region-aware subtyping is used at *every* boundary, replacing `type_eq` on
+    reference types (Calculus §6.1, Sub).** Once item 3 puts real regions on
+    types, comparing reference types by interned pointer identity is wrong in
+    *both* directions: it rejects valid covariant flows and accepts dangling
+    ones. So every subsumption point — function arguments, the function return
+    vs. its declared type, `if`/`match` branch agreement, and **assignment**
+    (`x = e` reseating *and* `*r = e` write-through) — must check `Tsrc <: Tdst`
+    with the item-5 region rule (`&` covariant, `&mut` invariant), not equality.
+    Assignment is the case that is otherwise outright unsound:
+
+    ```
+    let mut o : &Int = &a;            -- o : &'a Int
+    { let i = mk(); o = &i }          -- &i : &'B Int;  needs 'B ≥ 'a  → REJECT
+    ```
+
+    Without this, `o` dangles after the block (no scope-*result* crosses, so the
+    item-6 escape check never fires); with it, `'B ≥ 'a` is false and the
+    reseat is rejected. This is the single load-bearing addition for `&mut`/outer
+    references — closes "escape via reseating an outer location."
+
+12. **A value may not be moved while a borrow of it is live.** With real
+    pointers, `let r = &x; … move(x); *r` is a use-after-free that no scope
+    boundary catches. The Step 9b `borrows` map already tracks live lexical
+    borrows per place, so the ownership pass's consuming-move arm must reject
+    moving a variable that has a live `borrow_state` (shared *or* mut). Note `&T`
+    is `Copy`, so `r`'s own affinity cannot carry this — the *referent* `x` must
+    be the thing tracked, which the `borrows` map already does.
+
+13. **`box` preserves pointee regions in its result type.** When Step 12's
+    `box(e)` lands, `box(&local) : Box<&'B T> @ 'static` must keep `'B` in the
+    type (not canonicalise it to `'static`); then item-6 `freeRegions` catches
+    escape-via-box for free. A `box` that erases the inner region is a back-door
+    to the same dangling pointer.
+
+**Two intentional, sound divergences from the literal Calculus** (footnotes, not
+problems): (a) Calculus §6.4 gives each `let &x` *binding* its own fresh region;
+this model ties a borrow to its *referent's storage* region (item 4) and checks
+at scope boundaries — coarser (per-scope, not per-binding) but strictly more
+conservative, consistent with the "lexical, no NLL" limitation. (b) The Calculus
+is representation-agnostic (`x :_(Borrowed 'r) T`, regions erased at runtime);
+representing a borrowed binding as a value of pointer type `&T` is an
+implementation choice the Calculus permits — and it is what makes `*r`
+reads/writes exist operationally at all. The deref stays purely operational.
+
+### Phasing
+
+Three phases, mirroring 8a/8b. **Ordering is itself a soundness constraint:** the
+sound checker must land *before* references become observable pointers — the
+moment R2 turns references into real addresses, any program the *lenient* checker
+accepted (return `&local`, move-while-borrowed) miscompiles to UAF. So R1 makes
+the **checker** sound *over the still-erased runtime* (conservative but safe — it
+only rejects programs that *would* dangle), R2 swaps in the **pointer runtime**
+for the now-sound program set, and R3 adds **write-through**. There is no
+intermediate window in which the compiler both accepts and miscompiles a dangling
+program.
+
+#### Phase R1 — sound region checker (type-level only; runtime still erases)
+
+Pure type-checker tightening: no runtime change, no new surface syntax. The
+runtime still erases references to values, so accepted programs run exactly as
+before; the only observable change is that some previously-accepted *unsound*
+programs are now rejected (their tests flip). Implements NORMATIVE items 1–12:
+
+- **Re-annotate reference types with real regions** — undo the usability-pass
+  region-blindness (item 3); a borrow `&v` is typed `&'scope(v) T` (item 4).
+  Feed the per-borrow scope region — *already computed for the kind in 8b*
+  (`infer.rs`, the `Borrow` arm) — into the **type**, replacing the elided
+  borrow's `anon_region` (`compile.rs`) *and* `region_erase` (which becomes the
+  per-call `meet`).
+- **Region lattice with proper outlives** — `'static`/params outer, frame/blocks
+  by depth, `where` clauses as assumed edges (item 2); covariant `&`, invariant
+  `&mut` (item 5).
+- **Region-aware subtyping replaces `type_eq` on references at every boundary**
+  (item 11) — arguments, return-vs-declared, `if`/`match` agreement, and
+  assignment.
+- **Escape check on `freeRegions(type)`** at block boundaries and the function
+  return (item 6) — *replacing* the Step 8b kind-based `escape_check`.
+- **Per-call `meet`** for call result regions, *replacing* `region_erase`
+  (items 8–9); `where`-clause checking at call sites falls out.
+- **Ownership pass: forbid moving a borrowed value** (item 12) — the consuming
+  Var-move arm rejects a variable with a live `borrow_state` (the Step 9b
+  `borrows` map already has the data).
+- **Tests / flips**: all of item 7's consequences (owned/primitive return
+  accepted, `&'a`-parameter return accepted, `&local`/`&by_value_param` return
+  rejected, `if c then &x else &y` return rejected, returned tuple/enum holding a
+  local borrow rejected); `longest`/`wrapper` `meet` behaviour; **move-while-
+  borrowed rejected** (item 12); **outer-reference reseating rejected** (item 11
+  example) and the symmetric `*pmut = &local` write-through-into-outer case.
+  Step 8b/9 tests on the *old lenient* rule flip:
+  `returning_a_borrow_of_a_parameter_is_accepted` (+ `&mut` analogue) →
+  **rejected**; `regions.sand`'s `keep(x: Int): &Int := &x` removed/replaced; a
+  new accepted case is "return a reference *parameter*".
+
+#### Phase R2 — pointer representation in the back-end (no new surface syntax)
+
+Stop erasing references; thread real addresses through MIR, codegen, and the
+interpreters. The checker is already sound (R1), so flipping the runtime to real
+pointers is safe; valid programs behave identically (a load through `&x` yields
+the same value a copy did), so the suite stays green.
+
+- **Mono** (`passes/mono.rs`): stop erasing `Ref`/`RefMut` to the pointee.
+  Canonicalise the *region* only (it is compile-time) and keep the reference
+  constructor, so MIR types include `Ref(_, T)` / `RefMut(_, T)`, both denoting
+  "pointer to T".
+- **MIR** (`ir_types/mir.rs`): give `Place` projections —
+  `Place { local: LocalId, projection: Vec<ProjElem> }` with `ProjElem::Deref`
+  (currently `Place` is a bare `LocalId`). Add `RValue::Ref(Place)` (address-of).
+  A read of `*r` is `Operand::Copy(Place{ r, [Deref] })`; a write (R3) is
+  `Assign { dst: Place{ r, [Deref] }, .. }`.
+- **Explicate** (`passes/explicate_control`): `Borrow(inner)` stops being
+  transparent. `&place` → `RValue::Ref` of that place; `&temporary` →
+  materialise the temporary into a fresh local (explicate already mints temps)
+  and take *its* address. `Deref(inner)` in value position → a `[Deref]`-place
+  operand (a load).
+- **LLVM codegen** (`passes/llvm_codegen.rs`): the heavy lifting is *already
+  done* — every local is an `alloca` (a pointer). Add `llvm_type(Ref/RefMut) =
+  ptr`; a `place_address(place)` helper that starts at `locals[local]` and, per
+  `Deref` projection, loads to get the next address; reads = `load
+  place_address`; `RValue::Ref(place)` = `place_address(place)`.
+- **Interpreters** (`interpreter/typed_hir.rs` + the MIR interpreter): replace
+  the value-keyed environment with a *store* — `env: var → LocId`, a backing
+  `Vec<Value>`/slotmap, and a `Value::Ptr(LocId)` variant. `&x` → `Ptr(env[x])`;
+  `*r` → `store[loc]`; `let`/declaration allocates a slot; existing `x = e`
+  writes `store[env[x]]`. The most invasive R2 change (both interpreters' value
+  model), but mechanical.
+
+#### Phase R3 — write-through
+
+Builds on R1's sound checker (assignment region-subtyping already there) and R2's
+pointer runtime.
+
+- **Grammar**: `assignment = { (deref_expr | identifier) ~ "=" ~ expression }`
+  (PEG tries `assignment` before `expression`, so `*r = e` vs. the `*r`
+  expression-statement disambiguates by the `=`).
+- **IR**: generalise `Statement::Assignment`'s LHS from a bare variable to a
+  *place expression* (reuse `Expr`, constrained to `Var` / `Deref` chains;
+  validated by the type checker) across hhir/qhir/typed_hir.
+- **Type checker — write-through**: assignment to a place —
+  - `Var(x)` → `x` must be a `mut` binding (existing rule);
+  - `Deref(inner)` → `inner : &mut T` (a `&T` deref is a read-only place →
+    error); the place type is `T`; the RHS is checked against `T` **using region
+    subtyping** (item 11), not equality.
+  The "is this mutable" check moves from *variable* to *place*.
+- **Explicate/codegen**: `*r = e` lowers to `Assign { dst: Place{ r, [Deref] },
+  value }` → a store through `place_address`.
+- **Interpreters**: `*r = e` writes `store[r.as_loc()]`.
+- **Tests**: write-through actually mutates (`def incr(r: &mut Int): Unit := *r =
+  *r + 1`, observed through the caller's variable); a `&T` write is rejected; an
+  end-to-end `examples/*.sand` that mutates through a reference and exits with the
+  mutated value.
+
+**Out of scope**: NLL (non-lexical lifetimes), reborrow-through-deref return,
+field places (`s.f = e`), `Drop` on overwrite (no `Drop` yet), two-phase borrows.
+
+### Deferred test coverage (add when the enabling feature lands)
+
+The borrow/region examples (`borrowing`, `regions`, `variance`, `operators`)
+predate the usability pass; `references.sand` is the post-pass showcase. The
+remaining gaps:
+
+- **Escape check through `if`/`match` joins** and **escape via data** (a
+  returned tuple/enum holding a local borrow) are **no longer open gaps** — both
+  are closed by the Reference-Representation Step's type-based `freeRegions`
+  escape check (NORMATIVE item 6–7). Until that step lands they remain Step 8b
+  kind-lattice limitations; the `typecheck_fails` cases for
+  `def f(): &Int := if c then &y else &z` and `def f(): (&Int, Int) := (&y, 0)`
+  are listed in that step's test plan.
+- **Variance in consumer positions** — already tracked in Step 13's
+  "Variance follow-up": function-argument (contravariant) positions enable the
+  `-a` accept / `+a` reject and nested-composition tests Step 5 could only
+  scaffold.
+
+---
+
+## Memory Model Steps (A–E) — the `Heaped` allocation system
+
+These steps implement the memory/allocation model from the memory-model
+decision log (`~/.claude/plans/can-you-evaluate-the-magical-dusk.md`). They slot
+into the dependency order **after Step 11** (typeclasses + HKTs), since `Heaped`
+is a lang-item typeclass. The Reference-Representation Step (pure-lifetime
+regions + escape check) is independent and may land in parallel.
+
+**Organizing principle — three orthogonal axes:** ownership + RAII drop decides
+*when* memory is freed; the `Heaped` typeclass decides *how* a type is
+allocated/reclaimed; regions (pure lifetimes) decide *whether a reference is
+still valid*. The compiler stays allocation-agnostic — it knows only `Ptr`,
+`drop_in_place`, and the `Heaped` hook protocol; `Box`/`Rc`/arenas are library.
+
+### Step A — Memory substrate
+
+**Goal**: The minimal compiler/runtime primitives every `Heaped` strategy is
+built on. No allocation policy lives in the compiler.
+
+**Scope**:
+- `Ptr<T>` primitive type: raw, `Copy`, address-sized; load / store / offset;
+  *outside* the affine/region/borrow discipline. Deref is the `unsafe`
+  operation (general `unsafe` gating deferred; confine `Ptr` use to core-lib).
+- `drop_in_place(x)` intrinsic: compiler-generated structural field-drop glue,
+  callable by library code at a point it chooses (for conditional / manual
+  free). Policy (when) = library; mechanism (recurse fields) = compiler.
+- `Heaped` lang-item registration: the compiler holds a reference to the
+  `Heaped` typeclass (declared in core lib, Step C) so it can emit calls.
+- `malloc`/`free` are **not** intrinsics — a core-lib `alloc` over `Ptr` + FFI.
+
+**Out of scope**: the `Heaped` typeclass itself (Step C); any allocation
+strategy; the user-facing `unsafe` model.
+
+### Step B — Drop / RAII
+
+**Goal**: Make deterministic destruction first-class and correct under
+conditional moves.
+
+**Scope**:
+- Formalize drop insertion at scope exit, reverse declaration order.
+- **Conditional-move completing drop**: refine the ownership pass's branch
+  merge (`OwnershipEnv::merge` in `passes/ownership/`) so a value moved on some
+  branches is *dropped* on the others (as if `else drop(x)`) — replacing
+  today's silent leak. No runtime drop flags; drop is placed statically at the
+  end of the innermost block where the value is last owned.
+- Wire `drop_in_place` (Step A) as the structural-drop mechanism.
+- `drop` remains a library fn; `Copy` types are exempt from move/drop.
+
+**Out of scope**: dynamic drop flags (rejected by design); `Drop` overriding
+(folds into Step C/E's `release`).
+
+### Step C — `Heaped` (Unique)
+
+**Goal**: Recursive types become legal and heap-allocated via the unique
+(Box-like) `Heaped` strategy. **Subsumes Step 12 (`box`).**
+
+**Scope**:
+- Core-lib lang-item typeclasses:
+  `Heaped<T> { type Handle; alloc; borrow; release }` and
+  `HeapedUnique<T> requires Heaped<T> { borrow_mut; take; reuse }`.
+- **Recursive-type legality**: a (mutually) recursive `type` is well-formed
+  only with a `Heaped` impl; its kind is `Owned`. Grammar: a `: Heaped(Strategy)`
+  annotation on `type` (e.g. `type List<+a> : Heaped(Unique)`).
+- **Representation**: a `Heaped` type `T` is represented as `S<NodeOf<T>>`
+  (`S` = the strategy's generic handle type, pointer-sized; `NodeOf<T>` = T's
+  constructors with recursive occurrences = the handle). Nullary variants use a
+  nullable/tagged pointer (niche); only payload variants get heap nodes.
+- **Root-owns-tree** ownership: the root owns all nodes transitively; interior
+  nodes are accessed as borrows into the root.
+- **Lowering** (compiler → impl methods): `#C(ē)` → `alloc`; `match` (borrow) →
+  `borrow`; `&mut` → `borrow_mut`; end-of-life → `release`. (`take` in Step D.)
+- Core-lib `Unique` (Box-like) strategy over `Ptr` + `alloc`/`free`.
+- Move-stability invariant: handles survive a move of the root (pointer-sized
+  → heap-stable addresses; fat/offset handles deferred).
+
+**Out of scope**: `reuse`/`take` (Step D); the Shared family (Step E); custom
+user strategies; fat handles.
+
+### Step D — `reuse` (in-place reuse mechanism)
+
+**Goal**: Explicit, checked in-place reuse — functional code with zero net
+allocation — with no runtime mechanism (uniqueness is static via affine
+ownership).
+
+**Scope**:
+- `HeapedUnique`'s `take : T → (Node, Slot<L>)` (owning destructure → fields +
+  reuse husk) and `reuse : (Slot<L>, node:L) → T` (rebuild, no alloc).
+- Grammar: `reuse_expr` (`reuse cell as #C(ē)`); a husk-capturing as-pattern
+  `cell @ pat` bound in a *consuming* match. `Slot<L>` is a layout-indexed,
+  `Owned`, affine type; an unused `Slot` drops = frees.
+- Typing: the `(Reuse)` rule + the `layout(#C) = L` side-condition.
+- Match refinement: a *consuming* match on a Unique scrutinee drains via `take`
+  (owned fields + `Slot`); a *borrowing* match uses `borrow`.
+- **Lexical only**: the husk is consumed by a `reuse`/`release` in the same
+  match arm; threadable first-class `Slot` is deferred.
+
+**Out of scope**: the `fip`/`fbip` *guarantee* layer (grade lattice on the
+arrow, grade polymorphism / effect inference) — deferred. `reuse` ships
+standalone; the grades only document a property the code already has.
+
+### Step E — `Heaped` (Shared)
+
+**Goal**: Opt-in shared ownership (`Rc`-like) for unordered-lifetime
+co-ownership, as a library `Heaped` strategy.
+
+**Scope**:
+- `HeapedShared<T> requires Heaped<T> { share }`; the core-lib `Shared`
+  (refcounted-node) strategy.
+- `.share()` method → `share(&t)` (explicit increment, syntactically present).
+  Shared handles stay **affine**; the decrement is ordinary RAII `release`,
+  only newly *conditional* (free at dec-to-zero). No compiler dup-insertion.
+- The counter uses interior mutation of aliased memory — a raw `Ptr` write
+  inside the trusted impl now; the safe `InteriorMut` kind surfacing lands
+  later. Leak-free today (cycles need interior mutability).
+- `take`/`reuse`/`borrow_mut` are **not** available on Shared (moving out of /
+  mutating shared storage needs a runtime uniqueness check — excluded).
+
+**Out of scope**: `Arc` (atomic counter) — an additive strategy; cycles / weak
+refs; custom user strategies; the safe `InteriorMut` kind.
 
 ---
 
@@ -905,12 +1580,18 @@ Step 0  (index types)
                  │                        └─ Step 9  (BorrowedMut + &mut T)
                  └─ Step 10 (typeclass decl + impl)
                       └─ Step 11 (HKTs: Functor, Monad)
-                           └─ Step 12 (box + heap)
-                                └─ Step 13 (lambdas)
-                                     └─ Step 14 (Clone/Copy integration)
-                                          └─ Step 15 (where clause checking)
+                           └─ Step A  (memory substrate: Ptr, drop_in_place)
+                                └─ Step B  (drop / RAII; completing-drop)
+                                     └─ Step C  (Heaped Unique; subsumes Step 12 box)
+                                          ├─ Step D  (reuse / Slot)
+                                          │    └─ Step E  (Heaped Shared; .share())
+                                          └─ Step 13 (lambdas)
+                                               └─ Step 14 (Clone/Copy integration)
+                                                    └─ Step 15 (where clause checking)
 ```
 
 Steps 4–9 (ownership/region track) and Steps 10–11 (typeclass track)
 both depend on Step 3 but are independent of each other. They can be
-developed in parallel on separate branches and merged before Step 12.
+developed in parallel on separate branches and merged before the memory
+steps (A–E). The Reference-Representation Step (pure-lifetime regions +
+escape check) is independent of A–E and may land in parallel.

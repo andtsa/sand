@@ -1,10 +1,10 @@
-//! Step 1 — type parameter syntax and structural plumbing.
+//! type parameter syntax and structural plumbing.
 //!
 //! These tests cover *declaring* generic functions and enums: the grammar
 //! accepts type parameters, they are threaded through the IRs, and a `T` in a
 //! signature/body resolves to an opaque `Ty::Param`. Generic *instantiation*
 //! (calling a generic function with concrete types) is Step 2, so these tests
-//! only define generic items — calls are not exercised here.
+//! only define generic items, calls are not exercised here.
 
 use lang::ir_types::typed_hir::Expression;
 
@@ -183,7 +183,7 @@ fn call_generic_shared_param_consistent_ok() {
 
 #[test]
 fn call_generic_shared_param_conflict_fails() {
-    // `T` is forced to `Int` then `Bool` — unsolvable.
+    // `T` is forced to `Int` then `Bool`, unsolvable.
     typecheck_fails("def same<T>(a: T, b: T): T := a \n def main(): Int := same(1, true)");
 }
 
@@ -415,8 +415,7 @@ fn run_generic_nested_calls() {
 
 #[test]
 fn run_generic_enum_construct_and_match() {
-    // build an `Option<Int>` and consume it via `match` — exercises specialised
-    // enum construction and pattern matching through MIR.
+    // build an `Option<Int>` and consume it via `match`
     let src = "type Option<T> = None | Some(T) \n \
         def unwrap(o: Option<Int>): Int := match o { Option#Some(x) => x, Option#None => 0 } \n \
         def main(): Int := unwrap(Option#Some(7))";
@@ -507,4 +506,67 @@ fn kind_argument_owned_is_accepted() {
 #[test]
 fn generic_function_with_annotated_params_type_checks() {
     typecheck("def id<+a : Owned>(x: a): a := x \n def main(): Int := id(5)");
+}
+
+// ── generic-over-borrow: type parameters unify and substitute through
+// references (`&T`, `&mut T`) and region ascriptions (`T @ 'r`) ───────────────
+
+#[test]
+fn generic_borrow_parameter_infers_type() {
+    // `T` is solved by unifying the declared `&T` against the actual `&Int`.
+    typecheck("def f<T>(x: &T, y: Int): Int := y \n def main(): Int := f(&5, 7)");
+}
+
+#[test]
+fn generic_borrow_parameter_runs() {
+    assert_eq!(
+        run_both("def f<T>(x: &T, y: Int): Int := y \n def main(): Int := f(&9, 42)"),
+        Expression::Int(42)
+    );
+}
+
+#[test]
+fn generic_borrow_and_owned_share_one_parameter() {
+    // `&T` (from `&5`) and `T` (from `9`) both force `T = Int`, consistently.
+    assert_eq!(
+        run_both("def g<T>(a: &T, b: T): T := b \n def main(): Int := g(&5, 9)"),
+        Expression::Int(9)
+    );
+}
+
+#[test]
+fn generic_mut_borrow_parameter_infers_type() {
+    typecheck("def f<T>(x: &mut T, y: Int): Int := y \n def main(): Int := f(&mut 5, 7)");
+}
+
+#[test]
+fn generic_borrow_parameter_conflict_fails() {
+    // `&T` forces `T = Int`, then `T` forces `T = Bool` — unsolvable.
+    typecheck_fails("def g<T>(a: &T, b: T): T := b \n def main(): Int := g(&5, true)");
+}
+
+#[test]
+fn generic_enum_with_borrow_payload_instantiates() {
+    // a generic enum whose payload is a borrow: `T` is solved from `&5`,
+    // monomorphisation specialises and erases the borrow.
+    typecheck("type Holder<T> = H(&T) \n def main(): Int := { let h = Holder#H(&5); 0 }");
+}
+
+#[test]
+fn monomorphises_generic_borrow_function() {
+    // the borrow-taking generic specialises once per instantiation, like any
+    // other generic, and the borrow is erased in the result.
+    let (ctx, prog) = typecheck(
+        "def f<T>(x: &T, y: Int): Int := y \n \
+         def main(): Int := f(&5, 1)",
+    );
+    let names: Vec<String> = prog
+        .functions
+        .values()
+        .map(|f| ctx.original_fun_name(f.name))
+        .collect();
+    assert!(
+        names.iter().any(|n| n == "f$Int"),
+        "missing f$Int: {names:?}"
+    );
 }

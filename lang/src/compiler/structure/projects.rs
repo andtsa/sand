@@ -224,8 +224,8 @@ impl ProjectConfig {
     /// [`expand_to_files`], recursing into any matched directories.
     ///
     /// relative patterns (anything that isn't absolute or `~`-relative) are
-    /// resolved against `root` — the directory containing the project's
-    /// `sand.toml` — rather than the process's current working directory, so
+    /// resolved against `root` (the directory containing the project's
+    /// `sand.toml`) rather than the process's current working directory, so
     /// that `sand-cli --config some/dir/sand.toml` works regardless of where
     /// it's invoked from.
     ///

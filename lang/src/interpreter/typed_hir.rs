@@ -61,7 +61,8 @@ impl<'tcx> TypedProgram<'tcx> {
             Expression::Int(n) => Ok(Expression::Int(*n)),
             Expression::Bool(b) => Ok(Expression::Bool(*b)),
             // a shared borrow is transparent at runtime: evaluate the referent.
-            Expression::Borrow(inner) => self.eval_expr(&inner.expr, env, ctx, output),
+            Expression::Borrow(inner, _) => self.eval_expr(&inner.expr, env, ctx, output),
+            Expression::Deref(inner) => self.eval_expr(&inner.expr, env, ctx, output),
             Expression::Unit => Ok(Expression::Unit),
 
             Expression::Var(name) => env
@@ -189,7 +190,7 @@ impl<'tcx> TypedProgram<'tcx> {
 /// extending `env` with any bindings the pattern introduces along the way.
 /// returns whether the pattern matched.
 ///
-/// only `Variant` patterns can fail to match (by tag mismatch) — every other
+/// only `Variant` patterns can fail to match (by tag mismatch), every other
 /// pattern form (`Wildcard`, `Binding`, `Tuple`) is irrefutable by
 /// construction (decision D1 in `DESTRUCTURING_PATTERNS.todo.md`: only
 /// bindings, wildcards, and recursive tuple-destructuring are allowed in
@@ -287,7 +288,7 @@ fn eval_stmt<'tcx>(
             ..
         } => {
             // Evaluate the main value; try to match it against the pattern.
-            // If the match fails, evaluate the fallback — the type checker
+            // If the match fails, evaluate the fallback. the type checker
             // guarantees the fallback is a constructor of the same variant,
             // so bind_pattern on the fallback always succeeds.
             let main_val = prog.eval_expr(&val.expr, env, ctx, output)?;

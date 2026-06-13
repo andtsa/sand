@@ -16,12 +16,19 @@ use crate::ir_types::qhir;
 use crate::ir_types::typed_hir;
 use crate::ir_types::typed_hir::TypedFunction;
 use crate::lang::types::Kind;
+use crate::lang::types::Region;
 use crate::lang::types::Ty;
 pub use crate::passes::type_ast::errors::AstTypeError;
 use crate::passes::type_ast::errors::TypeError;
 use crate::passes::type_ast::infer::infer_function;
 
-type TypeEnv<'tcx> = im::HashMap<UniqVar<'tcx>, (Ty<'tcx>, Kind, bool)>; // (type, is_mutable)
+/// Type-checking environment: each in-scope variable maps to its type, the kind
+/// of the value bound to it, whether it is mutable, and the *home region* — the
+/// lexical scope (function or block) it was bound in. The home region drives
+/// the borrow escape check (Step 8b): a borrow `&v` lives in `v`'s home region,
+/// and a block may not yield a value borrowing a region introduced inside it
+/// (Calculus §6.3).
+type TypeEnv<'tcx> = im::HashMap<UniqVar<'tcx>, (Ty<'tcx>, Kind, bool, Region)>;
 
 impl<'tcx> typed_hir::TypedProgram<'tcx> {
     pub fn from_ast_program(
@@ -31,8 +38,7 @@ impl<'tcx> typed_hir::TypedProgram<'tcx> {
         // sequential loop (rather than `.map`) because `infer_function` needs
         // `&mut CompileCtx` (type checking interns fresh `TyKind::Tuple`s as
         // it encounters tuple literals, so the interner must be writable
-        // while the pass runs — see the interior-mutability note in
-        // ENUM_PAYLOADS_TUPLES.todo.md §1).
+        // while the pass runs.
         let mut fn_list: Vec<(FunRef<'tcx>, TypedFunction<'tcx>)> =
             Vec::with_capacity(ast.functions.len());
         for f in ast.functions.values() {

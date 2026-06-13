@@ -21,6 +21,7 @@
 pub mod env;
 pub mod errors;
 
+use env::BorrowState;
 use env::OwnershipEnv;
 use env::OwnershipState;
 use errors::OwnershipCheckError;
@@ -120,14 +121,47 @@ impl<'tcx> OwnershipChecker<'_, 'tcx> {
         match &expr.expr {
             th::Expression::Int(_) | th::Expression::Bool(_) | th::Expression::Unit => Ok(()),
 
-            // A shared borrow does not consume its referent: borrowing a
-            // variable is a non-consuming read, so the variable stays usable
-            // (Calculus §6.2, `Var-Borrow`). Borrowing a temporary just checks
-            // the sub-expression that produces it.
-            th::Expression::Borrow(inner) => match &inner.expr {
-                th::Expression::Var(_) => Ok(()),
+            // A borrow does not consume its referent: borrowing a variable is a
+            // non-consuming read, so the variable stays usable (Calculus §6.2,
+            // `Var-Borrow`). Borrowing a *variable* records an outstanding borrow
+            // and enforces the exclusivity invariant (Step 9b): a `&mut x`
+            // requires no other live borrow of `x`, and a `&x` may not coexist
+            // with a live `&mut x`. Borrowing a temporary owns it exclusively, so
+            // it just checks the sub-expression that produces it.
+            th::Expression::Borrow(inner, mutable) => match &inner.expr {
+                th::Expression::Var(v) => {
+                    if let Some(existing) = env.borrow_state(v) {
+                        let conflict = *mutable || existing == BorrowState::Mut;
+                        if conflict {
+                            return Err(self.err(OwnershipError::ConflictingBorrow {
+                                name: self.ctx.uniq_variable_name(v),
+                                mutable: *mutable,
+                                existing_mutable: existing == BorrowState::Mut,
+                                range: expr.range,
+                            }));
+                        }
+                    }
+                    env.add_borrow(*v, *mutable);
+                    Ok(())
+                }
                 _ => self.check_expr(inner, env),
             },
+
+            // `*e` reads through a reference. The reference itself is *not*
+            // consumed (so `*r + *r` reads a `&mut Int` twice), hence a plain
+            // reference variable is a non-consuming read; only a sub-expression
+            // that *produces* the reference (e.g. `*&x`) is checked. Reading a
+            // `Copy` value out duplicates it (fine); reading a non-`Copy` value
+            // would move it out of the borrow, which is forbidden.
+            th::Expression::Deref(inner) => {
+                if !matches!(inner.expr, th::Expression::Var(_)) {
+                    self.check_expr(inner, env)?;
+                }
+                if !expr.ty.is_copy() {
+                    return Err(self.err(OwnershipError::MoveOutOfBorrow { range: expr.range }));
+                }
+                Ok(())
+            }
 
             th::Expression::Constructor { payload, .. } => match payload {
                 Some(p) => self.check_expr(p, env),
@@ -142,6 +176,17 @@ impl<'tcx> OwnershipChecker<'_, 'tcx> {
                 }
                 match env.get(v) {
                     Some(OwnershipState::Owned) => {
+                        // A value may not be moved while a borrow of it is live
+                        // (Calculus §6.2): once references are real pointers,
+                        // `let r = &x; move(x); *r` is a use-after-free that no
+                        // scope boundary catches. The lexical `borrows` map (Step
+                        // 9b) already tracks live borrows per place.
+                        if env.borrow_state(v).is_some() {
+                            return Err(self.err(OwnershipError::MoveWhileBorrowed {
+                                name: self.ctx.uniq_variable_name(v),
+                                used_at: expr.range,
+                            }));
+                        }
                         env.mark_moved(*v, expr.range);
                         Ok(())
                     }
@@ -210,9 +255,12 @@ impl<'tcx> OwnershipChecker<'_, 'tcx> {
                 statements,
                 expr: ret,
             } => {
-                // snapshot which variables existed before the block so we can
-                // remove block-local variables on exit
+                // snapshot which variables existed before the block (to remove
+                // block-local variables on exit) and which borrows were live (to
+                // release borrows created inside the block on exit — a borrow's
+                // lifetime is lexical, Step 9b).
                 let pre_block_vars = env.var_keys();
+                let pre_block_borrows = env.borrows_snapshot();
 
                 for stmt in statements {
                     self.check_statement(stmt, env)?;
@@ -222,6 +270,7 @@ impl<'tcx> OwnershipChecker<'_, 'tcx> {
                 }
 
                 env.restrict_to(&pre_block_vars);
+                env.restore_borrows(pre_block_borrows);
                 Ok(())
             }
 

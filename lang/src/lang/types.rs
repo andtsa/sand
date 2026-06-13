@@ -5,12 +5,13 @@ use std::hash::Hasher;
 
 use crate::compiler::structure::EnumDef;
 
-/// The kind of a type — how its values may be used.
+/// The kind of a type reflects how its values may be used.
 ///
-/// This is the `{Owned, Never}` fragment of the kind lattice (Calculus §1):
-/// `Owned` is the top (a normal, fully-capable value) and `Never` is the
-/// bottom (the uninhabited kind of a diverging expression). The borrow modes
-/// (`Borrowed`, `BorrowedMut`, `InteriorMut`) are introduced in later steps.
+/// This is the `{Owned, Borrowed, BorrowedMut, Never}` fragment of the kind
+/// lattice (Calculus §1): `Owned` is the top (a normal, fully-capable value)
+/// and `Never` is the bottom (the uninhabited kind of a diverging expression).
+/// `Borrowed` and `BorrowedMut` are mutually-incomparable borrow modes; the
+/// remaining mode (`InteriorMut`) is out of scope.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Kind {
     /// A normal owned value.
@@ -18,6 +19,10 @@ pub enum Kind {
     /// A shared (immutable) borrow in region `'r` (Calculus §1.1). A borrowed
     /// value may be used multiple times and is not consumed.
     Borrowed(Region),
+    /// An exclusive (mutable) borrow in region `'r` (Calculus §1.2). While it
+    /// is live, no other borrow of the same place may exist (the
+    /// exclusivity invariant, enforced by the ownership pass).
+    BorrowedMut(Region),
     /// The uninhabited kind: a diverging expression (e.g. an infinite loop)
     /// never produces a value, so it is usable where any kind is expected.
     Never,
@@ -26,13 +31,14 @@ pub enum Kind {
 impl Kind {
     /// Subkinding `self <: other` (Calculus §1.2): "`self` is usable where
     /// `other` is expected". `Never` is the bottom; `Owned` coerces to any
-    /// `Borrowed` (`SK-OwnedBorrowed`); otherwise kinds are subkinds only of
-    /// themselves (distinct borrow regions are incomparable).
+    /// borrow mode (`SK-OwnedBorrowed` / `SK-OwnedBorrowedMut`); otherwise
+    /// kinds are subkinds only of themselves (the borrow modes, and
+    /// distinct borrow regions, are incomparable).
     pub fn is_subkind(self, other: Kind) -> bool {
         match (self, other) {
             (Kind::Never, _) => true,
             (a, b) if a == b => true,
-            (Kind::Owned, Kind::Borrowed(_)) => true,
+            (Kind::Owned, Kind::Borrowed(_) | Kind::BorrowedMut(_)) => true,
             _ => false,
         }
     }
@@ -84,12 +90,27 @@ pub enum Region {
 }
 
 /// An outlives constraint `longer ≥ shorter`: region `longer` outlives region
-/// `shorter` (Calculus §1.1). Collected during checking and discharged by the
-/// region solver (a trivially-satisfied stub until Step 8).
+/// `shorter` (Calculus §1.1). Stored from `where` clauses and discharged by the
+/// region solver
+/// ([`outlives`](crate::compiler::context::CompileCtx::outlives)).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RegionConstraint {
     pub longer: Region,
     pub shorter: Region,
+}
+
+/// Lifetime-elision rule scaffolding (Calculus §2.4). These describe how an
+/// omitted region in a function signature *would* be filled in. The data
+/// structures exist so later steps can record and apply elision, but elision is
+/// **not active**; every borrow's region is still explicit or the shared
+/// elided-borrow region. Region inference activates these in a later step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ElisionRule {
+    /// With exactly one input reference, every elided output region is that
+    /// input's region (the single-input rule).
+    SingleInput,
+    /// Each elided input reference gets its own fresh region.
+    FreshPerInput,
 }
 
 /// A `Copy` handle to an arena-allocated [`EnumDef`].
@@ -170,13 +191,17 @@ pub enum TyKind<'tcx> {
     /// Immutable shared borrows have no distinct runtime representation in this
     /// phase, so monomorphisation erases `&'r T` to `T`.
     Ref(Region, Ty<'tcx>),
+    /// An exclusive (mutable) reference `&'r mut T` (Calculus §2.3), of kind
+    /// `BorrowedMut 'r`. Like `Ref`, borrows have no distinct runtime
+    /// representation yet, so monomorphisation erases `&'r mut T` to `T`.
+    RefMut(Region, Ty<'tcx>),
 }
 
 /// A shallow, `Copy` handle to an interned [`TyKind`].
 ///
-/// Equality and hashing are by pointer identity — sound because interning
+/// Equality and hashing are by pointer identity. sound because interning
 /// guarantees that structurally equal types share the same arena allocation,
-/// so identical structure ↔ identical pointer.
+/// so identical structure <=> identical pointer.
 #[derive(Copy, Clone)]
 pub struct Ty<'tcx>(pub(crate) &'tcx TyKind<'tcx>);
 
@@ -208,7 +233,7 @@ impl<'tcx> Ty<'tcx> {
             TyKind::Tuple(elems) => elems.iter().any(|t| t.has_param()),
             TyKind::App(_, args) => args.iter().any(|t| t.has_param()),
             TyKind::Region(t, _) => t.has_param(),
-            TyKind::Ref(_, t) => t.has_param(),
+            TyKind::Ref(_, t) | TyKind::RefMut(_, t) => t.has_param(),
             _ => false,
         }
     }
@@ -244,6 +269,7 @@ impl<'tcx> Ty<'tcx> {
             }
             (TyKind::Region(a, r1), TyKind::Region(b, r2)) if r1 == r2 => a.compatible(*b),
             (TyKind::Ref(r1, a), TyKind::Ref(r2, b)) if r1 == r2 => a.compatible(*b),
+            (TyKind::RefMut(r1, a), TyKind::RefMut(r2, b)) if r1 == r2 => a.compatible(*b),
             _ => false,
         }
     }
@@ -263,7 +289,8 @@ impl PartialOrd for Ty<'_> {
     }
 }
 
-/// Ordered by arena pointer address — consistent within a single compilation
+/// Ordered by arena pointer address.
+/// consistent within a single compilation
 /// context, where all pointers are stable after allocation.
 impl Ord for Ty<'_> {
     fn cmp(&self, other: &Self) -> Ordering {
@@ -316,6 +343,7 @@ impl fmt::Display for Ty<'_> {
             }
             TyKind::Region(t, r) => write!(f, "{t} @ {r:?}"),
             TyKind::Ref(r, t) => write!(f, "&{r:?} {t}"),
+            TyKind::RefMut(r, t) => write!(f, "&{r:?} mut {t}"),
         }
     }
 }

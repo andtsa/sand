@@ -478,6 +478,52 @@ pub fn type_error_to_diagnostic<'tcx>(
                 },
             );
         }
+
+        RegionEscape { range } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    message: "borrow would escape its scope: the value it refers to does not live long enough".to_string(),
+                    range: *range,
+                    related: vec![],
+                    file: Some(file),
+                    ..Default::default()
+                },
+            );
+        }
+
+        MutBorrowOfImmutable { name, range } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    message: format!(
+                        "cannot mutably borrow immutable variable '{name}'; declare it `let mut {name}` (or a `mut` parameter)"
+                    ),
+                    range: *range,
+                    related: vec![],
+                    file: Some(file),
+                    ..Default::default()
+                },
+            );
+        }
+
+        DerefOfNonReference { ty, range } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    message: format!(
+                        "cannot dereference value of type {ty}: `*` requires a reference (`&T` or `&mut T`)"
+                    ),
+                    range: *range,
+                    related: vec![],
+                    file: Some(file),
+                    ..Default::default()
+                },
+            );
+        }
     }
     diagnostics
 }

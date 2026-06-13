@@ -6,7 +6,7 @@ use crate::compiler::context::CompileCtx;
 use crate::ir_types::typed_hir::*;
 
 /// recursively render a `MatchPattern` as source-like syntax, e.g.
-/// `Shape#Circle(r)`, `(a, b)`, `Wrap((x, y))`, `_` — mirrors the
+/// `Shape#Circle(r)`, `(a, b)`, `Wrap((x, y))`, `_`, mirrors the
 /// `Tag(payload)` / `(e1, e2, ...)` conventions used for `Constructor`/`Tuple`
 /// expression display elsewhere in this formatter.
 fn fmt_match_pattern<'tcx>(pattern: &MatchPattern<'tcx>, ctx: &CompileCtx<'tcx>) -> String {
@@ -90,7 +90,7 @@ enum Either<'fmt, 'tcx> {
 /// what the consumer of [`TypedExprFormatter`] is expected to put *after* this
 /// token.
 ///
-/// Example — given:
+/// Example: given
 /// ```sand
 /// i = 1;
 /// if x then f(x) else g()
@@ -222,10 +222,16 @@ impl<'fmt, 'tcx> Iterator for TypedExprFormatter<'fmt, 'tcx> {
                     Int(x) => return Some((x.to_string(), Nothing)),
                     Var(x) => return Some((self.ctx.uniq_variable_name(x), Nothing)),
 
-                    // emission order: & inner (no space, e.g. "&x")
-                    Borrow(inner) => {
+                    // emission order: & inner (no space, e.g. "&x"; "&mut x")
+                    Borrow(inner, mutable) => {
                         self.stack.push(Exp(&inner.expr));
-                        return Some(("&".into(), Nothing));
+                        let tok = if *mutable { "&mut " } else { "&" };
+                        return Some((tok.into(), Nothing));
+                    }
+                    // emission order: * inner (no space, e.g. "*x")
+                    Deref(inner) => {
+                        self.stack.push(Exp(&inner.expr));
+                        return Some(("*".into(), Nothing));
                     }
 
                     // --- compound expressions ---

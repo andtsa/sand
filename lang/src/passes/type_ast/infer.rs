@@ -3,6 +3,7 @@
 use crate::compiler::context::CompileCtx;
 use crate::compiler::structure::FunRef;
 use crate::compiler::structure::Map;
+use crate::compiler::structure::Range;
 use crate::ir_types::qhir;
 use crate::ir_types::typed_hir;
 use crate::ir_types::typed_hir::TypedFunction;
@@ -26,15 +27,20 @@ pub(super) fn infer_function<'tcx>(
     ctx: &mut CompileCtx<'tcx>,
     func: &qhir::Function<'tcx>,
 ) -> Result<(FunRef<'tcx>, TypedFunction<'tcx>), TypeError<'tcx>> {
+    // Open the function's region scope (depth 0): parameters live for the whole
+    // call, so a borrow of a parameter never escapes the body (Step 8b).
+    let fn_region = ctx.enter_region_scope();
     let env: TypeEnv<'tcx> = func
         .parameters
         .iter()
-        .map(|p| (p.name, (p.ty, Kind::Owned, p.is_mutable)))
+        .map(|p| (p.name, (p.ty, Kind::Owned, p.is_mutable, fn_region)))
         .collect();
 
     // use check() so that bare tags in return position are resolved against the
     // declared return type.
-    let body = check(ctx, &env, &func.body, func.ret_type).map_err(|e| TypeError {
+    let body_result = check(ctx, &env, &func.body, func.ret_type);
+    ctx.exit_region_scope();
+    let body = body_result.map_err(|e| TypeError {
         error: e,
         module: func.src_module,
     })?;
@@ -57,9 +63,9 @@ pub(super) fn infer_function<'tcx>(
 
 /// Type-check an enum constructor expression. For a non-generic enum this
 /// checks the payload against the declared type and yields the enum type. For a
-/// generic enum it solves the type arguments — seeded from `expected` (when it
+/// generic enum it solves the type arguments, seeded from `expected` (when it
 /// is an `App` of this enum, e.g. a `let x: Option<Int> = ...` context) and/or
-/// inferred by unifying the declared payload against the actual payload — and
+/// inferred by unifying the declared payload against the actual payload, and
 /// yields the corresponding `App` instantiation. A generic constructor whose
 /// arguments cannot be determined (e.g. a bare nullary `Option#None` with no
 /// annotation) is a `CannotInferTypeArguments` error.
@@ -170,6 +176,24 @@ pub(super) fn infer_constructor<'tcx>(
     make(typed_payload, ty)
 }
 
+/// Borrow escape check (Calculus §6.3): a block must not yield a value whose
+/// kind borrows a region introduced at or inside the block. `block_depth` is
+/// the block's nesting depth; a borrowed result whose region is at least that
+/// deep does not outlive the block, so it would escape.
+pub(super) fn escape_check<'tcx>(
+    ctx: &CompileCtx<'tcx>,
+    kind: Kind,
+    block_depth: usize,
+    range: Range,
+) -> Result<(), AstTypeError<'tcx>> {
+    if let Kind::Borrowed(r) | Kind::BorrowedMut(r) = kind
+        && ctx.region_depth(r) >= block_depth
+    {
+        return Err(AstTypeError::RegionEscape { range });
+    }
+    Ok(())
+}
+
 pub(super) fn infer_statement<'tcx>(
     ctx: &mut CompileCtx<'tcx>,
     env: &mut TypeEnv<'tcx>,
@@ -195,7 +219,11 @@ pub(super) fn infer_statement<'tcx>(
                     (inferred, ty)
                 }
             };
-            env.insert(*name, (ty, Kind::Owned, *is_mutable));
+            // The binding lives in the current lexical scope; it carries the
+            // value's kind so a `let r = &local` remembers it is a borrow (its
+            // region drives the escape check when `r` is later yielded).
+            let home = ctx.current_scope_region();
+            env.insert(*name, (ty, val_expr.kind, *is_mutable, home));
             Ok(typed_hir::Statement::Declaration {
                 name: *name,
                 range: *range,
@@ -204,7 +232,7 @@ pub(super) fn infer_statement<'tcx>(
             })
         }
         qhir::Statement::Assignment { name, val, range } => {
-            let (var_ty, _kind, is_mutable) =
+            let (var_ty, _kind, is_mutable, _home) =
                 env.get(name)
                     .copied()
                     .ok_or_else(|| AstTypeError::UnboundVariable {
@@ -266,7 +294,8 @@ pub(super) fn infer_statement<'tcx>(
                 .iter()
                 .zip(elem_tys.iter())
                 .map(|((name, is_mutable, elem_range), &ty)| {
-                    env.insert(*name, (ty, Kind::Owned, *is_mutable));
+                    let home = ctx.current_scope_region();
+                    env.insert(*name, (ty, Kind::Owned, *is_mutable, home));
                     (*name, ty, *is_mutable, *elem_range)
                 })
                 .collect();
@@ -317,8 +346,9 @@ pub(super) fn infer_statement<'tcx>(
             }
 
             // 6. Register all bindings in the environment.
+            let home = ctx.current_scope_region();
             for (var, ty, _range) in &bindings {
-                env.insert(*var, (*ty, Kind::Owned, false)); // all let-pattern bindings are immutable
+                env.insert(*var, (*ty, Kind::Owned, false, home)); // all let-pattern bindings are immutable
             }
 
             Ok(typed_hir::Statement::LetPattern {
@@ -360,32 +390,87 @@ pub(super) fn infer<'tcx>(
             ty: ctx.types.unit,
             kind: Kind::Owned,
         }),
-        // `&e` (Calculus §3.2): a shared borrow, of type `&'r T` and kind
-        // `Borrowed 'r` (`K-Borrow`). The region is fresh.
-        qhir::Expression::Borrow(inner) => {
+        // `&e` / `&mut e` (Calculus §3.2): a shared (`K-Borrow`) or exclusive
+        // (`K-BorrowMut`) borrow, of type `&'r T` / `&'r mut T`. The *type*'s
+        // region stays the shared elided region (so `&e` matches a `&T`
+        // annotation), while the *kind* carries the borrow's real scope — the
+        // referent's home region for a borrowed variable, or the current scope
+        // for a temporary — so the escape check (Step 8b) can tell a local's
+        // borrow from a parameter's. (Mutable-borrow exclusivity is enforced
+        // separately, in the ownership pass.)
+        qhir::Expression::Borrow(inner, mutable) => {
+            // `&mut x` of a *variable* requires that `x` be a mutable binding
+            // (a `let mut`/`mut` parameter). Borrowing a temporary is always
+            // fine — the borrower owns it exclusively.
+            if *mutable
+                && let qhir::Expression::Var(v) = &inner.expr
+                && !env.get(v).map(|b| b.2).unwrap_or(false)
+            {
+                return Err(AstTypeError::MutBorrowOfImmutable {
+                    name: ctx.uniq_variable_name(v),
+                    range: expr.range,
+                });
+            }
             let inner_expr = infer(ctx, env, inner)?;
             let region = ctx.anon_region();
-            let ty = ctx.ref_ty(region, inner_expr.ty);
+            let ty = if *mutable {
+                ctx.ref_mut_ty(region, inner_expr.ty)
+            } else {
+                ctx.ref_ty(region, inner_expr.ty)
+            };
+            let scope = match &inner.expr {
+                qhir::Expression::Var(v) => env
+                    .get(v)
+                    .map(|b| b.3)
+                    .unwrap_or(ctx.current_scope_region()),
+                _ => ctx.current_scope_region(),
+            };
+            let kind = if *mutable {
+                Kind::BorrowedMut(scope)
+            } else {
+                Kind::Borrowed(scope)
+            };
             Ok(typed_hir::Expr {
-                expr: typed_hir::Expression::Borrow(Box::new(inner_expr)),
+                expr: typed_hir::Expression::Borrow(Box::new(inner_expr), *mutable),
                 range: expr.range,
                 ty,
-                kind: Kind::Borrowed(region),
+                kind,
+            })
+        }
+        // `*e` (dereference): reading through a reference yields the pointee.
+        // `&'r T` and `&'r mut T` both deref to `T`. Borrows are erased at
+        // runtime, so this lowers transparently; the result is an owned value.
+        qhir::Expression::Deref(inner) => {
+            let inner_expr = infer(ctx, env, inner)?;
+            let pointee = match inner_expr.ty.kind() {
+                TyKind::Ref(_, t) | TyKind::RefMut(_, t) => *t,
+                _ => {
+                    return Err(AstTypeError::DerefOfNonReference {
+                        ty: inner_expr.ty,
+                        range: expr.range,
+                    });
+                }
+            };
+            Ok(typed_hir::Expr {
+                expr: typed_hir::Expression::Deref(Box::new(inner_expr)),
+                range: expr.range,
+                ty: pointee,
+                kind: Kind::Owned,
             })
         }
         qhir::Expression::Var(x) => {
-            let (ty, _, _) = env
-                .get(x)
-                .copied()
-                .ok_or_else(|| AstTypeError::UnboundVariable {
-                    name: ctx.uniq_variable_name(x),
-                    range: expr.range,
-                })?;
+            let (ty, kind, _, _) =
+                env.get(x)
+                    .copied()
+                    .ok_or_else(|| AstTypeError::UnboundVariable {
+                        name: ctx.uniq_variable_name(x),
+                        range: expr.range,
+                    })?;
             Ok(typed_hir::Expr {
                 expr: typed_hir::Expression::Var(*x),
                 range: expr.range,
                 ty,
-                kind: Kind::Owned,
+                kind,
             })
         }
         qhir::Expression::Constructor {
@@ -501,7 +586,7 @@ pub(super) fn infer<'tcx>(
                 Some(f) => {
                     let f_expr = infer(ctx, env, f)?;
                     // A diverging branch (kind `Never`) does not constrain the
-                    // result type — it is taken from the other branch.
+                    // result type, so we just take from the other branch.
                     let ty = match (t_expr.kind, f_expr.kind) {
                         (Kind::Never, _) => f_expr.ty,
                         (_, Kind::Never) => t_expr.ty,
@@ -588,7 +673,14 @@ pub(super) fn infer<'tcx>(
         }
         qhir::Expression::Call { fn_name, args } => {
             let fun_sig = ctx.fun_sig(fn_name);
-            let expected_tys: Vec<Ty<'tcx>> = fun_sig.args.iter().map(|p| p.1).collect();
+            let raw_expected: Vec<Ty<'tcx>> = fun_sig.args.iter().map(|p| p.1).collect();
+            let raw_ret = fun_sig.ret_ty;
+            // Region inference: a callee's reference regions are inferred at the
+            // call site, so match arguments and form the result region-blind —
+            // `f<'r>(x: &'r T)` becomes callable with any borrow.
+            let expected_tys: Vec<Ty<'tcx>> =
+                raw_expected.iter().map(|t| ctx.region_erase(*t)).collect();
+            let ret_ty = ctx.region_erase(raw_ret);
 
             if args.len() != expected_tys.len() {
                 // Arity mismatch: infer args just for the error message.
@@ -612,8 +704,7 @@ pub(super) fn infer<'tcx>(
 
             // A call is generic when the declared signature still mentions any
             // type parameter; otherwise the existing concrete path applies.
-            let is_generic =
-                expected_tys.iter().any(|t| t.has_param()) || fun_sig.ret_ty.has_param();
+            let is_generic = expected_tys.iter().any(|t| t.has_param()) || raw_ret.has_param();
 
             if !is_generic {
                 // check() each argument against the declared parameter type so that
@@ -629,7 +720,7 @@ pub(super) fn infer<'tcx>(
                         args: arg_exprs,
                     },
                     range: expr.range,
-                    ty: fun_sig.ret_ty,
+                    ty: ret_ty,
                     kind: Kind::Owned,
                 });
             }
@@ -664,7 +755,9 @@ pub(super) fn infer<'tcx>(
                     })?;
                 }
             }
-            let ret_ty = subst(ctx, fun_sig.ret_ty, &mapping);
+            // substitute the solved type parameters into the (already
+            // region-erased) return type.
+            let ret_ty = subst(ctx, ret_ty, &mapping);
 
             Ok(typed_hir::Expr {
                 expr: typed_hir::Expression::Call {
@@ -721,22 +814,34 @@ pub(super) fn infer<'tcx>(
             statements,
             expr: ret_expr,
         } => {
-            let (typed_statements, final_env) = statements.iter().try_fold(
-                (Vec::with_capacity(statements.len()), env.clone()),
-                |(mut stmts, mut env), stmt| {
-                    stmts.push(infer_statement(ctx, &mut env, stmt)?);
-                    Ok((stmts, env))
-                },
-            )?;
+            // A block opens a fresh lexical region scope; locals bound here live
+            // in it, and the block may not yield a borrow of one (Calculus §6.3).
+            let block_region = ctx.enter_region_scope();
+            let block_depth = ctx.region_depth(block_region);
 
-            let (typed_expr, ret_ty, kind) = if let Some(e) = ret_expr {
-                let t_expr = infer(ctx, &final_env, e)?;
-                let ret_ty = t_expr.ty;
-                let kind = t_expr.kind;
-                (Some(Box::new(t_expr)), ret_ty, kind)
-            } else {
-                (None, ctx.types.unit, Kind::Owned)
-            };
+            let computed = (|| {
+                let (typed_statements, final_env) = statements.iter().try_fold(
+                    (Vec::with_capacity(statements.len()), env.clone()),
+                    |(mut stmts, mut env), stmt| {
+                        stmts.push(infer_statement(ctx, &mut env, stmt)?);
+                        Ok((stmts, env))
+                    },
+                )?;
+
+                let (typed_expr, ret_ty, kind) = if let Some(e) = ret_expr {
+                    let t_expr = infer(ctx, &final_env, e)?;
+                    let ret_ty = t_expr.ty;
+                    let kind = t_expr.kind;
+                    (Some(Box::new(t_expr)), ret_ty, kind)
+                } else {
+                    (None, ctx.types.unit, Kind::Owned)
+                };
+                Ok::<_, AstTypeError<'tcx>>((typed_statements, typed_expr, ret_ty, kind))
+            })();
+            ctx.exit_region_scope();
+
+            let (typed_statements, typed_expr, ret_ty, kind) = computed?;
+            escape_check(ctx, kind, block_depth, expr.range)?;
 
             Ok(typed_hir::Expr {
                 expr: typed_hir::Expression::Block {

@@ -62,8 +62,12 @@ fn dump_expr<'tcx>(out: &mut String, expr: &Expr<'tcx>, ctx: &CompileCtx<'tcx>, 
     let _ = write!(out, "[{}] ", ctx.display_ty(expr.ty));
 
     match &expr.expr {
-        Expression::Borrow(inner) => {
-            let _ = writeln!(out, "borrow");
+        Expression::Borrow(inner, mutable) => {
+            let _ = writeln!(out, "{}", if *mutable { "borrow_mut" } else { "borrow" });
+            dump_expr(out, inner, ctx, level + 1);
+        }
+        Expression::Deref(inner) => {
+            let _ = writeln!(out, "deref");
             dump_expr(out, inner, ctx, level + 1);
         }
         Expression::If { cond, t, f } => {

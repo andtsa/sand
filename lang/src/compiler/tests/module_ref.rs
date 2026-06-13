@@ -23,7 +23,7 @@ fn create_dummy_module_is_idempotent() {
     let second = ctx.create_dummy_module(fr);
     assert!(
         second.is_err(),
-        "second call should fail — guard is broken and currently succeeds, \
+        "second call should fail: guard is broken and currently succeeds, \
          creating a duplicate \"mAin\" module"
     );
 }

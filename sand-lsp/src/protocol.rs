@@ -223,14 +223,55 @@ impl LanguageServer for Backend {
         Ok(None)
     }
 
+    async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
+        let uri = &params.text_document.uri;
+        let slots_guard = self.slots.read().await;
+        for slot in slots_guard.iter() {
+            let Some(file_ref) = slot.project.is_tracked(uri) else {
+                continue;
+            };
+            let Some(lang::castles::project::CheckResult::Success { ctx, ast }) =
+                slot.last_result.as_ref()
+            else {
+                return Ok(None);
+            };
+            let formatted = ast.format(ctx);
+            let Some(new_text) = formatted.get(&file_ref) else {
+                return Ok(None);
+            };
+            let current_text = slot.project.text_for_file(file_ref).unwrap_or("");
+            let end = doc_end(current_text);
+            return Ok(Some(vec![TextEdit {
+                range: Range::new(Position::new(0, 0), end),
+                new_text: new_text.clone(),
+            }]));
+        }
+        Ok(None)
+    }
+
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
         let uri = params.text_document.uri;
-        // Use the last change — with full sync this is always the complete document
+        // Use the last change. with full sync this is always the complete document
         if let Some(change) = params.content_changes.into_iter().last() {
             self.update_file(uri, change.text).await;
             self.check_project().await;
         }
     }
+}
+
+/// Compute the LSP `Position` of the very end of `text` (UTF-16 columns).
+fn doc_end(text: &str) -> Position {
+    let mut line = 0u32;
+    let mut col = 0u32;
+    for ch in text.chars() {
+        if ch == '\n' {
+            line += 1;
+            col = 0;
+        } else {
+            col += ch.len_utf16() as u32;
+        }
+    }
+    Position::new(line, col)
 }
 
 impl Backend {
@@ -242,6 +283,7 @@ impl Backend {
                 )),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 definition_provider: Some(OneOf::Left(true)),
+                document_formatting_provider: Some(OneOf::Left(true)),
                 ..Default::default()
             },
             ..Default::default()
