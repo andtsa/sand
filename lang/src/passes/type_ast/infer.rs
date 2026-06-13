@@ -177,17 +177,21 @@ pub(super) fn infer_constructor<'tcx>(
 }
 
 /// Borrow escape check (Calculus §6.3): a block must not yield a value whose
-/// kind borrows a region introduced at or inside the block. `block_depth` is
-/// the block's nesting depth; a borrowed result whose region is at least that
-/// deep does not outlive the block, so it would escape.
+/// *type* names a region introduced at or inside the block — such a region
+/// would dangle once the block closes. `block_depth` is the block's nesting
+/// depth; any free region of the result type at that depth or deeper escapes.
+/// Regions live on the type, so this reads `freeRegions(ty)`, not the kind.
 pub(super) fn escape_check<'tcx>(
     ctx: &CompileCtx<'tcx>,
-    kind: Kind,
+    ty: Ty<'tcx>,
     block_depth: usize,
     range: Range,
 ) -> Result<(), AstTypeError<'tcx>> {
-    if let Kind::Borrowed(r) | Kind::BorrowedMut(r) = kind
-        && ctx.region_depth(r) >= block_depth
+    let mut regions = Vec::new();
+    ty.free_regions(&mut regions);
+    if regions
+        .into_iter()
+        .any(|r| ctx.region_depth(r) >= block_depth)
     {
         return Err(AstTypeError::RegionEscape { range });
     }
@@ -412,23 +416,25 @@ pub(super) fn infer<'tcx>(
                 });
             }
             let inner_expr = infer(ctx, env, inner)?;
-            let region = ctx.anon_region();
-            let ty = if *mutable {
-                ctx.ref_mut_ty(region, inner_expr.ty)
-            } else {
-                ctx.ref_ty(region, inner_expr.ty)
-            };
-            let scope = match &inner.expr {
+            // the borrow's region is the referent's storage region — a borrowed
+            // variable's home region, or the current scope for a temporary — and
+            // it lives on the *type* (`&'r T`). The kind records only capability.
+            let region = match &inner.expr {
                 qhir::Expression::Var(v) => env
                     .get(v)
                     .map(|b| b.3)
                     .unwrap_or(ctx.current_scope_region()),
                 _ => ctx.current_scope_region(),
             };
-            let kind = if *mutable {
-                Kind::BorrowedMut(scope)
+            let ty = if *mutable {
+                ctx.ref_mut_ty(region, inner_expr.ty)
             } else {
-                Kind::Borrowed(scope)
+                ctx.ref_ty(region, inner_expr.ty)
+            };
+            let kind = if *mutable {
+                Kind::BorrowedMut
+            } else {
+                Kind::Borrowed
             };
             Ok(typed_hir::Expr {
                 expr: typed_hir::Expression::Borrow(Box::new(inner_expr), *mutable),
@@ -841,7 +847,7 @@ pub(super) fn infer<'tcx>(
             ctx.exit_region_scope();
 
             let (typed_statements, typed_expr, ret_ty, kind) = computed?;
-            escape_check(ctx, kind, block_depth, expr.range)?;
+            escape_check(ctx, ret_ty, block_depth, expr.range)?;
 
             Ok(typed_hir::Expr {
                 expr: typed_hir::Expression::Block {

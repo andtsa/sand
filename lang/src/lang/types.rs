@@ -16,13 +16,17 @@ use crate::compiler::structure::EnumDef;
 pub enum Kind {
     /// A normal owned value.
     Owned,
-    /// A shared (immutable) borrow in region `'r` (Calculus §1.1). A borrowed
-    /// value may be used multiple times and is not consumed.
-    Borrowed(Region),
-    /// An exclusive (mutable) borrow in region `'r` (Calculus §1.2). While it
-    /// is live, no other borrow of the same place may exist (the
-    /// exclusivity invariant, enforced by the ownership pass).
-    BorrowedMut(Region),
+    /// A shared (immutable) borrow (Calculus §1.2). A borrowed value may be
+    /// used multiple times and is not consumed. The borrow's *region* lives
+    /// on the **type** (`&'r T`), not the kind: kinds record only
+    /// *capability*; regions belong to the type system and region escape is
+    /// checked on the type.
+    Borrowed,
+    /// An exclusive (mutable) borrow (Calculus §1.2). While it is live, no
+    /// other borrow of the same place may exist (the exclusivity invariant,
+    /// enforced by the ownership pass). Its region lives on the type, as
+    /// for `Borrowed`.
+    BorrowedMut,
     /// The uninhabited kind: a diverging expression (e.g. an infinite loop)
     /// never produces a value, so it is usable where any kind is expected.
     Never,
@@ -32,13 +36,13 @@ impl Kind {
     /// Subkinding `self <: other` (Calculus §1.2): "`self` is usable where
     /// `other` is expected". `Never` is the bottom; `Owned` coerces to any
     /// borrow mode (`SK-OwnedBorrowed` / `SK-OwnedBorrowedMut`); otherwise
-    /// kinds are subkinds only of themselves (the borrow modes, and
-    /// distinct borrow regions, are incomparable).
+    /// kinds are subkinds only of themselves (the two borrow modes are
+    /// incomparable). Regions play no part — they live on the type.
     pub fn is_subkind(self, other: Kind) -> bool {
         match (self, other) {
             (Kind::Never, _) => true,
             (a, b) if a == b => true,
-            (Kind::Owned, Kind::Borrowed(_) | Kind::BorrowedMut(_)) => true,
+            (Kind::Owned, Kind::Borrowed | Kind::BorrowedMut) => true,
             _ => false,
         }
     }
@@ -251,6 +255,58 @@ impl<'tcx> Ty<'tcx> {
 
     pub fn type_neq(self, other: Ty<'tcx>) -> bool {
         !self.type_eq(other)
+    }
+
+    /// Structural equality that ignores reference / region-ascription *regions*
+    /// (region-blind). Used at type-checking boundaries while regions live on
+    /// the type but are validated separately by the escape check (on free
+    /// regions), not by use-site comparison. Full region-aware subtyping
+    /// (covariant `&`, invariant `&mut`) replaces this in the
+    /// Reference-Representation step.
+    pub fn eq_modulo_regions(self, other: Ty<'tcx>) -> bool {
+        if self.type_eq(other) {
+            return true;
+        }
+        match (self.kind(), other.kind()) {
+            (TyKind::Ref(_, a), TyKind::Ref(_, b))
+            | (TyKind::RefMut(_, a), TyKind::RefMut(_, b))
+            | (TyKind::Region(a, _), TyKind::Region(b, _)) => a.eq_modulo_regions(*b),
+            (TyKind::Tuple(xs), TyKind::Tuple(ys)) if xs.len() == ys.len() => {
+                xs.iter().zip(*ys).all(|(x, y)| x.eq_modulo_regions(*y))
+            }
+            (TyKind::App(e1, xs), TyKind::App(e2, ys)) if e1 == e2 && xs.len() == ys.len() => {
+                xs.iter().zip(*ys).all(|(x, y)| x.eq_modulo_regions(*y))
+            }
+            _ => false,
+        }
+    }
+
+    /// Collect the free regions appearing in this type into `out` (Calculus
+    /// §6.3 `freeRegions`). Used by the escape check: a value crossing a
+    /// scope boundary must not name a region introduced at or inside that
+    /// scope.
+    pub fn free_regions(self, out: &mut Vec<crate::lang::types::Region>) {
+        match self.kind() {
+            TyKind::Ref(r, t) | TyKind::RefMut(r, t) => {
+                out.push(*r);
+                t.free_regions(out);
+            }
+            TyKind::Region(t, r) => {
+                out.push(*r);
+                t.free_regions(out);
+            }
+            TyKind::Tuple(elems) => {
+                for e in elems.iter() {
+                    e.free_regions(out);
+                }
+            }
+            TyKind::App(_, args) => {
+                for a in args.iter() {
+                    a.free_regions(out);
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Like [`type_eq`](Ty::type_eq), but also looks through `Tuple` handles
