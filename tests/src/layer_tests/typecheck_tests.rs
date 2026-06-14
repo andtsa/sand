@@ -417,7 +417,7 @@ fn let_pattern_wildcard_in_tuple_payload() {
 #[test]
 fn let_pattern_compiled() {
     let result = run_mir(
-        "type List = Empty | Cons((Int, List))
+        "type List = Empty | Cons((Int, List)) deriving Heaped
          def head_or(list: List, default: Int): Int := {
              let List#Cons((x, _)) = list else List#Cons((default, List#Empty));
              x
@@ -548,7 +548,7 @@ fn tag_inference_in_if_else_branches() {
 #[test]
 fn tag_inference_in_match_arm_body() {
     let result = run_mir(
-        "type List = Empty | Cons((Int, List))
+        "type List = Empty | Cons((Int, List)) deriving Heaped
          def sum(l: List): Int :=
              match l {
                  #Cons((x, rest)) => x + sum(rest),

@@ -116,6 +116,12 @@ pub fn compile_hir<'proj>(
         SandLangErrorContext::with_module(e.module).wrap_err(e.error)
     })?;
 
+    // Heap lowering (Memory Step C.5): rewrite every `deriving Heaped` enum into
+    // a `Unique<Node>` handle over the core-lib allocator *before* ownership, so
+    // drops are inserted uniformly on the resulting handles, and before mono, so
+    // the injected `unique_*` calls and node types are instantiated normally.
+    let typed_program = passes::heap_lower::lower(ctx, typed_program);
+
     let typed_program = passes::ownership::check(ctx, typed_program)
         .map_err(|e| SandLangErrorContext::with_module(e.module).wrap_err(e.error))?;
 

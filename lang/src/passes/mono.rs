@@ -163,6 +163,8 @@ impl<'tcx> Mono<'tcx> {
             base.variants.iter().map(|v| v.payload.get()).collect();
         let module = base.src_module;
         let range = base.range;
+        // a specialised enum keeps its base's derived properties (heap strategy).
+        let derives = base.derives.clone();
 
         let spec_er = ctx
             .register_enum(
@@ -172,10 +174,16 @@ impl<'tcx> Mono<'tcx> {
                 Vec::new(),
                 range,
                 module,
+                derives,
             )
             .unwrap_or_else(|e| internal_bug!("mono enum registration failed: {e}"));
         // Insert before resolving payloads so recursive enums terminate.
         self.enum_instances.insert(key, spec_er);
+        // A specialisation of the `Unique` lang-item is a heap handle: record it
+        // so codegen frees its allocation on drop (Memory Step C.5).
+        if ctx.unique_enum() == Some(base_er) {
+            ctx.mark_unique_instance(spec_er);
+        }
 
         for (idx, raw) in raw_payloads.into_iter().enumerate() {
             if let Some(p) = raw {
@@ -189,6 +197,20 @@ impl<'tcx> Mono<'tcx> {
     /// Substitute parameters per `mapping` and replace every generic-enum
     /// instantiation with its specialised concrete enum. The result is free of
     /// `Ty::Param` and `Ty::App`.
+    /// Whether any variant payload of `er` still contains a generic
+    /// instantiation (`App`) or a type parameter (`Param`) — i.e. the enum,
+    /// though referenced bare, has payloads that monomorphisation must still
+    /// lower. (Used to specialise non-generic enums that embed generics, such
+    /// as heaped node enums whose recursive fields are `Unique<…>`
+    /// handles.)
+    fn enum_payload_needs_mono(ctx: &CompileCtx<'tcx>, er: EnumRef<'tcx>) -> bool {
+        ctx.get_enum(er)
+            .variants
+            .iter()
+            .filter_map(|v| v.payload.get())
+            .any(ty_needs_mono)
+    }
+
     fn mono_ty(
         &mut self,
         ctx: &mut CompileCtx<'tcx>,
@@ -216,6 +238,16 @@ impl<'tcx> Mono<'tcx> {
                     .map(|a| self.mono_ty(ctx, *a, mapping))
                     .collect();
                 let spec_er = self.request_enum(ctx, base, args);
+                ctx.enum_ty(spec_er)
+            }
+            // A non-generic enum is already concrete *unless* one of its variant
+            // payloads embeds a generic instantiation (`Opt<Int>`) or a type
+            // parameter — e.g. a `deriving Heaped` node enum, whose recursive
+            // fields are `Unique<…>` (an `App`). Such payloads are never reached
+            // through the `App` arm above (the enum is referenced bare), so
+            // request a monomorphic copy here to lower them.
+            TyKind::Enum(er) if Self::enum_payload_needs_mono(ctx, *er) => {
+                let spec_er = self.request_enum(ctx, *er, Vec::new());
                 ctx.enum_ty(spec_er)
             }
             // Region ascription `T @ 'r` has no runtime representation: erase to
@@ -280,11 +312,20 @@ impl<'tcx> Mono<'tcx> {
                     .map(|e| self.rewrite_expr(ctx, e, mapping))
                     .collect(),
             ),
-            Expression::IntrinsicCall { fn_name, args } => Expression::IntrinsicCall {
+            Expression::IntrinsicCall {
+                fn_name,
+                args,
+                type_args,
+            } => Expression::IntrinsicCall {
                 fn_name: *fn_name,
                 args: args
                     .iter()
                     .map(|a| self.rewrite_expr(ctx, a, mapping))
+                    .collect(),
+                // monomorphise the turbofish type args (e.g. `size_of::<T>`).
+                type_args: type_args
+                    .iter()
+                    .map(|t| self.mono_ty(ctx, *t, mapping))
                     .collect(),
             },
             Expression::Call { fn_name, args } => {
@@ -531,6 +572,21 @@ impl<'tcx> Mono<'tcx> {
             MatchPattern::BoolLit(b) => MatchPattern::BoolLit(*b),
             MatchPattern::Wildcard => MatchPattern::Wildcard,
         }
+    }
+}
+
+/// Whether `ty` still carries something monomorphisation must lower: a generic
+/// enum instantiation (`App`) or a type parameter (`Param`), anywhere in its
+/// structure.
+fn ty_needs_mono(ty: Ty<'_>) -> bool {
+    match ty.kind() {
+        TyKind::App(..) | TyKind::Param(_) => true,
+        TyKind::Tuple(elems) => elems.iter().copied().any(ty_needs_mono),
+        TyKind::Ptr(inner)
+        | TyKind::Ref(_, inner)
+        | TyKind::RefMut(_, inner)
+        | TyKind::Region(inner, _) => ty_needs_mono(*inner),
+        _ => false,
     }
 }
 

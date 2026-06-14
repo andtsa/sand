@@ -125,6 +125,9 @@ pub enum Expression<'tcx> {
     IntrinsicCall {
         fn_name: Intrinsic,
         args: Vec<Expr<'tcx>>,
+        /// Explicit turbofish type arguments (Memory Step C). Empty except for
+        /// type-argument intrinsics like `size_of::<T>()`.
+        type_args: Vec<Ty<'tcx>>,
     },
     /// A call to a typeclass method (Step 10). The instance is unresolved here
     /// — type-checking picks it from the argument types (rewriting to

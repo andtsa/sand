@@ -102,7 +102,7 @@ fn dump_expr<'tcx>(out: &mut String, expr: &Expr<'tcx>, ctx: &CompileCtx<'tcx>, 
                 dump_expr(out, arg, ctx, level + 1);
             }
         }
-        Expression::IntrinsicCall { fn_name, args } => {
+        Expression::IntrinsicCall { fn_name, args, .. } => {
             let _ = writeln!(out, "intrinsic {}", fn_name);
             for arg in args {
                 dump_expr(out, arg, ctx, level + 1);

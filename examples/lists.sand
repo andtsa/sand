@@ -1,6 +1,6 @@
 //@TEST:{0}[0,1,3,12,9,1]
 
-type IList = Empty | Cons((Int, IList));
+type IList = Empty | Cons((Int, IList)) deriving Heaped;
 
 def push(elem: Int, list: IList): IList := match list {
     IList#Empty => IList#Cons((elem, IList#Empty)),

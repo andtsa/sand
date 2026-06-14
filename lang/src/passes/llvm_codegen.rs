@@ -26,6 +26,9 @@ pub struct LlvmCodegen<'ctx> {
     context: &'ctx inkwell::context::Context,
     module: inkwell::module::Module<'ctx>,
     builder: inkwell::builder::Builder<'ctx>,
+    /// Target layout, for sizing the payload area of stack tagged-union enums
+    /// (Memory Step C). The module's data layout is set to match.
+    target_data: inkwell::targets::TargetData,
 }
 
 /// per-function state,
@@ -53,10 +56,34 @@ pub enum CodegenError {
 
 impl<'ctx> LlvmCodegen<'ctx> {
     pub fn new(context: &'ctx Context, module_name: &str) -> Self {
+        use inkwell::targets::*;
+        // Resolve the native target's data layout up front so enum-union sizing
+        // (Memory Step C) matches the backend, and pin it on the module.
+        Target::initialize_native(&InitializationConfig::default())
+            .expect("initialize native target");
+        let triple = TargetMachine::get_default_triple();
+        let machine = Target::from_triple(&triple)
+            .ok()
+            .and_then(|t| {
+                t.create_target_machine(
+                    &triple,
+                    "generic",
+                    "",
+                    inkwell::OptimizationLevel::Default,
+                    RelocMode::Default,
+                    CodeModel::Default,
+                )
+            })
+            .expect("create target machine");
+        let target_data = machine.get_target_data();
+        let module = context.create_module(module_name);
+        module.set_data_layout(&target_data.get_data_layout());
+        module.set_triple(&triple);
         Self {
             context,
-            module: context.create_module(module_name),
+            module,
             builder: context.create_builder(),
+            target_data,
         }
     }
 
@@ -236,9 +263,17 @@ impl<'ctx> LlvmCodegen<'ctx> {
                 // so dst_ty is irrelevant — use unit as a dummy.
                 self.emit_rvalue(value, fn_ctx.compile_ctx.types.unit, fn_ctx, fns)?;
             }
-            // Drop (Step B) lowers to `__drop_in_place`, which is a no-op until
-            // Step C gives types `release` / a `Drop` instance — so emit nothing.
-            Statement::Drop { .. } => {}
+            // Drop (Memory Step B/C): structurally release the place's value.
+            // For a type that owns no heap (no `Unique<…>` handle anywhere) this
+            // is a no-op; otherwise it runs the per-type drop glue, which frees
+            // each owned allocation and recurses through nested handles.
+            Statement::Drop { place, .. } => {
+                let ty = Self::place_ty(place, fn_ctx);
+                if let Some(glue) = self.ensure_drop_glue(fn_ctx.compile_ctx, ty)? {
+                    let addr = self.place_address(place, fn_ctx)?;
+                    self.builder.build_call(glue, &[addr.into()], "")?;
+                }
+            }
         }
 
         Ok(())
@@ -257,6 +292,15 @@ impl<'ctx> LlvmCodegen<'ctx> {
     ) -> Result<llvm::BasicValueEnum<'ctx>, CodegenError> {
         match rv {
             RValue::Use(op) => self.emit_operand(op, fn_ctx),
+
+            // `size_of::<T>()` (Memory Step C): the target's LLVM size, as i64.
+            RValue::SizeOf(ty) => {
+                let sz = self
+                    .llvm_type(fn_ctx.compile_ctx, *ty)
+                    .size_of()
+                    .expect("a sized type for size_of");
+                Ok(sz.into())
+            }
 
             // `&place` / `&mut place`: the address of the place's storage (R2).
             RValue::Ref(place) => Ok(self.place_address(place, fn_ctx)?.into()),
@@ -696,13 +740,198 @@ impl<'ctx> LlvmCodegen<'ctx> {
         self.module.add_function("exit", fn_ty, None)
     }
 
-    fn get_or_declare_malloc(&self) -> llvm::FunctionValue<'ctx> {
-        if let Some(f) = self.module.get_function("malloc") {
+    fn get_or_declare_free(&self) -> llvm::FunctionValue<'ctx> {
+        if let Some(f) = self.module.get_function("free") {
             return f;
         }
         let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
-        let fn_ty = ptr_ty.fn_type(&[self.context.i64_type().into()], false);
-        self.module.add_function("malloc", fn_ty, None)
+        let fn_ty = self.context.void_type().fn_type(&[ptr_ty.into()], false);
+        self.module.add_function("free", fn_ty, None)
+    }
+
+    // ── drop glue (Memory Step C.5) ──────────────────────────────────────────
+
+    /// Whether dropping a value of `ty` does any work: it (transitively) owns a
+    /// `Unique<…>` heap handle that must be freed. Pure scalars, raw pointers,
+    /// references, and payload-free enums need no glue.
+    fn type_needs_drop<'tcx>(ctx: &CompileCtx<'tcx>, ty: Ty<'tcx>) -> bool {
+        match ty.kind() {
+            TyKind::Enum(er) if ctx.is_unique_handle(*er) => true,
+            TyKind::Enum(er) => ctx
+                .get_enum(*er)
+                .variants
+                .iter()
+                .filter_map(|v| v.payload.get())
+                .any(|p| Self::type_needs_drop(ctx, p)),
+            TyKind::Tuple(elems) => elems.iter().any(|e| Self::type_needs_drop(ctx, *e)),
+            _ => false,
+        }
+    }
+
+    /// A stable, collision-free symbol fragment identifying `ty` for glue
+    /// memoisation (enum names are unique post-monomorphisation).
+    fn glue_key<'tcx>(ctx: &CompileCtx<'tcx>, ty: Ty<'tcx>) -> String {
+        match ty.kind() {
+            TyKind::Enum(er) => format!("E{}", ctx.get_enum(*er).name),
+            TyKind::Tuple(elems) => {
+                let mut s = String::from("T");
+                for e in elems.iter() {
+                    s.push('_');
+                    s.push_str(&Self::glue_key(ctx, *e));
+                }
+                s
+            }
+            TyKind::Int => "i".into(),
+            TyKind::Bool => "b".into(),
+            TyKind::Unit => "u".into(),
+            TyKind::Ptr(t) => format!("P{}", Self::glue_key(ctx, *t)),
+            TyKind::Ref(_, t) | TyKind::RefMut(_, t) | TyKind::Region(t, _) => {
+                format!("R{}", Self::glue_key(ctx, *t))
+            }
+            other => format!("x{other:?}"),
+        }
+    }
+
+    /// Get (or generate) the drop-glue function for `ty`: a
+    /// `void(ptr)` taking the address of a value of `ty` and releasing every
+    /// heap allocation it owns. Returns `None` when nothing needs dropping.
+    /// Memoised by symbol name in the module, and the function is added before
+    /// its body is emitted, so self-recursive types terminate.
+    fn ensure_drop_glue<'tcx>(
+        &self,
+        ctx: &CompileCtx<'tcx>,
+        ty: Ty<'tcx>,
+    ) -> Result<Option<llvm::FunctionValue<'ctx>>, CodegenError> {
+        if !Self::type_needs_drop(ctx, ty) {
+            return Ok(None);
+        }
+        let name = format!("drop_glue${}", Self::glue_key(ctx, ty));
+        if let Some(f) = self.module.get_function(&name) {
+            return Ok(Some(f));
+        }
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        let fn_ty = self.context.void_type().fn_type(&[ptr_ty.into()], false);
+        let glue = self.module.add_function(&name, fn_ty, None);
+
+        // Emit the body, saving/restoring the caller's builder position so glue
+        // can be generated lazily mid-function (and recursively).
+        let saved = self.builder.get_insert_block();
+        let entry = self.context.append_basic_block(glue, "entry");
+        self.builder.position_at_end(entry);
+        let p = glue
+            .get_nth_param(0)
+            .expect("glue takes one pointer param")
+            .into_pointer_value();
+        self.emit_drop_glue_body(ctx, ty, glue, p)?;
+        if let Some(bb) = saved {
+            self.builder.position_at_end(bb);
+        }
+        Ok(Some(glue))
+    }
+
+    fn emit_drop_glue_body<'tcx>(
+        &self,
+        ctx: &CompileCtx<'tcx>,
+        ty: Ty<'tcx>,
+        glue: llvm::FunctionValue<'ctx>,
+        p: llvm::PointerValue<'ctx>,
+    ) -> Result<(), CodegenError> {
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        match ty.kind() {
+            // A `Unique<Node>` handle: free the cell, recursing into the node
+            // first so its own handles are released (deep release).
+            TyKind::Enum(er) if ctx.is_unique_handle(*er) => {
+                let struct_ty = self.enum_struct_type(ctx, *er);
+                let payload_slot = self
+                    .builder
+                    .build_struct_gep(struct_ty, p, 1, "cell_slot")?;
+                let cell_ptr = self
+                    .builder
+                    .build_load(ptr_ty, payload_slot, "cell")?
+                    .into_pointer_value();
+                // node type = the `T` of the handle's `U(Ptr<T>)` payload.
+                let node_ty = match ctx.get_enum(*er).variants[0].payload.get() {
+                    Some(p) => match p.kind() {
+                        TyKind::Ptr(inner) => *inner,
+                        _ => internal_bug!("Unique handle payload is not Ptr<_>"),
+                    },
+                    None => internal_bug!("Unique handle has no payload"),
+                };
+                if let Some(node_glue) = self.ensure_drop_glue(ctx, node_ty)? {
+                    self.builder.build_call(node_glue, &[cell_ptr.into()], "")?;
+                }
+                let free = self.get_or_declare_free();
+                self.builder.build_call(free, &[cell_ptr.into()], "")?;
+                self.builder.build_return(None)?;
+            }
+            // A payload enum (node): switch on the discriminant and drop the
+            // active variant's payload.
+            TyKind::Enum(er) => {
+                let er = *er;
+                let struct_ty = self.enum_struct_type(ctx, er);
+                let disc_slot = self
+                    .builder
+                    .build_struct_gep(struct_ty, p, 0, "disc_slot")?;
+                let disc = self
+                    .builder
+                    .build_load(self.context.i64_type(), disc_slot, "disc")?
+                    .into_int_value();
+                let end_bb = self.context.append_basic_block(glue, "end");
+
+                let droppable: Vec<(usize, Ty<'tcx>)> = ctx
+                    .get_enum(er)
+                    .variants
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, v)| v.payload.get().map(|p| (i, p)))
+                    .filter(|(_, p)| Self::type_needs_drop(ctx, *p))
+                    .collect();
+
+                let mut cases = Vec::new();
+                let mut case_bodies = Vec::new();
+                for (idx, payload_ty) in droppable {
+                    let case_bb = self.context.append_basic_block(glue, "variant");
+                    cases.push((
+                        self.context.i64_type().const_int(idx as u64, false),
+                        case_bb,
+                    ));
+                    case_bodies.push((case_bb, payload_ty));
+                }
+                self.builder.build_switch(disc, end_bb, &cases)?;
+
+                for (case_bb, payload_ty) in case_bodies {
+                    self.builder.position_at_end(case_bb);
+                    let payload_slot =
+                        self.builder
+                            .build_struct_gep(struct_ty, p, 1, "payload_slot")?;
+                    if let Some(g) = self.ensure_drop_glue(ctx, payload_ty)? {
+                        self.builder.build_call(g, &[payload_slot.into()], "")?;
+                    }
+                    self.builder.build_unconditional_branch(end_bb)?;
+                }
+
+                self.builder.position_at_end(end_bb);
+                self.builder.build_return(None)?;
+            }
+            // A tuple: drop each element that owns heap.
+            TyKind::Tuple(elems) => {
+                let field_tys: Vec<_> = elems.iter().map(|t| self.llvm_type(ctx, *t)).collect();
+                let struct_ty = self.context.struct_type(&field_tys, false);
+                for (i, elem_ty) in elems.iter().enumerate() {
+                    if let Some(g) = self.ensure_drop_glue(ctx, *elem_ty)? {
+                        let elem_slot =
+                            self.builder
+                                .build_struct_gep(struct_ty, p, i as u32, "elem_slot")?;
+                        self.builder.build_call(g, &[elem_slot.into()], "")?;
+                    }
+                }
+                self.builder.build_return(None)?;
+            }
+            _ => {
+                self.builder.build_return(None)?;
+            }
+        }
+        Ok(())
     }
 
     // aggregate type helpers
@@ -720,16 +949,33 @@ impl<'ctx> LlvmCodegen<'ctx> {
             .any(|v| v.payload.get().is_some())
     }
 
-    /// LLVM struct type for a heap-allocated enum cell: `{ i64, ptr }`.
-    /// Field 0 = discriminant, field 1 = opaque ptr to payload (or null).
-    fn enum_cell_type(&self) -> inkwell::types::StructType<'ctx> {
+    /// The byte size of a stack enum's payload area: the maximum store size
+    /// over all variant payloads (0 if every variant is nullary).
+    fn enum_payload_area_size<'tcx>(&self, ctx: &CompileCtx<'tcx>, er: EnumRef<'tcx>) -> u64 {
+        ctx.get_enum(er)
+            .variants
+            .iter()
+            .filter_map(|v| v.payload.get())
+            .map(|p| self.target_data.get_store_size(&self.llvm_type(ctx, p)))
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// `{ i64 disc, [P x i8] payload }` — the stack tagged-union layout for a
+    /// non-heaped payload enum (Memory Step C). The `i64` discriminant forces
+    /// 8-byte struct alignment, so the payload area (at offset 8) is 8-aligned
+    /// — enough for every payload type in the current universe
+    /// (`i64`/`ptr`/ structs of those), so the bitcast payload stores/loads
+    /// are aligned.
+    fn enum_struct_type<'tcx>(
+        &self,
+        ctx: &CompileCtx<'tcx>,
+        er: EnumRef<'tcx>,
+    ) -> inkwell::types::StructType<'ctx> {
+        let payload_bytes = self.enum_payload_area_size(ctx, er) as u32;
+        let payload_area = self.context.i8_type().array_type(payload_bytes);
         self.context.struct_type(
-            &[
-                self.context.i64_type().into(),
-                self.context
-                    .ptr_type(inkwell::AddressSpace::default())
-                    .into(),
-            ],
+            &[self.context.i64_type().into(), payload_area.into()],
             false,
         )
     }
@@ -745,11 +991,11 @@ impl<'ctx> LlvmCodegen<'ctx> {
             TyKind::Int => self.context.i64_type().into(),
             TyKind::Bool => self.context.bool_type().into(),
             TyKind::Unit => self.context.struct_type(&[], false).into(),
+            // Payload enum: stack tagged-union (Memory Step C). Heaped enums no
+            // longer reach codegen — the heap lowering rewrites them to
+            // `Unique<Node>` handles, themselves ordinary single-variant enums.
             TyKind::Enum(er) if Self::enum_has_payload(ctx, *er) => {
-                // heap-allocated cell; we only store/pass/load an opaque ptr
-                self.context
-                    .ptr_type(inkwell::AddressSpace::default())
-                    .into()
+                self.enum_struct_type(ctx, *er).into()
             }
             TyKind::Enum(_) => self.context.i64_type().into(),
             TyKind::Tuple(tys) => {
@@ -793,59 +1039,30 @@ impl<'ctx> LlvmCodegen<'ctx> {
                 // fields[0] is always Const::Int(variant_idx)
                 let disc_val = self.emit_operand(&fields[0], fn_ctx)?.into_int_value();
 
-                if Self::enum_has_payload(ctx, er) {
-                    // ── heap cell ─────────────────────────────────────────────
-                    let cell_ty = self.enum_cell_type();
-                    let cell_size = cell_ty.size_of().expect("cell_ty has known size");
-                    let malloc = self.get_or_declare_malloc();
-                    let cell_ptr = self
-                        .builder
-                        .build_call(malloc, &[cell_size.into()], "enum_cell")?
-                        .try_as_basic_value()
-                        .basic()
-                        .unwrap()
-                        .into_pointer_value();
+                if !Self::enum_has_payload(ctx, er) {
+                    // ── all-nullary: just the discriminant ────────────────────
+                    return Ok(disc_val.into());
+                }
 
-                    // store discriminant into cell[0]
-                    let disc_slot =
-                        self.builder
-                            .build_struct_gep(cell_ty, cell_ptr, 0, "disc_slot")?;
-                    self.builder.build_store(disc_slot, disc_val)?;
-
-                    // store payload ptr into cell[1]
+                // ── stack tagged-union `{ i64 disc, [P x i8] }` (Step C) ──
+                // Build via a temporary alloca, then load the struct value. The
+                // payload is stored at field 1's address as its own type (opaque
+                // pointers — the `[P x i8]` only sizes the slot). Heaped enums no
+                // longer reach codegen (lowered to `Unique<Node>` handles).
+                let struct_ty = self.enum_struct_type(ctx, er);
+                let slot = self.builder.build_alloca(struct_ty, "enum_tmp")?;
+                let disc_slot = self
+                    .builder
+                    .build_struct_gep(struct_ty, slot, 0, "disc_slot")?;
+                self.builder.build_store(disc_slot, disc_val)?;
+                if fields.len() == 2 {
+                    let payload_val = self.emit_operand(&fields[1], fn_ctx)?;
                     let payload_slot =
                         self.builder
-                            .build_struct_gep(cell_ty, cell_ptr, 1, "payload_slot")?;
-                    let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
-
-                    if fields.len() == 2 {
-                        // non-nullary variant: malloc payload and store it
-                        let payload_val = self.emit_operand(&fields[1], fn_ctx)?;
-                        let payload_sand_ty = Self::operand_ty(&fields[1], fn_ctx);
-                        let payload_llvm_ty = self.llvm_type(ctx, payload_sand_ty);
-                        let payload_size = payload_llvm_ty
-                            .size_of()
-                            .expect("payload type has known size");
-                        let payload_ptr = self
-                            .builder
-                            .build_call(malloc, &[payload_size.into()], "payload_cell")?
-                            .try_as_basic_value()
-                            .basic()
-                            .unwrap()
-                            .into_pointer_value();
-                        self.builder.build_store(payload_ptr, payload_val)?;
-                        self.builder.build_store(payload_slot, payload_ptr)?;
-                    } else {
-                        // nullary variant: null payload ptr
-                        self.builder
-                            .build_store(payload_slot, ptr_ty.const_null())?;
-                    }
-
-                    Ok(cell_ptr.into())
-                } else {
-                    // ── all-nullary: just the discriminant ────────────────────
-                    Ok(disc_val.into())
+                            .build_struct_gep(struct_ty, slot, 1, "payload_slot")?;
+                    self.builder.build_store(payload_slot, payload_val)?;
                 }
+                Ok(self.builder.build_load(struct_ty, slot, "enum_val")?)
             }
 
             TyKind::Tuple(tys) => {
@@ -896,37 +1113,29 @@ impl<'ctx> LlvmCodegen<'ctx> {
         let base_val = self.emit_operand(base, fn_ctx)?;
 
         match base_sand_ty.kind() {
+            // Payload enum: base is a stack `{ i64, [P x i8] }` value. (Heaped
+            // enums are gone — lowered to `Unique<Node>` handles.)
             TyKind::Enum(er) if Self::enum_has_payload(ctx, *er) => {
-                let cell_ty = self.enum_cell_type();
-                let cell_ptr = base_val.into_pointer_value();
+                let er = *er;
+                let struct_ty = self.enum_struct_type(ctx, er);
                 match index {
-                    0 => {
-                        // discriminant
-                        let disc_slot =
-                            self.builder
-                                .build_struct_gep(cell_ty, cell_ptr, 0, "disc_slot")?;
-                        Ok(self
-                            .builder
-                            .build_load(self.context.i64_type(), disc_slot, "disc")?)
-                    }
+                    0 => Ok(self.builder.build_extract_value(
+                        base_val.into_struct_value(),
+                        0,
+                        "disc",
+                    )?),
                     1 => {
-                        // payload: load the payload ptr from cell[1], then
-                        // load the actual value through that ptr
-                        let payload_ptr_slot = self.builder.build_struct_gep(
-                            cell_ty,
-                            cell_ptr,
-                            1,
-                            "payload_ptr_slot",
-                        )?;
-                        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
-                        let payload_ptr = self
-                            .builder
-                            .build_load(ptr_ty, payload_ptr_slot, "payload_ptr")?
-                            .into_pointer_value();
+                        // load the payload from field 1's address as its own type
+                        // (the `[P x i8]` only sizes the slot; opaque pointers).
+                        let slot = self.builder.build_alloca(struct_ty, "enum_field_tmp")?;
+                        self.builder.build_store(slot, base_val)?;
+                        let payload_slot =
+                            self.builder
+                                .build_struct_gep(struct_ty, slot, 1, "payload_slot")?;
                         let payload_llvm_ty = self.llvm_type(ctx, dst_ty);
                         Ok(self
                             .builder
-                            .build_load(payload_llvm_ty, payload_ptr, "payload")?)
+                            .build_load(payload_llvm_ty, payload_slot, "payload")?)
                     }
                     _ => internal_bug!("enum field index {} out of range (valid: 0 or 1)", index),
                 }
@@ -1003,19 +1212,14 @@ impl<'ctx> LlvmCodegen<'ctx> {
             }
             TyKind::Enum(er) => {
                 let er = *er;
-                let disc_int = if Self::enum_has_payload(ctx, er) {
-                    // val is a ptr to `{ i64, ptr }`; load discriminant from [0]
-                    let cell_ty = self.enum_cell_type();
-                    let cell_ptr = val.into_pointer_value();
-                    let disc_slot =
-                        self.builder
-                            .build_struct_gep(cell_ty, cell_ptr, 0, "disc_slot")?;
-                    self.builder
-                        .build_load(self.context.i64_type(), disc_slot, "disc")?
-                        .into_int_value()
-                } else {
+                let disc_int = if !Self::enum_has_payload(ctx, er) {
                     // all-nullary: val is already the i64 discriminant
                     val.into_int_value()
+                } else {
+                    // stack tagged-union: disc is field 0 of the struct value.
+                    self.builder
+                        .build_extract_value(val.into_struct_value(), 0, "disc")?
+                        .into_int_value()
                 };
                 let table = self.get_or_create_variant_table(er, ctx);
                 let enum_def = ctx.get_enum(er);

@@ -10,9 +10,11 @@ use thiserror::Error;
 
 use crate::compiler::context::CompileCtx;
 use crate::compiler::context::ContextError;
+use crate::compiler::structure::Derivable;
 use crate::compiler::structure::FileRef;
 use crate::compiler::structure::FunRef;
 use crate::compiler::structure::FunSig;
+use crate::compiler::structure::HeapedStrategy;
 use crate::compiler::structure::ImplDef;
 use crate::compiler::structure::Map;
 use crate::compiler::structure::MethodDef;
@@ -114,6 +116,17 @@ pub enum AstError {
         "type '{ty}' at {range} is not FFI-safe; an `extern def` may only use `Int`, `Unit`, or `Ptr<T>` across the C boundary"
     )]
     NonFfiSafeType { ty: String, range: Range },
+
+    #[error("'{name}' at {range} is not a derivable property")]
+    NotDerivable { name: String, range: Range },
+
+    #[error("'{name}' is derived more than once at {range}")]
+    DuplicateDerive { name: String, range: Range },
+
+    #[error(
+        "recursive type '{name}' at {range} must be heap-allocated (add `deriving Heaped`); without it its values would be infinite-sized and would leak"
+    )]
+    RecursiveTypeNeedsHeaped { name: String, range: Range },
 
     #[error("unknown typeclass '{name}' at {range}")]
     UnknownTypeclass { name: String, range: Range },
@@ -284,6 +297,10 @@ pub fn build_program<'i, 'run>(
     //   2   build function bodies, names resolve against the collected decls.
     let collected = collect_declarations(ctx, &children, default_module, file)?;
     resolve_enum_payloads(ctx, collected.pending_payloads)?;
+    // Heap-strategy legality (Memory Step C, K-HeapedRec): a (mutually) recursive
+    // type must derive a heap strategy; a non-recursive one must not. Runs after
+    // payloads resolve (recursion is visible only once payload types exist).
+    check_heaped_legality(ctx)?;
     for er in collected.generic_enums {
         check_variance(ctx, er)?;
     }
@@ -407,20 +424,33 @@ fn collect_enum_skeleton<'i, 'run>(
             (Vec::new(), Vec::new())
         };
 
-    // enum_variant = { identifier ~ ("(" ~ type_ ~ ")")? }
+    // enum_variant = { identifier ~ ("(" ~ type_ ~ ")")? }, optionally followed
+    // by a `deriving C1, C2, ...` clause.
     let mut variant_names = Vec::new();
     let mut variant_payloads = Vec::new();
-    for variant_pair in inner {
-        assert_eq!(variant_pair.as_rule(), Rule::enum_variant);
-        let v_range = Range::from(&variant_pair);
-        let mut v_inner = variant_pair.into_inner();
-        let v_name = v_inner
-            .next()
-            .missing("variant name", v_range)?
-            .as_str()
-            .to_string();
-        variant_names.push(v_name);
-        variant_payloads.push(v_inner.next());
+    let mut derives: Vec<Derivable> = Vec::new();
+    for pair in inner {
+        match pair.as_rule() {
+            Rule::enum_variant => {
+                let v_range = Range::from(&pair);
+                let mut v_inner = pair.into_inner();
+                let v_name = v_inner
+                    .next()
+                    .missing("variant name", v_range)?
+                    .as_str()
+                    .to_string();
+                variant_names.push(v_name);
+                variant_payloads.push(v_inner.next());
+            }
+            Rule::deriving_clause => derives = parse_deriving_clause(&pair)?,
+            other => {
+                return Err(AstError::UnexpectedRule {
+                    expected: "enum variant or deriving clause",
+                    got: other,
+                    range: Range::from(&pair),
+                });
+            }
+        }
     }
 
     let is_generic = !type_params.is_empty();
@@ -431,6 +461,7 @@ fn collect_enum_skeleton<'i, 'run>(
         region_params,
         range,
         cur_mod,
+        derives,
     )?;
     if is_generic {
         generic_enums.push(er);
@@ -441,6 +472,39 @@ fn collect_enum_skeleton<'i, 'run>(
         }
     }
     Ok(())
+}
+
+/// Dispatch a `deriving C1, C2, …` clause (Memory Step C). A general
+/// mechanism: each derivable name maps to an action. Step C registers only
+/// `HeapedUnique` (sets the type's heap strategy); future derivables
+/// (`HeapedShared`, `Eq`, `Clone`, …) add arms here. An unknown name is a
+/// `NotDerivable` error. Returns the derived heap strategy, if any.
+fn parse_deriving_clause(pair: &Pair<Rule>) -> Result<Vec<Derivable>, AstError> {
+    assert_eq!(pair.as_rule(), Rule::deriving_clause);
+    let mut derives: Vec<Derivable> = Vec::new();
+    for ident in pair.clone().into_inner() {
+        let range = Range::from(&ident);
+        let derivable = match ident.as_str() {
+            // `Heaped` = the base heap capability (alloc/borrow/release), backed
+            // by the default unique strategy. `HeapedShared` (the refcount
+            // strategy) joins here in Step E.
+            "Heaped" => Derivable::Heaped(HeapedStrategy::Unique),
+            other => {
+                return Err(AstError::NotDerivable {
+                    name: other.to_string(),
+                    range,
+                });
+            }
+        };
+        if derives.contains(&derivable) {
+            return Err(AstError::DuplicateDerive {
+                name: ident.as_str().to_string(),
+                range,
+            });
+        }
+        derives.push(derivable);
+    }
+    Ok(derives)
 }
 
 /// Record one `use src::name;` / `use src::*;` import into `cur_mod`'s scope.
@@ -1228,6 +1292,79 @@ fn collect_extern<'run>(
 
     ctx.end_type_params();
     Ok(())
+}
+
+/// Heap-strategy legality (Memory Step C, K-HeapedRec): a (mutually) recursive
+/// `type` *must* derive a heap strategy (`deriving HeapedUnique`) — without it
+/// its values would be infinite-sized and leak. A non-recursive type *may*
+/// derive one (to opt a large value onto the heap) but need not.
+fn check_heaped_legality(ctx: &CompileCtx<'_>) -> Result<(), AstError> {
+    for er in ctx.all_enums().collect::<Vec<_>>() {
+        let def = ctx.get_enum(er);
+        if def.is_anonymous {
+            continue;
+        }
+        if is_recursive_enum(ctx, er) && def.heaped_strategy().is_none() {
+            return Err(AstError::RecursiveTypeNeedsHeaped {
+                name: def.name.clone(),
+                range: def.range,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// The enums directly referenced in `er`'s variant payloads.
+fn enum_successors<'tcx>(ctx: &CompileCtx<'tcx>, er: EnumRef<'tcx>) -> Vec<EnumRef<'tcx>> {
+    let mut out = Vec::new();
+    for v in &ctx.get_enum(er).variants {
+        if let Some(ty) = v.payload.get() {
+            collect_referenced_enums(ty, &mut out);
+        }
+    }
+    out
+}
+
+/// Push every enum mentioned in `ty` (directly or nested) into `out`.
+fn collect_referenced_enums<'tcx>(ty: Ty<'tcx>, out: &mut Vec<EnumRef<'tcx>>) {
+    match ty.kind() {
+        TyKind::Enum(er) => out.push(*er),
+        TyKind::App(er, args, _) => {
+            out.push(*er);
+            for a in args.iter() {
+                collect_referenced_enums(*a, out);
+            }
+        }
+        TyKind::Tuple(elems) => {
+            for e in elems.iter() {
+                collect_referenced_enums(*e, out);
+            }
+        }
+        TyKind::Region(t, _) | TyKind::Ref(_, t) | TyKind::RefMut(_, t) | TyKind::Ptr(t) => {
+            collect_referenced_enums(*t, out);
+        }
+        _ => {}
+    }
+}
+
+/// Whether `start` can reach itself through payload references — i.e. it is
+/// (directly or mutually) recursive.
+// `EnumRef` reaches an enum payload `Cell` (interior mutability), but the set
+// keys hash/compare by arena-pointer identity that never reads the `Cell`, so
+// the keys are stable — mirroring the suppression on `CompileCtx`'s maps.
+#[allow(clippy::mutable_key_type)]
+fn is_recursive_enum<'tcx>(ctx: &CompileCtx<'tcx>, start: EnumRef<'tcx>) -> bool {
+    let mut stack = enum_successors(ctx, start);
+    let mut visited: std::collections::BTreeSet<EnumRef<'tcx>> = std::collections::BTreeSet::new();
+    while let Some(n) = stack.pop() {
+        if n == start {
+            return true;
+        }
+        if visited.insert(n) {
+            stack.extend(enum_successors(ctx, n));
+        }
+    }
+    false
 }
 
 /// An FFI boundary type must be `Int`, `Unit`, or `Ptr<T>` (Memory Step A).
@@ -2787,6 +2924,15 @@ fn build_call<'run>(
     let name_pair = inner.next().missing("function call name", range)?;
     let name = name_pair.as_str().to_string();
 
+    // optional turbofish `::<T, …>` (function_call only; Memory Step C)
+    let mut type_args = Vec::new();
+    if inner.peek().map(|p| p.as_rule()) == Some(Rule::turbofish) {
+        let tf = inner.next().missing("turbofish", range)?;
+        for ty_pair in tf.into_inner() {
+            type_args.push(build_type(ctx, ty_pair)?);
+        }
+    }
+
     let mut args = Vec::new();
     for expr_pair in inner {
         args.push(build_expr(ctx, expr_pair, src)?);
@@ -2802,7 +2948,11 @@ fn build_call<'run>(
     };
 
     Ok(Expr {
-        expr: Expression::Call { fn_name, args },
+        expr: Expression::Call {
+            fn_name,
+            args,
+            type_args,
+        },
         range,
     })
 }

@@ -525,18 +525,35 @@ fn qualify_expr<'tcx>(
                 arms: q_arms,
             }
         }
-        hhir::Expression::Call { fn_name, args } => {
+        hhir::Expression::Call {
+            fn_name,
+            args,
+            type_args,
+        } => {
             let qargs = args
                 .into_iter()
                 .map(|a| qualify_expr(q, module_name, a))
                 .collect::<Result<Vec<_>, QualifyError<'tcx>>>()?;
+            // turbofish (Memory Step C) is wired only for type-argument
+            // intrinsics (`size_of`); on anything else it is a clear error.
+            let turbofish_err = |name: &str| QualifyError::TurbofishUnsupported {
+                func: name.to_string(),
+                range: expr.range,
+                source_module: q.compile_ctx.module_info(module_name),
+            };
             match fn_name {
                 HirFnCall::Local(name) => {
                     if let Ok(intrinsic) = Intrinsic::try_from(name.as_str()) {
+                        if !type_args.is_empty() && !intrinsic.is_type_arg_intrinsic() {
+                            return Err(turbofish_err(&name));
+                        }
                         qhir::Expression::IntrinsicCall {
                             fn_name: intrinsic,
                             args: qargs,
+                            type_args,
                         }
+                    } else if !type_args.is_empty() {
+                        return Err(turbofish_err(&name));
                     } else if let Some(class) = q.compile_ctx.method_class(&name) {
                         // a typeclass method instance is resolved by the
                         // type checker from the argument types

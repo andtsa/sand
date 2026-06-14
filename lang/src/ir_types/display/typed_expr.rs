@@ -299,7 +299,7 @@ impl<'fmt, 'tcx> Iterator for TypedExprFormatter<'fmt, 'tcx> {
                         return Some((self.ctx.original_fun_name(*fn_name), Nothing));
                     }
 
-                    IntrinsicCall { fn_name, args } => {
+                    IntrinsicCall { fn_name, args, .. } => {
                         self.stack.push(Token(")".into(), Nothing));
                         for (i, arg) in args.iter().enumerate().rev() {
                             self.stack.push(Exp(&arg.expr));

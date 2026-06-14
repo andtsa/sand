@@ -47,7 +47,7 @@ impl fmt::Display for Expression<'_> {
             Expression::While { cond, body } => {
                 write!(f, "(while {} do {})", cond.expr, body.expr)
             }
-            Expression::Call { fn_name, args } => {
+            Expression::Call { fn_name, args, .. } => {
                 write!(f, "{:?}(", fn_name)?;
                 for (i, arg) in args.iter().enumerate() {
                     if i > 0 {

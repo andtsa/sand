@@ -92,6 +92,7 @@ fn fmt_operand(o: &Operand) -> String {
 fn fmt_rvalue<'tcx>(rv: &RValue<'tcx>, ctx: &CompileCtx<'tcx>) -> String {
     match rv {
         RValue::Use(o) => fmt_operand(o),
+        RValue::SizeOf(ty) => format!("size_of::<{}>()", ctx.display_ty(*ty)),
         RValue::Ref(p) => format!("&{}", fmt_place(p)),
         RValue::BinaryOp { op, left, right } => {
             format!("{} {} {}", fmt_operand(left), op, fmt_operand(right))

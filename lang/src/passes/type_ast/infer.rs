@@ -632,7 +632,11 @@ pub(super) fn infer_ptr_op<'tcx>(
         range,
     };
     let mk = |args, ty| typed_hir::Expr {
-        expr: typed_hir::Expression::IntrinsicCall { fn_name: op, args },
+        expr: typed_hir::Expression::IntrinsicCall {
+            fn_name: op,
+            args,
+            type_args: Vec::new(),
+        },
         range,
         ty,
         kind: Kind::Owned,
@@ -1248,10 +1252,42 @@ pub(super) fn infer<'tcx>(
                 kind: Kind::Owned,
             })
         }
-        qhir::Expression::IntrinsicCall { fn_name, args } if fn_name.is_ptr_op() => {
+        // `size_of::<T>(): Int` (Memory Step C) — a turbofish *type* argument,
+        // no value args; the size itself is computed by codegen.
+        qhir::Expression::IntrinsicCall {
+            fn_name,
+            args,
+            type_args,
+        } if fn_name.is_type_arg_intrinsic() => {
+            if !args.is_empty() || type_args.len() != 1 {
+                return Err(AstTypeError::FunctionCallTypeError {
+                    message: format!(
+                        "{fn_name} takes exactly one type argument and no value arguments (write `{fn_name}::<T>()`)"
+                    ),
+                    expected: Vec::new(),
+                    found: args
+                        .iter()
+                        .filter_map(|a| infer(ctx, env, a).ok())
+                        .map(|e| e.ty)
+                        .collect(),
+                    range: expr.range,
+                });
+            }
+            Ok(typed_hir::Expr {
+                expr: typed_hir::Expression::IntrinsicCall {
+                    fn_name: *fn_name,
+                    args: Vec::new(),
+                    type_args: vec![type_args[0]],
+                },
+                range: expr.range,
+                ty: ctx.types.int,
+                kind: Kind::Owned,
+            })
+        }
+        qhir::Expression::IntrinsicCall { fn_name, args, .. } if fn_name.is_ptr_op() => {
             infer_ptr_op(ctx, env, *fn_name, args, None, expr.range)
         }
-        qhir::Expression::IntrinsicCall { fn_name, args } => {
+        qhir::Expression::IntrinsicCall { fn_name, args, .. } => {
             let (_, fn_sig) = &INTRINSICS[fn_name];
             let (expected_tys, ret_ty) = fn_sig.resolve(&ctx.types);
 
@@ -1286,6 +1322,7 @@ pub(super) fn infer<'tcx>(
                 expr: typed_hir::Expression::IntrinsicCall {
                     fn_name: *fn_name,
                     args: arg_exprs,
+                    type_args: Vec::new(),
                 },
                 range: expr.range,
                 ty: ret_ty,

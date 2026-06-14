@@ -41,6 +41,12 @@ pub fn subst<'tcx>(ctx: &mut CompileCtx<'tcx>, ty: Ty<'tcx>, mapping: &Subst<'tc
             let inner = subst(ctx, *inner, mapping);
             ctx.ref_mut_ty(*r, inner)
         }
+        // raw pointers substitute their element type (e.g. `Ptr<T>` in a generic
+        // strategy function like `unique_alloc<T>`).
+        TyKind::Ptr(inner) => {
+            let inner = subst(ctx, *inner, mapping);
+            ctx.ptr_ty(inner)
+        }
         _ => ty,
     }
 }
@@ -96,6 +102,7 @@ pub fn unify<'tcx>(
         (TyKind::Ref(_, di), TyKind::Ref(_, ai)) => unify(*di, *ai, mapping),
         (TyKind::RefMut(_, di), TyKind::RefMut(_, ai)) => unify(*di, *ai, mapping),
         (TyKind::Region(di, _), TyKind::Region(ai, _)) => unify(*di, *ai, mapping),
+        (TyKind::Ptr(di), TyKind::Ptr(ai)) => unify(*di, *ai, mapping),
         _ => {
             if declared.type_eq(actual) {
                 Ok(())
