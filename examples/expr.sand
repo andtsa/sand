@@ -1,0 +1,60 @@
+//@TEST:{0}[19,42,50]
+// Memory Step C — a small arithmetic-expression interpreter over a
+// `deriving Heaped` AST. It exercises the heap machinery end to end:
+//
+//   * a recursive, multi-variant heaped type with every payload shape —
+//     `Lit` carries an `Int`, `Neg` one child, `Add`/`Sub`/`Mul` two,
+//     `Cond` three;
+//   * `eval` is a *consuming* recursive `match`: descending the tree takes each
+//     node (freeing its husk) and moves the children out;
+//   * `Cond` evaluates its test and then *only one* branch — the untaken
+//     subtree is dropped at the branch merge, so the recursive drop glue frees
+//     every node of a large, never-evaluated tree (leak-free deep release).
+
+type Expr =
+      Lit(Int)
+    | Neg(Expr)
+    | Add((Expr, Expr))
+    | Sub((Expr, Expr))
+    | Mul((Expr, Expr))
+    | Cond((Expr, Expr, Expr))
+    deriving Heaped
+
+// Fold the tree to an integer. Each arm consumes its node and recurses into the
+// children that were moved out of it.
+def eval(e: Expr): Int := match e {
+    Expr#Lit(n)          => n,
+    Expr#Neg(x)          => 0 - eval(x),
+    Expr#Add((a, b))     => eval(a) + eval(b),
+    Expr#Sub((a, b))     => eval(a) - eval(b),
+    Expr#Mul((a, b))     => eval(a) * eval(b),
+    Expr#Cond((c, t, f)) => if eval(c) != 0 then eval(t) else eval(f),
+}
+
+// A left-leaning chain `1 + 1 + ... + 1` (n ones). Used below as a branch that
+// `Cond` discards: its n nodes are built, then freed without being evaluated.
+def ones(n: Int): Expr :=
+    if n <= 1 then Expr#Lit(1)
+    else Expr#Add((ones(n - 1), Expr#Lit(1)))
+
+def main(): Int := {
+    // ((3 + 4) * 2) - (-5)  =  14 - (-5)  =  19
+    let e1: Expr =
+        Expr#Sub((
+            Expr#Mul((Expr#Add((Expr#Lit(3), Expr#Lit(4))), Expr#Lit(2))),
+            Expr#Neg(Expr#Lit(5))
+        ));
+    println(eval(e1));    // 19
+
+    // test is 0 -> take the `else` branch (42); the 100-node `then` tree is
+    // built and then dropped, unevaluated.
+    let e2: Expr = Expr#Cond((Expr#Lit(0), ones(100), Expr#Lit(42)));
+    println(eval(e2));    // 42
+
+    // test is non-zero -> take the `then` branch (a sum of 50 ones); the
+    // 999-node `else` tree is dropped, unevaluated.
+    let e3: Expr = Expr#Cond((Expr#Lit(1), ones(50), ones(999)));
+    println(eval(e3));    // 50
+
+    0
+}

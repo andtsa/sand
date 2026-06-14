@@ -2240,32 +2240,192 @@ scaffolding that makes Step C's destructors fire exactly once on every path.
 (folds into Step C/E's `release`); the actual freeing behaviour (Step C makes
 `__drop_in_place` structural / calls `release`).
 
-### Step C — `Heaped` (Unique)
+### Step C — `Heaped` (Unique): recursive types via a derived instance
 
-**Goal**: Recursive types become legal and heap-allocated via the unique
-(Box-like) `Heaped` strategy. **Subsumes Step 12 (`box`).**
+**Goal**: recursive types become legal, heap-allocated, and freed; non-recursive
+types move to the stack (the "stack unless heaped" model). **Subsumes Step 12
+(`box`).** Makes Step A's `__drop_in_place` / `Heaped` hook and Step B's
+`Statement::Drop` *live*.
 
-**Scope**:
-- Core-lib lang-item typeclasses:
-  `Heaped<T> { type Handle; alloc; borrow; release }` and
-  `HeapedUnique<T> requires Heaped<T> { borrow_mut; take; reuse }`.
-- **Recursive-type legality**: a (mutually) recursive `type` is well-formed
-  only with a `Heaped` impl; its kind is `Owned`. Grammar: a `: Heaped(Strategy)`
-  annotation on `type` (e.g. `type List<+a> : Heaped(Unique)`).
-- **Representation**: a `Heaped` type `T` is represented as `S<NodeOf<T>>`
-  (`S` = the strategy's generic handle type, pointer-sized; `NodeOf<T>` = T's
-  constructors with recursive occurrences = the handle). Nullary variants use a
-  nullable/tagged pointer (niche); only payload variants get heap nodes.
-- **Root-owns-tree** ownership: the root owns all nodes transitively; interior
-  nodes are accessed as borrows into the root.
-- **Lowering** (compiler → impl methods): `#C(ē)` → `alloc`; `match` (borrow) →
-  `borrow`; `&mut` → `borrow_mut`; end-of-life → `release`. (`take` in Step D.)
-- Core-lib `Unique` (Box-like) strategy over `Ptr` + `alloc`/`free`.
-- Move-stability invariant: handles survive a move of the root (pointer-sized
-  → heap-stable addresses; fat/offset handles deferred).
+#### Two orthogonal axes (resolving the `Heaped(Unique)` ambiguity)
 
-**Out of scope**: `reuse`/`take` (Step D); the Shared family (Step E); custom
-user strategies; fat handles.
+The old `: Heaped(Unique)` annotation mashed together two independent things; we
+separate them:
+
+- **Capability** — *what operations a heaped type supports*. The typeclass
+  hierarchy `Heaped` (base: `alloc`/`borrow`/`release` — construct, read/match,
+  **free**) → `HeapedUnique` (adds `borrow_mut`/`take`/`reuse`) / `HeapedShared`
+  (adds `share`), each `requires Heaped`. **The base `Heaped` is all Step C
+  needs** — alloc/borrow/release make a recursive type legal, heap-allocated,
+  and reclaimed. So the type derives **`Heaped`** (defaulting to the unique
+  strategy); `HeapedUnique`'s extras (`reuse`/`borrow_mut`) are capabilities a
+  unique `Heaped` type *automatically gains* in Step D, not a separate derive.
+  `HeapedShared` is the explicit opt-in for refcounting in Step E (Box-default,
+  Rc-explicit).
+- **Strategy** — *how allocation actually works* (the concrete allocator:
+  malloc-backed box now; bump / arena / refcounted later). The *implementation*
+  behind the capability. A **separate, deferred** axis — `deriving Heaped`
+  defaults to the unique strategy; pluggable strategies come with associated
+  types/HKT.
+
+#### The `deriving` mechanism (general and extensible)
+
+A heaped type's instance is **derived**, never hand-written (it needs the
+synthesized `Node` type + recursive bodies). So C introduces a *general*
+derivation facility, with `Heaped` as its first client:
+
+- **Grammar**: `deriving_clause = { "deriving" ~ identifier ~ ("," ~
+  identifier)* }`, appended to `type_alias` after its variants. New keyword
+  `deriving`.
+  ```sand
+  type List<+a> = Empty | Cons((a, List<a>)) deriving Heaped
+  ```
+- **Derivation registry**: `deriving` is *not* heap-specific. A general
+  `enum Derivable` (today `Heaped(HeapedStrategy)`; future `Eq`/`Clone`/`Ord`/
+  `Display`/`Custom(String)` for user-defined derivations) models each derivable
+  property, and an `EnumDef` stores a `Vec<Derivable>` (a type may derive
+  several). Parsing dispatches each name → a `Derivable`; in C only `Heaped`
+  (→ `Heaped(Unique)`) is registered, any other name is a "not derivable"
+  error (`HeapedShared` joins in Step E).
+  Future derivables plug in as additional dispatch arms + variants; the grammar
+  + storage are built once here. `EnumDef::heaped_strategy()` extracts the heap
+  strategy from the list when one is present.
+- `deriving Heaped` triggers the compiler to derive the unique-heap
+  instance: synthesize `Node`, choose the handle (`Unique<Node>`), and lower
+  `#C`/`match`/drop to the core-lib `unique_*` functions.
+
+**Capability marker now → real typeclass later.** In C (no associated types),
+`Heaped` is recognized *by name* (the Step-A `heaped_class` hook
+generalizes to a small capability-marker set); there is no user-facing instance
+surface. When associated types + HKT land, these become *real* typeclasses with
+an associated `Handle`; `deriving Heaped` becomes sugar for a
+compiler-generated `impl`, and a user can instead hand-write an `impl`
+(a custom strategy). Additive — the lowering seam below is unchanged.
+
+#### Responsibility map (three layers)
+
+- **Layer 1 — Step-A primitives**: `Ptr<T>`, FFI `malloc`/`free`,
+  `__ptr_read`/`__ptr_write`/`__ptr_cast`, `__drop_in_place` (becomes structural
+  in C). Raw; no allocation *policy*.
+- **Layer 2 — core lib (`core.sand`) — *the allocation policy lives here***:
+  a `Unique<T>` handle type (a non-`Copy` newtype over `Ptr<T>`) + generic
+  functions `unique_alloc<T>(T): Unique<T>`, `unique_borrow<T>(&Unique<T>): &T`,
+  `unique_release<T>(Unique<T>)`, written over Layer 1. The **only** `malloc` /
+  `free` sites. Ordinary generics — no associated types. Swapping the allocator
+  later = different functions of this shape.
+- **Layer 3 — compiler (internal; permanent)**: `deriving` dispatch; recursion
+  detection + K-HeapedRec + mandatory annotation; **`Node` synthesis** (the
+  type's variants with recursive occurrences replaced by `Unique<Node>` — a
+  non-recursive enum, finite stack layout); `size_of` (+ turbofish); the
+  `Unique` lang-item (dropping a `Unique<T>` *is* `unique_release`); structural
+  `__drop_in_place`; the **shared** construct/match/drop → strategy-call
+  lowering; the non-recursive stack representation.
+
+#### Representation
+
+- *Non-recursive enum* → a **stack tagged-union** `{ i64 disc, <inline payload,
+  sized to the largest variant> }` (bare `i64` when all-nullary). No malloc —
+  removes today's implicit boxing of `Option`/`Either`/`Result`/… and their
+  leaks. (LLVM has no native tagged union → a `{i64,[N x i8]}` struct with
+  per-variant bitcast store/load.)
+- *`Heaped` type* → handle `Unique<Node>` = a **nullable `Ptr<Node>`**. One
+  designated nullary variant (if any) encodes as `null` (the niche, e.g.
+  `Empty`); every other variant is a single heap node `{ i64 disc, fields… }`,
+  recursive field occurrences stored as their handles. One malloc per node.
+  Edge cases: **≥2 nullary** (one takes the null niche, the rest are disc-only
+  nodes); **0 nullary** (handle never null).
+
+#### Lowering (a shared pass — both interpreters *and* codegen run it)
+
+- `F#C(ē)` → build the `Node` value, then `unique_alloc::<Node>(node)`.
+- `match` / field read → `unique_borrow` then read the node (`null` ⇒ the niche
+  variant).
+- end-of-life → Step B's `Statement::Drop` → `__drop_in_place` → (for a
+  `Unique<…>`) `unique_release`, which recurses through `Unique` fields.
+- The **interpreters** run these over the Step-A `Ptr`-cell substrate (no real
+  `free` needed — `Rc` reclaims the cells); **codegen** runs them over the real
+  FFI. Observable behaviour matches, so HIR/MIR/codegen stay in agreement. So
+  recursive values become `Unique<Node>` handles *everywhere*, routed through
+  the real (library) allocator — not a codegen-only representation.
+- `&mut` into a node → `borrow_mut` (write-through the handle); needed for
+  match-by-reference, may be partially deferred.
+
+#### Migration (breaking — intended)
+
+A (mutually) recursive `type` is well-formed **only** with `deriving
+Heaped`; an unannotated recursive type is a **hard error** (stopping
+today's silent leak). Migrate `examples/lists2.sand` and any recursive test
+types. A non-recursive type *may* also `deriving Heaped` — to opt a large
+value onto the heap for performance — so heaping is *required* for recursive
+types but *allowed* for any type.
+
+#### Phases
+
+- **C.1** — `deriving` grammar + general `Derivable` dispatch scaffold (`Heaped`
+  recognized; unknown names error) + recursion detection + K-HeapedRec
+  enforcement (recursive ⇒ must derive `Heaped`; non-recursive *may*) + migrate
+  examples/tests. **Done.** Green (codegen keeps interim boxing for heaped
+  types, distinguished by the `Derivable::Heaped` marker).
+- **C.2** — `size_of::<T>()` + turbofish (the A→C deferral). **Done.** Turbofish
+  grammar (`f::<T,…>(…)`) on calls, carried on HHIR `Call`; wired only for
+  `size_of` in C (turbofish on any other call is a clear `TurbofishUnsupported`
+  error — general user-fn turbofish is a future lift). `size_of` is a bespoke
+  intrinsic (1 type arg, 0 value args → `Int`) lowering to a new MIR
+  `RValue::SizeOf(Ty)` (carries the concrete type, since there is no value arg to
+  recover it from); codegen emits the real LLVM size, the interpreters a shared
+  layout-free approximation (`interp_size_of`). Green.
+- **C.3** — codegen: non-`Heaped` enums → stack tagged-union (heaped enums keep
+  interim boxing for now). **Done.** A payload enum lowers to `{ i64 disc,
+  [P x i8] }` where `P` = max variant payload store size (via `TargetData`, now
+  pinned on the module); the payload area sits at offset 8 (8-aligned) so
+  payloads are stored/loaded at the field address by their own type (opaque
+  pointers, no bitcast). `emit_aggregate`/`emit_field`/`emit_print_value`/
+  `llvm_type` branch on `is_heaped_enum`. All-nullary enums stay `i64`; heaped
+  enums stay boxed. `size_of` now reports real sizes (`examples/size_of.sand`).
+  Green.
+- **C.4** — Layer 2 `Unique<T>` handle (`type Unique<T> = U(Ptr<T>)`) +
+  `malloc`/`free` externs + `unique_alloc`/`unique_release` in `core.sand` —
+  the *only* alloc/dealloc sites, written over the Step-A `Ptr` substrate.
+  **Done.** Strategy fns type-check, compile, and run (real `malloc`/`free`
+  under codegen; cell-graph allocations under both interpreters) — verified by
+  alloc/release of primitive and tuple payloads, and standalone exit-99.
+  Also fixed a latent A.1 gap: generic `unify`/`subst` lacked a `Ptr` arm, so
+  `Ptr<T>` never bound its element parameter (blocked `unique_alloc<T>`).
+  `Node` synthesis + the `Unique` lang-item are deferred to **C.5**, where the
+  lowering that consumes them lives (nothing references them until then).
+- **C.5** — **Done.** The full IR rewrite. A new `passes::heap_lower`
+  (`TypedProgram → TypedProgram`, run *before* ownership/mono) synthesizes a
+  node enum `E$Node` per heaped enum, rewrites every type `E<a>` →
+  `Unique<E$Node<a>>`, lowers `E#C(p)` → `unique_alloc(E$Node#C(p))`, a
+  consuming `match`/`let`-pattern → `unique_take` + an ordinary node match
+  (every payload position bound, so unbound heaped fields are dropped — no
+  leak), so **no heaped enum survives** into ownership/mono/codegen. Drops:
+  ownership inserts `Statement::Drop` on the resulting `Unique` handles uniformly;
+  codegen emits **per-type, memoised, recursion-safe drop glue** (a `Unique<T>`
+  frees its cell after recursing the node; aggregates recurse fields), driven by
+  a `unique_instances` registry recording each monomorphised `Unique<…>`. The
+  interim boxing branches are deleted (`is_heaped_enum`/`enum_cell_type`/
+  `get_or_declare_malloc`). Also fixed a latent mono bug (a non-generic enum
+  embedding a generic instantiation never had its `App` payload monomorphised).
+  Verified: `tree`/`lists`/`let_pattern` correct through codegen + both
+  interpreters; a 20M-iteration build-then-drop loop holds at **1.2 MB peak RSS**
+  (leak-free, no double-free). Green (717 tests, clippy clean).
+- **C.6** — **Done.** Showcase example [`examples/expr.sand`](examples/expr.sand):
+  an arithmetic-expression interpreter over a `deriving Heaped` AST with every
+  payload shape (`Lit` scalar, `Neg` 1-field, `Add`/`Sub`/`Mul` 2-field, `Cond`
+  3-field). `eval` is a consuming recursive `match`, and `Cond` evaluates only
+  one branch so the untaken subtree (built up to 999 nodes) is dropped via the
+  recursive glue — exercising leak-free deep release at runtime. Plus
+  deriving-tests for recursive build/sum, tree depth, drop-at-scope-exit, and a
+  subtree dropped inside an `if`-branch (HIR/MIR agreement). Full suite green
+  (721 tests), clippy clean.
+
+**Step C (Heaped Unique) is complete.**
+
+**Out of scope**: `reuse`/`take`/`Slot` (Step D); the Shared family / `.share()`
+(Step E); user-authored strategies + the associated-types `Heaped` typeclass;
+fat/offset handles; full match-by-reference (folds in with `&mut`/`borrow_mut`,
+may be partial).
 
 ### Step D — `reuse` (in-place reuse mechanism)
 

@@ -220,7 +220,18 @@ impl<'tcx> TypedProgram<'tcx> {
                 self.eval_expr(&function.body.expr, &mut call_env, ctx, output)
             }
 
-            Expression::IntrinsicCall { fn_name, args } => {
+            Expression::IntrinsicCall {
+                fn_name,
+                args,
+                type_args,
+            } => {
+                // `size_of::<T>()` (Step C): no value args; the size comes from
+                // the type argument (a layout-free interpreter approximation).
+                if fn_name.is_type_arg_intrinsic() {
+                    return Ok(Value::Int(crate::lang::intrinsics::interp_size_of(
+                        type_args[0],
+                    )));
+                }
                 let vals = args
                     .iter()
                     .map(|a| self.eval_expr(&a.expr, env, ctx, output))
@@ -709,6 +720,9 @@ fn eval_intrinsic<'tcx>(
         }
         // No-op until types acquire destructors (Step C).
         Intrinsic::DropInPlace => Ok(Value::Unit),
+        // `size_of` is handled in the `IntrinsicCall` arm (it needs the type
+        // argument, which `eval_intrinsic` does not receive).
+        Intrinsic::SizeOf => unreachable!("size_of handled before eval_intrinsic"),
     }
 }
 

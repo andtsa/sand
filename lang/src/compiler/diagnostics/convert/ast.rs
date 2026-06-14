@@ -278,7 +278,10 @@ pub fn ast_error_to_diagnostics(
         | AstError::MissingSuperclass { range, .. }
         | AstError::CopyPayloadNotCopy { range }
         | AstError::CopyOnGenericType { range }
-        | AstError::NonFfiSafeType { range, .. }) => {
+        | AstError::NonFfiSafeType { range, .. }
+        | AstError::NotDerivable { range, .. }
+        | AstError::DuplicateDerive { range, .. }
+        | AstError::RecursiveTypeNeedsHeaped { range, .. }) => {
             diagnostics.add_one(
                 file,
                 SandDiagnostic {

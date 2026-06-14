@@ -2,7 +2,7 @@
 // Demonstrates bare-tag constructor inference:
 // #Cons(...) / #Empty are resolved against the expected enum type, so the
 // type qualifier ("List#") is never needed.
-type List = Empty | Cons((Int, List))
+type List = Empty | Cons((Int, List)) deriving Heaped
 
 def prepend(elem: Int, list: List): List :=
     #Cons((elem, list))

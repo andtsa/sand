@@ -325,9 +325,14 @@ impl<'tcx> OwnershipChecker<'_, 'tcx> {
                 fn_name: *fn_name,
                 args: self.check_exprs(args, env)?,
             },
-            Expression::IntrinsicCall { fn_name, args } => Expression::IntrinsicCall {
+            Expression::IntrinsicCall {
+                fn_name,
+                args,
+                type_args,
+            } => Expression::IntrinsicCall {
                 fn_name: *fn_name,
                 args: self.check_exprs(args, env)?,
+                type_args: type_args.clone(),
             },
             Expression::MethodCall {
                 class,

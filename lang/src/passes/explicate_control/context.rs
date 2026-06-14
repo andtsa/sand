@@ -961,7 +961,18 @@ impl<'tcx> FnCx<'tcx> {
                     .fold(final_bb, |k, (arg, tmp)| self.lower_assign(arg, tmp, k))
             }
 
-            th::Expression::IntrinsicCall { fn_name, args } => {
+            th::Expression::IntrinsicCall {
+                fn_name,
+                args,
+                type_args,
+            } if fn_name.is_type_arg_intrinsic() => {
+                // `size_of::<T>()` — no value args; assign the size directly
+                // (the concrete type is carried on `RValue::SizeOf`).
+                let stmt = self.assign_stmt(dst, RValue::SizeOf(type_args[0]), expr.range);
+                self.new_block(vec![stmt], Terminator::Goto { target: cont })
+            }
+
+            th::Expression::IntrinsicCall { fn_name, args, .. } => {
                 let arg_temps = args
                     .iter()
                     .map(|a| self.fresh_temp("assign_intrinsic_call_argument", a.ty, a.range))
@@ -1128,7 +1139,13 @@ impl<'tcx> FnCx<'tcx> {
                     .fold(final_bb, |k, (arg, tmp)| self.lower_assign(arg, tmp, k))
             }
 
-            th::Expression::IntrinsicCall { fn_name, args } => {
+            // `size_of::<T>()` is pure; in effect position its value is
+            // discarded, so it lowers to nothing.
+            th::Expression::IntrinsicCall { fn_name, .. } if fn_name.is_type_arg_intrinsic() => {
+                cont
+            }
+
+            th::Expression::IntrinsicCall { fn_name, args, .. } => {
                 let arg_temps = args
                     .iter()
                     .map(|a| self.fresh_temp("effect_intrinsic_call_argument", a.ty, a.range))

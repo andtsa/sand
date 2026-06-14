@@ -23,10 +23,19 @@ type_app_arg = { lifetime | type_ }
 // whitespace is consumed between the tick and the name.
 lifetime = @{ "'" ~ identifier }
 
+// primitive type keywords. atomic (`@`) with a trailing word-boundary
+// predicate so a name with a leading keyword prefix (`IntList`, `Boolean`,
+// `Unite`) lexes as an identifier rather than the keyword + a stray suffix.
+// the atomicity also prevents implicit whitespace from being folded into the
+// matched span (which would otherwise capture `Int ` instead of `Int`).
+prim_int  = @{ "Int" ~ !(ASCII_ALPHANUMERIC | "_") }
+prim_bool = @{ "Bool" ~ !(ASCII_ALPHANUMERIC | "_") }
+prim_unit = @{ "Unit" ~ !(ASCII_ALPHANUMERIC | "_") } // equivalent to rust (), python None
+
 core_type = {
-    "Int"
-  | "Bool"
-  | "Unit" // equivalent to rust (), python None
+    prim_int
+  | prim_bool
+  | prim_unit
 
   | qualified_type // cross-module enum type: mod::TypeName
 
@@ -52,7 +61,7 @@ borrow_type = { "&" ~ lifetime? ~ mut_kw? ~ core_type }
 type_ = { core_type ~ ("@" ~ lifetime)? }
 
 // keywords (prevent them from being identifiers)
-KEYWORD = { "if" | "then" | "else" | "let" | "def" | "true" | "false" | "Unit" | "Int" | "Bool" | "while" | "do" | "module" | "mut" | "type" | "match" | "and" | "where" | "use" | "typeclass" | "impl" | "requires" | "for" | "extern" }
+KEYWORD = { "if" | "then" | "else" | "let" | "def" | "true" | "false" | "Unit" | "Int" | "Bool" | "while" | "do" | "module" | "mut" | "type" | "match" | "and" | "where" | "use" | "typeclass" | "impl" | "requires" | "for" | "extern" | "deriving" }
 
 identifier       = @{ !(KEYWORD ~ !(ASCII_ALPHANUMERIC | "_")) ~ "_"* ~ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
 empty_identifier = @{ "_" }
@@ -102,7 +111,10 @@ where_clause     = { "where" ~ where_constraint ~ ("," ~ where_constraint)* }
 // enum type declarations
 // a variant is a bare tag (`Red`, nullary) or a tag with a payload type (`Ok(Int)`)
 enum_variant = { identifier ~ ("(" ~ type_ ~ ")")? }
-type_alias   = { "type" ~ identifier ~ type_params? ~ "=" ~ enum_variant ~ ("|" ~ enum_variant)* ~ ";"? }
+// `deriving C1, C2, ...` — request compiler-derived instances (Memory Step C).
+// A general mechanism; in Step C only `HeapedUnique` is a registered derivable.
+deriving_clause = { "deriving" ~ identifier ~ ("," ~ identifier)* }
+type_alias   = { "type" ~ identifier ~ type_params? ~ "=" ~ enum_variant ~ ("|" ~ enum_variant)* ~ deriving_clause? ~ ";"? }
 
 // enum constructors: Light#Red (local), mod::Light#Red (cross-module), or #Red (bare tag, needs check mode)
 // an optional parenthesised argument supplies the variant's payload: `Result#Ok(5)`
@@ -138,7 +150,10 @@ whileloop = {
     "while" ~ expression ~ "do" ~ expression
 }
 
-function_call          = { identifier ~ "(" ~ (expression ~ ("," ~ expression)*)? ~ ")" }
+// `f::<T, ...>(args)` — explicit type arguments (turbofish, Memory Step C). The
+// `<` after `::` disambiguates from a `mod::fn` qualified call.
+turbofish              = { "::" ~ "<" ~ type_ ~ ("," ~ type_)* ~ ">" }
+function_call          = { identifier ~ turbofish? ~ "(" ~ (expression ~ ("," ~ expression)*)? ~ ")" }
 external_function_call = { identifier ~ "::" ~ identifier ~ "(" ~ (expression ~ ("," ~ expression)*)? ~ ")" }
 
 // tuple literal: `(a, b, ...)`

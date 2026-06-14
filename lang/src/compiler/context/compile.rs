@@ -251,6 +251,12 @@ pub struct CompileCtx<'tcx> {
     /// the compiler can emit `alloc`/`borrow`/`release` calls once it
     /// exists.
     heaped_class: Option<TypeclassRef>,
+    /// Concrete `Unique<…>` enum instances (Memory Step C.5). Monomorphisation
+    /// erases the generic `Unique<T>` into an ordinary specialised enum, but
+    /// codegen still needs to know "this enum is a heap handle" to emit a
+    /// `free` when one is dropped. `request_enum` records each specialisation
+    /// of the `Unique` lang-item here.
+    unique_instances: Set<EnumRef<'tcx>>,
 
     // modules
     project_modules: Vec<ModuleRef<'tcx>>,
@@ -391,6 +397,7 @@ impl<'tcx> CompileCtx<'tcx> {
             copy_class: None,
             clone_class: None,
             heaped_class: None,
+            unique_instances: Default::default(),
             cur_build_module: None,
             project_modules: Default::default(),
             module_imports: Default::default(),
@@ -1029,6 +1036,27 @@ impl<'tcx> CompileCtx<'tcx> {
         Ok(OriginalVarRef(r))
     }
 
+    /// Mint a fresh, uniquified variable not backed by any source `Pair` —
+    /// used by compiler-synthesised bindings (e.g. the heap lowering's
+    /// `unique_take` node temporaries and the all-binding match desugaring).
+    pub fn fresh_synthetic_var(
+        &mut self,
+        name: &str,
+        declaration: Range,
+        inst: crate::compiler::structure::VarDeclType,
+    ) -> UniqVar<'tcx> {
+        let id = self.var_count;
+        self.var_count += 1;
+        let var = OriginalVar {
+            name: crate::compiler::structure::VarName::synthetic(name),
+            declaration,
+            inst,
+            id,
+        };
+        let r = self.arenas.alloc_variable(var);
+        self.uniquify_original_variable(OriginalVarRef(r))
+    }
+
     pub fn uniquify_original_variable(&mut self, ovref: OriginalVarRef<'tcx>) -> UniqVar<'tcx> {
         let idx = self.uniq_count;
         self.uniq_count += 1;
@@ -1173,6 +1201,7 @@ impl<'tcx> CompileCtx<'tcx> {
     /// payloads may reference other enums (including forward / recursive
     /// references), so every `EnumRef` must already exist before any
     /// `type_` gets resolved.
+    #[allow(clippy::too_many_arguments)]
     pub fn register_enum(
         &mut self,
         name: &str,
@@ -1181,6 +1210,7 @@ impl<'tcx> CompileCtx<'tcx> {
         region_params: Vec<RegionParam>,
         range: Range,
         module: ModuleRef<'tcx>,
+        derives: Vec<crate::compiler::structure::Derivable>,
     ) -> Result<EnumRef<'tcx>, ContextError> {
         if let Some(existing) = self.enum_names.get(name) {
             return Err(ContextError::DuplicateEnum {
@@ -1205,6 +1235,7 @@ impl<'tcx> CompileCtx<'tcx> {
             type_params,
             region_params,
             is_anonymous: false,
+            derives,
         };
         let er = EnumRef(self.arenas.alloc_enum(def));
         self.enum_defs.push(er);
@@ -1224,6 +1255,12 @@ impl<'tcx> CompileCtx<'tcx> {
         payload: Ty<'tcx>,
     ) {
         er.0.variants[variant_idx].payload.set(Some(payload));
+    }
+
+    /// Every registered enum, in registration order (Memory Step C uses this
+    /// for recursion detection / `Heaped` legality).
+    pub fn all_enums(&self) -> impl Iterator<Item = EnumRef<'tcx>> + '_ {
+        self.enum_defs.iter().copied()
     }
 
     pub fn get_enum(&self, er: EnumRef<'tcx>) -> &'tcx EnumDef<'tcx> {
@@ -1395,6 +1432,8 @@ impl<'tcx> CompileCtx<'tcx> {
             type_params: Vec::new(),
             region_params: Vec::new(),
             is_anonymous: true,
+            // anonymous tag-unions are never recursive and derive nothing.
+            derives: Vec::new(),
         };
         let er = EnumRef(self.arenas.alloc_enum(def));
         self.enum_defs.push(er);
@@ -1493,6 +1532,41 @@ impl<'tcx> CompileCtx<'tcx> {
     /// A.
     pub fn heaped_class(&self) -> Option<TypeclassRef> {
         self.heaped_class
+    }
+
+    /// The `Unique<T>` handle enum lang-item (Memory Step C): the core-lib
+    /// `type Unique<T> = U(Ptr<T>)` backing the unique heap strategy. The heap
+    /// lowering rewrites every `deriving Heaped` value into a `Unique<Node>`,
+    /// and codegen recognizes this enum to make dropping a handle a
+    /// `unique_release`. Resolved by name (like the other lang-items); `None`
+    /// if `core.sand` has not been loaded.
+    pub fn unique_enum(&self) -> Option<EnumRef<'tcx>> {
+        self.lookup_enum_by_name("Unique")
+    }
+
+    /// Record that `er` is a monomorphised `Unique<…>` instance (Step C.5);
+    /// called by monomorphisation when it specialises the `Unique` lang-item.
+    pub fn mark_unique_instance(&mut self, er: EnumRef<'tcx>) {
+        self.unique_instances.insert(er);
+    }
+
+    /// Whether `er` is a (monomorphised) `Unique<…>` heap handle — i.e.
+    /// dropping a value of this enum must `free` its backing allocation
+    /// (Step C.5).
+    pub fn is_unique_handle(&self, er: EnumRef<'tcx>) -> bool {
+        self.unique_instances.contains(&er)
+    }
+
+    /// Look up a (source or synthesised) global function by its simple name.
+    /// Used by the heap lowering to resolve the core-lib strategy functions
+    /// (`unique_alloc` / `unique_take` / `unique_release`) it injects. Runs
+    /// pre-monomorphisation, so the generic definitions are still present and
+    /// names are unambiguous.
+    pub fn lookup_function_by_name(&self, name: &str) -> Option<FunRef<'tcx>> {
+        self.global_functions
+            .iter()
+            .copied()
+            .find(|f| self.original_fun_name(*f) == name)
     }
 
     /// Whether `ty` has a registered `class` implementation.

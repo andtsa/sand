@@ -39,6 +39,11 @@ pub enum Intrinsic {
     /// `Heaped` types acquire `release` in Step C. Wired into drop insertion in
     /// Step B. Accepts any type (`Top` arg), returns `Unit`.
     DropInPlace,
+    /// `size_of::<T>(): Int` — the byte size of `T` (Memory Step C). Generic
+    /// via a turbofish *type* argument (no value args), so it is
+    /// bespoke-typed; the concrete size is target-dependent, computed by
+    /// codegen.
+    SizeOf,
 }
 
 impl Intrinsic {
@@ -49,6 +54,13 @@ impl Intrinsic {
             self,
             Intrinsic::PtrRead | Intrinsic::PtrWrite | Intrinsic::PtrCast
         )
+    }
+
+    /// Whether this intrinsic is generic in an explicit *type* argument
+    /// (turbofish) rather than inferring from value args — only `size_of` so
+    /// far. Such intrinsics are bespoke-typed and not in [`INTRINSICS`].
+    pub fn is_type_arg_intrinsic(self) -> bool {
+        matches!(self, Intrinsic::SizeOf)
     }
 }
 
@@ -173,6 +185,7 @@ impl Display for Intrinsic {
             Intrinsic::PtrWrite => write!(f, "__ptr_write"),
             Intrinsic::PtrCast => write!(f, "__ptr_cast"),
             Intrinsic::DropInPlace => write!(f, "__drop_in_place"),
+            Intrinsic::SizeOf => write!(f, "size_of"),
         }
     }
 }
@@ -192,6 +205,7 @@ impl TryFrom<&str> for Intrinsic {
             "__ptr_write" => Ok(Intrinsic::PtrWrite),
             "__ptr_cast" => Ok(Intrinsic::PtrCast),
             "__drop_in_place" => Ok(Intrinsic::DropInPlace),
+            "size_of" => Ok(Intrinsic::SizeOf),
             _ => Err(()),
         }
     }
@@ -199,4 +213,21 @@ impl TryFrom<&str> for Intrinsic {
 
 pub fn fn_name_allowed(name: &str) -> bool {
     !RESERVED_FUNCTION_NAMES.contains(&name) && Intrinsic::try_from(name).is_err()
+}
+
+/// A layout-free approximation of a type's byte size, used by *both*
+/// interpreters so they agree on `size_of` (Memory Step C). The interpreters
+/// model the heap as a cell graph, not raw bytes, so the precise size is
+/// irrelevant there (it is consumed by `malloc`, which mints a cell regardless)
+/// — the real, target-dependent size is computed by codegen. Kept simple and
+/// shared so HIR and MIR results match.
+pub fn interp_size_of(ty: Ty<'_>) -> i64 {
+    use crate::lang::types::TyKind;
+    match ty.kind() {
+        TyKind::Unit => 0,
+        TyKind::Bool => 1,
+        TyKind::Tuple(elems) => elems.iter().map(|e| interp_size_of(*e)).sum(),
+        // Int, pointers/refs, and (boxed/handle) aggregates are word-sized here.
+        _ => 8,
+    }
 }

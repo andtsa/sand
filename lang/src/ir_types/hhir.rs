@@ -184,9 +184,14 @@ impl<'tcx> Expr<'tcx> {
             },
             Expression::Borrow(inner, m) => Expression::Borrow(Box::new(f(inner)?), *m),
             Expression::Deref(inner) => Expression::Deref(Box::new(f(inner)?)),
-            Expression::Call { fn_name, args } => Expression::Call {
+            Expression::Call {
+                fn_name,
+                args,
+                type_args,
+            } => Expression::Call {
                 fn_name: fn_name.clone(),
                 args: args.iter().map(&mut f).collect::<Result<_, _>>()?,
+                type_args: type_args.clone(),
             },
             Expression::Match { scrutinee, arms } => Expression::Match {
                 scrutinee: Box::new(f(scrutinee)?),
@@ -268,6 +273,10 @@ pub enum Expression<'tcx> {
     Call {
         fn_name: HirFnCall,
         args: Vec<Expr<'tcx>>,
+        /// Explicit type arguments from a turbofish `f::<T, …>(…)` (Memory Step
+        /// C). Empty for an ordinary call. Resolved against the active
+        /// type-param scope, so a `T` inside a generic function is its `Param`.
+        type_args: Vec<Ty<'tcx>>,
     },
     Var(HirVar<'tcx>),
     Int(i64),

@@ -586,7 +586,10 @@ fn bare_generic_enum_name_in_a_payload_is_an_arity_error() {
 
 #[test]
 fn explicit_recursive_type_argument_is_accepted() {
-    typecheck("type List<T> = Empty | Cons((T, List<T>)) \n def main(): Int := 0");
+    typecheck(
+        "type List<T> = Empty | Cons((T, List<T>)) deriving Heaped 
+ def main(): Int := 0",
+    );
 }
 
 #[test]

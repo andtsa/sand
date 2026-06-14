@@ -13,6 +13,7 @@
 pub mod borrow_tests;
 pub mod clone_copy_tests;
 pub mod deref_tests;
+pub mod deriving_tests;
 pub mod drop_tests;
 pub mod enum_tests;
 pub mod ffi_tests;
@@ -31,5 +32,6 @@ pub mod region_escape_tests;
 pub mod region_inference_tests;
 pub mod region_param_tests;
 pub mod region_tests;
+pub mod size_of_tests;
 pub mod typecheck_tests;
 pub mod typeclass_tests;

@@ -1,5 +1,5 @@
 //@TEST:{0}[5,99,-1,0]
-type List = Empty | Cons((Int, List))
+type List = Empty | Cons((Int, List)) deriving Heaped
 
 // Extract the head, or return `default` if the list is empty.
 def head_or(list: List, default: Int): Int := {

@@ -159,6 +159,13 @@ pub enum Constant {
 pub enum RValue<'tcx> {
     Use(Operand),
 
+    /// The byte size of a type — `size_of::<T>()` (Memory Step C). Carries the
+    /// (monomorphised, concrete) type; codegen emits the target-dependent LLVM
+    /// size, the interpreters a layout-free approximation. The type must be
+    /// carried here because, unlike the pointer ops, `size_of` has no value
+    /// argument to recover it from.
+    SizeOf(Ty<'tcx>),
+
     /// Address-of: a pointer to `place`'s storage — `&place` / `&mut place`
     /// (Calculus §3.2). The inverse of a `[Deref]` projection. With R2,
     /// references are real pointers, so this yields the address, not a copy.

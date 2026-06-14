@@ -15,7 +15,7 @@
 //
 // depth = 3,  element-sum = 1+3+4+5+7 = 20
 
-type Tree = Leaf | Node((Tree, Int, Tree));
+type Tree = Leaf | Node((Tree, Int, Tree)) deriving Heaped;
 
 // Insert x (duplicates go right).
 def insert(x: Int, t: Tree): Tree :=

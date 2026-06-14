@@ -1036,7 +1036,7 @@ pub(super) fn check<'tcx>(
 
         // Raw-pointer ops (Memory Step A) are generic; push the expected type
         // down so `__ptr_cast` can take its target type from the context.
-        qhir::Expression::IntrinsicCall { fn_name, args } if fn_name.is_ptr_op() => {
+        qhir::Expression::IntrinsicCall { fn_name, args, .. } if fn_name.is_ptr_op() => {
             let e = infer_ptr_op(ctx, env, *fn_name, args, Some(expected), expr.range)?;
             if !e.ty.eq_modulo_regions(expected) {
                 return Err(AstTypeError::TypeError {

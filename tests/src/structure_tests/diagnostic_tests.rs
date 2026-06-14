@@ -116,7 +116,7 @@ fn type_diagnostics_render_types_in_source_syntax() {
 
     let mut ctx = CompileCtx::initial();
     let fr = ctx.stub_file();
-    let src = "type List<T> = Empty | Cons((T, List<T>)) \n \
+    let src = "type List<T> = Empty | Cons((T, List<T>)) deriving Heaped \n \
                def push<T>(elem: T, list: &mut List<T>): Unit := \
                  match *list { \
                    List#Cons((x, tail)) => push(elem, tail), \

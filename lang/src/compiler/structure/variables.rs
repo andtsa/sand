@@ -81,6 +81,11 @@ impl VarName {
     pub(in crate::compiler) fn name(&self) -> String {
         self.0.clone()
     }
+
+    /// A name for a compiler-synthesised variable (no backing source `Pair`).
+    pub(in crate::compiler) fn synthetic(name: &str) -> Self {
+        VarName(name.to_string())
+    }
 }
 
 impl OriginalVar {

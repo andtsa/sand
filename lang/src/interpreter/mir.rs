@@ -220,6 +220,11 @@ fn eval_rvalue<'tcx>(
     match rv {
         RValue::Use(op) => eval_operand(op, locals),
 
+        // `size_of::<T>()` (Step C): a layout-free approximation here — the
+        // interpreter's heap is a cell graph, so the exact byte size is
+        // irrelevant (codegen computes the real one).
+        RValue::SizeOf(ty) => Ok(MirValue::Int(crate::lang::intrinsics::interp_size_of(*ty))),
+
         // Address-of: yield a shared handle to the cell the place names (not a
         // copy of its value). Reads/writes through a `[Deref]` of this handle hit
         // that same cell, so write-through is observable across aliases.
@@ -535,6 +540,8 @@ fn eval_intrinsic<'tcx>(
         // No-op until types acquire destructors (Step C); the value is simply
         // discarded (its `Rc`-backed cells, if any, drop here).
         Intrinsic::DropInPlace => Ok(MirValue::Unit),
+        // `size_of` is lowered to `RValue::SizeOf`, never an intrinsic call.
+        Intrinsic::SizeOf => internal_bug!("size_of should lower to RValue::SizeOf"),
     }
 }
 

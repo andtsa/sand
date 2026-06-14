@@ -1,0 +1,28 @@
+//@TEST:{0}[8,24,56,96,16,32,8,56,24]
+// Memory Step C — `size_of::<T>()` via turbofish, over the straightforward
+// stack tagged-union layout: a payload enum is `{ i64 disc, [max-payload x i8] }`
+// (discriminant word + largest variant payload, natural alignment; no
+// single-variant niche). The tuple case is sized directly (no discriminant).
+
+type TwoInts = TwoInts((Int, Int));
+
+type FourInts = FourInts((TwoInts, TwoInts));
+
+type SixSeven = Six((FourInts, TwoInts)) | Seven((FourInts, TwoInts, Int));
+
+type FullHouse<A, B> = FullHouse((A, A, B, B, B));
+
+def main(): Int := {
+    println(size_of::<Int>());
+    println(size_of::<TwoInts>());
+    println(size_of::<FourInts>());
+    println(size_of::<SixSeven>());
+    println(size_of::<FullHouse<Bool, Bool>>());
+    println(size_of::<FullHouse<Int, Bool>>());
+    println(size_of::<FullHouse<Unit, Unit>>());
+    println(size_of::<FullHouse<TwoInts, Unit>>());
+
+    println(size_of::<(Int, Int, Bool, Unit)>());
+
+    0
+}

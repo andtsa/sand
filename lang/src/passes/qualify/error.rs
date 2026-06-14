@@ -80,6 +80,15 @@ pub enum QualifyError<'tcx> {
         range: Range,
         source_module: ModuleInfo<'tcx>,
     },
+
+    #[error(
+        "explicit type arguments (`::<…>`) on '{func}' at {range} are not supported yet (only on `size_of`)"
+    )]
+    TurbofishUnsupported {
+        func: String,
+        range: Range,
+        source_module: ModuleInfo<'tcx>,
+    },
 }
 
 impl<'tcx> QualifyError<'tcx> {
@@ -95,6 +104,7 @@ impl<'tcx> QualifyError<'tcx> {
             QualifyError::UnknownConstructorType { source_module, .. } => source_module,
             QualifyError::UnknownVariant { source_module, .. } => source_module,
             QualifyError::UnknownPatternType { source_module, .. } => source_module,
+            QualifyError::TurbofishUnsupported { source_module, .. } => source_module,
         }
     }
 }
