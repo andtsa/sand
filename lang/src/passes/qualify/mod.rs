@@ -316,6 +316,12 @@ impl<'tcx> Program<'tcx> {
                 fn_names.insert(name, f.range);
                 fns.insert(f.name);
             }
+            // External (FFI) functions (Memory Step A) are bodyless, so they are
+            // not in `functions`; make them visible for unqualified calls in
+            // their declaring module.
+            for ext in q.compile_ctx.externs_in_module(*module_name) {
+                fns.insert(ext);
+            }
             q.available_functions
                 .entry(*module_name)
                 .or_default()

@@ -68,11 +68,17 @@ impl<'ctx> LlvmCodegen<'ctx> {
         ctx: &CompileCtx<'tcx>,
     ) -> Result<(), CodegenError> {
         // Pass 1: declare every function signature (handles forward calls)
-        let fns: Map<FunRef, llvm::FunctionValue<'ctx>> = program
+        let mut fns: Map<FunRef, llvm::FunctionValue<'ctx>> = program
             .functions
             .iter()
             .map(|(fref, f)| (*fref, self.declare_function(f, ctx)))
             .collect();
+
+        // Declare external (FFI) functions (Memory Step A) under their C symbol
+        // so calls to them resolve through the same `fns` map.
+        for (fref, symbol) in ctx.extern_functions() {
+            fns.insert(fref, self.declare_extern(fref, symbol, ctx));
+        }
 
         // Pass 2: fill in each body
         for (fref, f) in &program.functions {
@@ -80,6 +86,32 @@ impl<'ctx> LlvmCodegen<'ctx> {
         }
 
         Ok(())
+    }
+
+    /// Declare an external (FFI) function under its C symbol, reusing an
+    /// existing declaration if one is already present (e.g. `malloc`, which the
+    /// legacy aggregate path also declares).
+    fn declare_extern<'tcx>(
+        &self,
+        fref: FunRef<'tcx>,
+        symbol: &str,
+        ctx: &CompileCtx<'tcx>,
+    ) -> llvm::FunctionValue<'ctx> {
+        if let Some(f) = self.module.get_function(symbol) {
+            return f;
+        }
+        let sig = ctx.fun_sig(&fref);
+        let param_types: Vec<_> = sig
+            .args
+            .iter()
+            .map(|(_, ty)| self.llvm_type(ctx, *ty).into())
+            .collect();
+        let fn_type = if matches!(sig.ret_ty.kind(), TyKind::Unit) {
+            self.context.void_type().fn_type(&param_types, false)
+        } else {
+            self.llvm_type(ctx, sig.ret_ty).fn_type(&param_types, false)
+        };
+        self.module.add_function(symbol, fn_type, None)
     }
 
     /// declare functions without bodies (for now)
@@ -274,6 +306,21 @@ impl<'ctx> LlvmCodegen<'ctx> {
                 Intrinsic::Print | Intrinsic::Println => {
                     self.emit_intrinsic(*fn_name, args, fn_ctx)
                 }
+                // Raw-pointer ops (Memory Step A). `dst_ty` gives the element
+                // type for a load (`__ptr_read`) and the target for a cast.
+                Intrinsic::PtrRead => {
+                    let ptr = self.emit_operand(&args[0], fn_ctx)?.into_pointer_value();
+                    let elem_ty = self.llvm_type(fn_ctx.compile_ctx, dst_ty);
+                    Ok(self.builder.build_load(elem_ty, ptr, "ptr_read")?)
+                }
+                Intrinsic::PtrWrite => {
+                    let ptr = self.emit_operand(&args[0], fn_ctx)?.into_pointer_value();
+                    let val = self.emit_operand(&args[1], fn_ctx)?;
+                    self.builder.build_store(ptr, val)?;
+                    Ok(self.context.struct_type(&[], false).const_zero().into())
+                }
+                // reinterpret is a no-op: every pointer is an opaque `ptr`.
+                Intrinsic::PtrCast => self.emit_operand(&args[0], fn_ctx),
                 _ => self.emit_intrinsic_value(*fn_name, args, fn_ctx),
             },
 
@@ -472,7 +519,9 @@ impl<'ctx> LlvmCodegen<'ctx> {
                 self.builder.build_call(exit_fn, &[code_i32.into()], "")?;
                 Ok(self.context.struct_type(&[], false).const_zero().into())
             }
-            _ => unreachable!("emit_intrinsic_value called for print/println"),
+            // No-op until types acquire destructors (Step C); yields unit.
+            Intrinsic::DropInPlace => Ok(self.context.struct_type(&[], false).const_zero().into()),
+            _ => unreachable!("emit_intrinsic_value called for print/println/ptr-ops"),
         }
     }
 
@@ -707,6 +756,11 @@ impl<'ctx> LlvmCodegen<'ctx> {
             }
             // References are real pointers (R2); the region carries no runtime data.
             TyKind::Ref(..) | TyKind::RefMut(..) => self
+                .context
+                .ptr_type(inkwell::AddressSpace::default())
+                .into(),
+            // Raw pointers (A) are address-sized; the element type is erased.
+            TyKind::Ptr(_) => self
                 .context
                 .ptr_type(inkwell::AddressSpace::default())
                 .into(),

@@ -588,6 +588,19 @@ pub fn type_error_to_diagnostic<'tcx>(
                 },
             );
         }
+        PtrOpError { message, range } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    message: format!("invalid raw-pointer operation: {message}"),
+                    range: *range,
+                    related: vec![],
+                    file: Some(file),
+                    ..Default::default()
+                },
+            );
+        }
     }
     diagnostics
 }

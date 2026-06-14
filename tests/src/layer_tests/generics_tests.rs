@@ -572,3 +572,26 @@ fn monomorphises_generic_borrow_function() {
         "missing f$Int: {names:?}"
     );
 }
+
+// ── bare (under-applied) generic type names are an arity error, not a cryptic
+//    downstream failure (regression: examples/lists2.sand)
+// ─────────────────────
+
+#[test]
+fn bare_generic_enum_name_in_a_payload_is_an_arity_error() {
+    // `List` (generic) used without its type argument in its own recursive
+    // payload must be rejected at the type, not silently under-applied.
+    typecheck_fails("type List<T> = Empty | Cons((T, List)) \n def main(): Int := 0");
+}
+
+#[test]
+fn explicit_recursive_type_argument_is_accepted() {
+    typecheck("type List<T> = Empty | Cons((T, List<T>)) \n def main(): Int := 0");
+}
+
+#[test]
+fn constructor_payload_type_mismatch_is_a_type_error() {
+    // a payload whose type doesn't fit the variant reports a type mismatch (not
+    // the old misleading "variant expects a payload, but the call has none").
+    typecheck_fails("type P<T> = M((T, T)) \n def main(): Int := { let x = P#M(5); 0 }");
+}

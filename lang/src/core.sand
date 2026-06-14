@@ -22,3 +22,22 @@ def pow(base: Int, exp: Int): Int :=
 def read_int(): Int := __read_int()
 
 def exit(code: Int): Unit := __exit(code)
+
+// Types that implement `Clone` can use
+// `clone(x : &T) -> T` to receive a duplicate of the borrowed value `x`.
+// `clone` returns a fresh owned value; for primitives that is just a dereference,
+// for other types it may be a deep copy.
+typeclass Clone<T> { def clone(x: &T): T }
+
+// Implementing `Copy` on a type signals to the compiler
+// that values of that type can be copied/cloned implicitly.
+typeclass Copy<T> requires Clone { }
+
+impl Clone for Int { def clone(x: &Int): Int := *x }
+impl Copy for Int { }
+
+impl Clone for Bool { def clone(x: &Bool): Bool := *x }
+impl Copy for Bool { }
+
+impl Clone for Unit { def clone(x: &Unit): Unit := *x }
+impl Copy for Unit { }

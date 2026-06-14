@@ -11,6 +11,7 @@ use crate::ir_types::qhir;
 use crate::ir_types::typed_hir;
 use crate::ir_types::typed_hir::TypedFunction;
 use crate::lang::intrinsics::INTRINSICS;
+use crate::lang::intrinsics::Intrinsic;
 use crate::lang::types::EnumRef;
 use crate::lang::types::Kind;
 use crate::lang::types::Region;
@@ -195,13 +196,16 @@ pub(super) fn infer_constructor<'tcx>(
             if decl.has_param() {
                 // payload type still parametric: infer the argument and unify.
                 let tp = infer(ctx, env, p)?;
-                unify(decl, tp.ty, &mut mapping).map_err(|_| {
-                    AstTypeError::ConstructorPayloadMismatch {
-                        enum_name: enum_name.clone(),
-                        variant: variant_name.clone(),
-                        expected_payload: true,
-                        range: p.range,
-                    }
+                // A unification failure here is a payload *type* mismatch (the
+                // argument's type doesn't fit the variant's declared payload), not
+                // a missing payload — report it as such.
+                unify(decl, tp.ty, &mut mapping).map_err(|_| AstTypeError::TypeError {
+                    message: format!(
+                        "constructor '{enum_name}#{variant_name}' payload has the wrong type"
+                    ),
+                    expected: decl,
+                    found: tp.ty,
+                    range: p.range,
                 })?;
                 Some(Box::new(tp))
             } else {
@@ -607,6 +611,105 @@ fn check_type_constraint<'tcx>(
             ty,
             range,
         })
+    }
+}
+
+/// Type-check a raw-pointer op (`__ptr_read` / `__ptr_write` / `__ptr_cast`,
+/// Memory Step A). These are generic, so they bypass the monomorphic
+/// `INTRINSICS` table: the element type is recovered from the `Ptr<T>` argument
+/// (`read`/`write`) or the expected type (`cast`'s target). `expected` is the
+/// checking-mode context, required by `__ptr_cast`.
+pub(super) fn infer_ptr_op<'tcx>(
+    ctx: &mut CompileCtx<'tcx>,
+    env: &TypeEnv<'tcx>,
+    op: Intrinsic,
+    args: &[qhir::Expr<'tcx>],
+    expected: Option<Ty<'tcx>>,
+    range: Range,
+) -> Result<typed_hir::Expr<'tcx>, AstTypeError<'tcx>> {
+    let arity_err = |found: usize, want: usize| AstTypeError::PtrOpError {
+        message: format!("{op} expects {want} argument(s) but found {found}"),
+        range,
+    };
+    let mk = |args, ty| typed_hir::Expr {
+        expr: typed_hir::Expression::IntrinsicCall { fn_name: op, args },
+        range,
+        ty,
+        kind: Kind::Owned,
+    };
+    match op {
+        Intrinsic::PtrRead => {
+            if args.len() != 1 {
+                return Err(arity_err(args.len(), 1));
+            }
+            let p = infer(ctx, env, &args[0])?;
+            let TyKind::Ptr(elem) = p.ty.kind() else {
+                return Err(AstTypeError::PtrOpError {
+                    message: format!(
+                        "__ptr_read expects a `Ptr<T>`, found {}",
+                        ctx.display_ty(p.ty)
+                    ),
+                    range,
+                });
+            };
+            let elem = *elem;
+            Ok(mk(vec![p], elem))
+        }
+        Intrinsic::PtrWrite => {
+            if args.len() != 2 {
+                return Err(arity_err(args.len(), 2));
+            }
+            let p = infer(ctx, env, &args[0])?;
+            let TyKind::Ptr(elem) = p.ty.kind() else {
+                return Err(AstTypeError::PtrOpError {
+                    message: format!(
+                        "__ptr_write expects a `Ptr<T>`, found {}",
+                        ctx.display_ty(p.ty)
+                    ),
+                    range,
+                });
+            };
+            let elem = *elem;
+            let v = check(ctx, env, &args[1], elem)?;
+            Ok(mk(vec![p, v], ctx.types.unit))
+        }
+        Intrinsic::PtrCast => {
+            if args.len() != 1 {
+                return Err(arity_err(args.len(), 1));
+            }
+            let p = infer(ctx, env, &args[0])?;
+            if !matches!(p.ty.kind(), TyKind::Ptr(_)) {
+                return Err(AstTypeError::PtrOpError {
+                    message: format!(
+                        "__ptr_cast expects a `Ptr<A>`, found {}",
+                        ctx.display_ty(p.ty)
+                    ),
+                    range,
+                });
+            }
+            let target = match expected {
+                Some(t) if matches!(t.kind(), TyKind::Ptr(_)) => t,
+                Some(t) => {
+                    return Err(AstTypeError::PtrOpError {
+                        message: format!(
+                            "__ptr_cast must produce a `Ptr<B>`, but the context expects {}",
+                            ctx.display_ty(t)
+                        ),
+                        range,
+                    });
+                }
+                None => {
+                    return Err(AstTypeError::PtrOpError {
+                        message:
+                            "__ptr_cast needs a `Ptr<B>` type annotation to know its target type"
+                                .to_string(),
+                        range,
+                    });
+                }
+            };
+            Ok(mk(vec![p], target))
+        }
+        _ => unreachable!("infer_ptr_op called for non-ptr-op intrinsic {op}"),
     }
 }
 
@@ -1144,6 +1247,9 @@ pub(super) fn infer<'tcx>(
                 ty: ret_ty,
                 kind: Kind::Owned,
             })
+        }
+        qhir::Expression::IntrinsicCall { fn_name, args } if fn_name.is_ptr_op() => {
+            infer_ptr_op(ctx, env, *fn_name, args, None, expr.range)
         }
         qhir::Expression::IntrinsicCall { fn_name, args } => {
             let (_, fn_sig) = &INTRINSICS[fn_name];

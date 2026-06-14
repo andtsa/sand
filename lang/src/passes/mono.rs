@@ -232,6 +232,12 @@ impl<'tcx> Mono<'tcx> {
                 let inner = self.mono_ty(ctx, *inner, mapping);
                 ctx.ref_mut_ty(Region::Static, inner)
             }
+            // Raw pointers have a real runtime representation (A): keep the `Ptr`
+            // constructor, substituting only the element type.
+            TyKind::Ptr(inner) => {
+                let inner = self.mono_ty(ctx, *inner, mapping);
+                ctx.ptr_ty(inner)
+            }
             _ => ty,
         }
     }
@@ -389,6 +395,11 @@ impl<'tcx> Mono<'tcx> {
         orig_result_ty: Ty<'tcx>,
         caller_mapping: &Subst<'tcx>,
     ) -> FunRef<'tcx> {
+        // External (FFI) functions (Memory Step A) have no body to specialise;
+        // they are monomorphic C symbols. Pass the callee through unchanged.
+        if ctx.is_extern(callee) {
+            return callee;
+        }
         let f = self.src[&callee].clone();
         if f.type_params.is_empty() {
             return self.request_function(ctx, callee, &Subst::new());
@@ -550,6 +561,8 @@ fn mangle_ty<'tcx>(ctx: &CompileCtx<'tcx>, ty: Ty<'tcx>) -> String {
         // References are real pointers (R2) and may appear as type arguments.
         TyKind::Ref(_, inner) => format!("Ref_{}", mangle_ty(ctx, *inner)),
         TyKind::RefMut(_, inner) => format!("RefMut_{}", mangle_ty(ctx, *inner)),
+        // Raw pointers survive monomorphisation (A); the element type is mangled.
+        TyKind::Ptr(inner) => format!("Ptr_{}", mangle_ty(ctx, *inner)),
         // `Param`/`App`/`Region` are substituted / erased before mangling.
         TyKind::Param(_) | TyKind::App(..) | TyKind::Region(..) => {
             internal_bug!("type argument is not concrete during mangling: {ty}")

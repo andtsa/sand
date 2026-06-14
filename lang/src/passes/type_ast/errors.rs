@@ -181,4 +181,7 @@ pub enum AstTypeError<'tcx> {
         "cannot dereference value of type {ty} at {range}: `*` requires a reference (`&T` or `&mut T`)"
     )]
     DerefOfNonReference { ty: Ty<'tcx>, range: Range },
+
+    #[error("invalid raw-pointer operation at {range}: {message}")]
+    PtrOpError { message: String, range: Range },
 }

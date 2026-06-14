@@ -206,6 +206,12 @@ pub enum TyKind<'tcx> {
     /// `BorrowedMut 'r`. Like `Ref`, borrows have no distinct runtime
     /// representation yet, so monomorphisation erases `&'r mut T` to `T`.
     RefMut(Region, Ty<'tcx>),
+    /// A raw pointer `Ptr<T>` (Memory Step A): address-sized, `Copy`, *outside*
+    /// the affine / region / borrow discipline. Unlike `Ref`, a `Ptr` carries
+    /// no region and has a real runtime representation (`ptr`), so it survives
+    /// monomorphisation (only the element type `T` is substituted). Deref is
+    /// the `unsafe` operation; use is confined to the core library.
+    Ptr(Ty<'tcx>),
 }
 
 /// A shallow, `Copy` handle to an interned [`TyKind`].
@@ -231,6 +237,8 @@ impl<'tcx> Ty<'tcx> {
             TyKind::Region(t, _) => t.is_copy(),
             // shared references are freely copyable (immutable, no ownership).
             TyKind::Ref(..) => true,
+            // raw pointers are `Copy` and outside the affine discipline (A).
+            TyKind::Ptr(_) => true,
             _ => false,
         }
     }
@@ -245,6 +253,7 @@ impl<'tcx> Ty<'tcx> {
             TyKind::App(_, args, _) => args.iter().any(|t| t.has_param()),
             TyKind::Region(t, _) => t.has_param(),
             TyKind::Ref(_, t) | TyKind::RefMut(_, t) => t.has_param(),
+            TyKind::Ptr(t) => t.has_param(),
             _ => false,
         }
     }
@@ -288,6 +297,7 @@ impl<'tcx> Ty<'tcx> {
             {
                 xs.iter().zip(*ys).all(|(x, y)| x.eq_modulo_regions(*y))
             }
+            (TyKind::Ptr(a), TyKind::Ptr(b)) => a.eq_modulo_regions(*b),
             _ => false,
         }
     }
@@ -344,6 +354,7 @@ impl<'tcx> Ty<'tcx> {
             (TyKind::Region(a, r1), TyKind::Region(b, r2)) if r1 == r2 => a.compatible(*b),
             (TyKind::Ref(r1, a), TyKind::Ref(r2, b)) if r1 == r2 => a.compatible(*b),
             (TyKind::RefMut(r1, a), TyKind::RefMut(r2, b)) if r1 == r2 => a.compatible(*b),
+            (TyKind::Ptr(a), TyKind::Ptr(b)) => a.compatible(*b),
             _ => false,
         }
     }
@@ -427,6 +438,7 @@ impl fmt::Display for Ty<'_> {
             TyKind::Region(t, r) => write!(f, "{t} @ {r:?}"),
             TyKind::Ref(r, t) => write!(f, "&{r:?} {t}"),
             TyKind::RefMut(r, t) => write!(f, "&{r:?} mut {t}"),
+            TyKind::Ptr(t) => write!(f, "Ptr<{t}>"),
         }
     }
 }

@@ -23,6 +23,33 @@ pub enum Intrinsic {
     Max,
     ReadInt,
     Exit,
+    /// `__ptr_read(p: Ptr<T>): T` — load through a raw pointer (Memory Step A).
+    /// Generic in the element type, so it has no entry in [`INTRINSICS`]; it is
+    /// type-checked and lowered with bespoke rules using the element type
+    /// recovered from its argument / result.
+    PtrRead,
+    /// `__ptr_write(p: Ptr<T>, v: T): Unit` — store through a raw pointer.
+    PtrWrite,
+    /// `__ptr_cast(p: Ptr<A>): Ptr<B>` — reinterpret a raw pointer (runtime
+    /// no-op); `B` comes from the expected-type context.
+    PtrCast,
+    /// `__drop_in_place(x): Unit` — compiler-generated structural destructor
+    /// glue (Memory Step A). A no-op for every type in Steps A/B (no type has a
+    /// non-trivial destructor yet); it gains structural field recursion when
+    /// `Heaped` types acquire `release` in Step C. Wired into drop insertion in
+    /// Step B. Accepts any type (`Top` arg), returns `Unit`.
+    DropInPlace,
+}
+
+impl Intrinsic {
+    /// Whether this intrinsic is a generic raw-pointer op (Memory Step A): it
+    /// has no fixed [`IntrinsicSig`] and is handled by bespoke generic rules.
+    pub fn is_ptr_op(self) -> bool {
+        matches!(
+            self,
+            Intrinsic::PtrRead | Intrinsic::PtrWrite | Intrinsic::PtrCast
+        )
+    }
 }
 
 /// Lifetime-free type tag used in the [`INTRINSICS`] static. Resolve to a
@@ -118,6 +145,14 @@ fn intrinsics() -> Map<Intrinsic, (FnName, IntrinsicSig)> {
                 ret_ty: TyTag::Unit,
             },
         ),
+        (
+            // `Top` arg = accepts a value of any type; no-op until Step C.
+            Intrinsic::DropInPlace,
+            IntrinsicSig {
+                args: vec![TyTag::Top],
+                ret_ty: TyTag::Unit,
+            },
+        ),
     ]
     .into_iter()
     .map(|(n, s)| (n, (FnName::from(n), s)))
@@ -134,6 +169,10 @@ impl Display for Intrinsic {
             Intrinsic::Max => write!(f, "__max"),
             Intrinsic::ReadInt => write!(f, "__read_int"),
             Intrinsic::Exit => write!(f, "__exit"),
+            Intrinsic::PtrRead => write!(f, "__ptr_read"),
+            Intrinsic::PtrWrite => write!(f, "__ptr_write"),
+            Intrinsic::PtrCast => write!(f, "__ptr_cast"),
+            Intrinsic::DropInPlace => write!(f, "__drop_in_place"),
         }
     }
 }
@@ -149,6 +188,10 @@ impl TryFrom<&str> for Intrinsic {
             "__max" => Ok(Intrinsic::Max),
             "__read_int" => Ok(Intrinsic::ReadInt),
             "__exit" => Ok(Intrinsic::Exit),
+            "__ptr_read" => Ok(Intrinsic::PtrRead),
+            "__ptr_write" => Ok(Intrinsic::PtrWrite),
+            "__ptr_cast" => Ok(Intrinsic::PtrCast),
+            "__drop_in_place" => Ok(Intrinsic::DropInPlace),
             _ => Err(()),
         }
     }

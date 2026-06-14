@@ -1295,6 +1295,20 @@ returned.
 
 ## Step 14 — `Clone` and `Copy` Typeclass Integration
 
+> **Status: ✅ DONE** (built before Step 11, per the reorder). 672 tests pass,
+> clippy clean. `Clone`/`Copy` declared in `core.sand` (lang-items by name) with
+> primitive impls; `CompileCtx::is_copy`/`is_copy_under` drive the ownership pass
+> off the `Copy` instance set (+ builtins, tuples-of-Copy, and `where T : Copy`
+> for type parameters); structural `Copy` check (all payloads `Copy`, no generic
+> `Copy`); `clone(&x)` returns a fresh value via the Step 10 method path; the
+> moved-twice error hints at `clone`. The orphan rule was corrected to the
+> "at-home" form (class or type declared in the impl's module) so `core.sand` can
+> implement `Copy`/`Clone` for primitives. Coverage in
+> `tests/layer_tests/clone_copy_tests.rs` + `examples/clone_copy.sand`. Deferred:
+> `derive`, `x.clone()` sugar, `Clone` for non-`Copy` enums (needs match-through-
+> reference), `Display`/`Ty::TOP` retirement.
+
+
 **Goal**: Connect the `Clone`/`Copy` typeclasses (defined in Step 11)
 to the ownership pass so that `Copy` types are implicitly duplicated
 and non-`Copy` types require explicit `.clone()`.
@@ -1314,6 +1328,76 @@ and non-`Copy` types require explicit `.clone()`.
   used twice produces error, `.clone()` permits second use
 
 **Out of scope**: `derive` macros, auto-derive syntax.
+
+### Detailed implementation plan
+
+**Why now (reordered before Step 11/HKT):** `Clone`/`Copy` are *first-order*
+classes — no higher-kinded types, no function arguments, no lambdas — so they sit
+entirely on the Step 10 machinery, and they have immediate payoff: Step 10's
+default-method example already hit "can't use a generic value twice without
+`Copy`". HKT (Step 11) is deferred until closer to lambdas, since its consumers
+(Functor/Monad) need function types + lambdas (Step 13 + Memory C).
+
+**Design decisions (resolved):**
+
+1. **`Clone`/`Copy` are declared in `core.sand`** as ordinary typeclasses; the
+   compiler knows `Copy` (and `Clone`) by **name** as lang-items (to drive
+   implicit copy). `typeclass Clone<T> { def clone(x: &T): T }`,
+   `typeclass Copy<T> requires Clone { }` (a marker — no methods, mirrors Rust's
+   `Copy: Clone`). Instances for `Int`/`Bool`/`Unit` live in `core.sand`.
+2. **`clone` is a free-function call `clone(&x)`** (the Step 10 convention; the
+   `x.clone()` dot form stays deferred sugar). It dispatches via the Step 10
+   path: `&T` argument → receiver `T` → `Clone` instance → a fresh owned `T`. The
+   ownership pass *already* treats `clone(&x)` as a non-consuming borrow of `x`
+   returning an owned value, so the clone pattern needs **no new ownership logic**
+   beyond the `Copy` query below.
+3. **Implicit copy = an `is_copy` query that consults the `Copy` instance set.**
+   `Ty::is_copy` (hardcoded `Int`/`Bool`/`Unit`/`Ref`) becomes a `CompileCtx`
+   query: a type is `Copy` if it is a primitive / reference (builtin), **or** its
+   head has a registered `Copy` instance, **or** (for a type parameter) the
+   enclosing function declares `where T : Copy`. The three `ty.is_copy()` sites in
+   `passes/ownership/` switch to this query (the pass already has `ctx` + the
+   function's `type_constraints`).
+4. **`impl Copy for E` is structural** — registering it requires every field /
+   variant payload of `E` to itself be `Copy` (a lang-item-specific check at impl
+   registration); you cannot make a type carrying a non-`Copy` value `Copy`.
+5. **No codegen change.** There is no `Drop` yet, so using a `Copy` value twice is
+   just two SSA reads, and duplicating a `Copy` aggregate is safe (nothing is
+   freed). When `Drop`/`Heaped` land, `Copy`-of-aggregate must be revisited — but
+   `Heaped` types are never `Copy` (rule 4 forbids it), so the invariant holds.
+
+**Representation:**
+- `core.sand`: the `Clone`/`Copy` class declarations + primitive impls.
+- `CompileCtx`: `is_copy(ty, &type_constraints) -> bool` (builtin ∨ `Copy`
+  instance ∨ `where T : Copy`); a lang-item handle for the `Copy` (and `Clone`)
+  `TypeclassRef`, resolved when `core.sand` is collected (looked up by name).
+- `passes/ownership/`: the three `is_copy` sites consult the ctx query; the
+  "value moved twice" error gains a "use `clone(&x)`" hint when the type has a
+  `Clone` instance.
+
+**Phasing (each ends green):**
+- **14a — lang-items + builtin Copy via the instance set.** Declare `Clone`/`Copy`
+  in `core.sand` with `Int`/`Bool`/`Unit` impls; register the `Copy`/`Clone`
+  lang-item refs (by name) when core is collected; add `CompileCtx::is_copy`
+  (builtin ∨ instance) and switch the ownership sites to it. Behaviour-preserving
+  (primitives still `Copy`, user types still not). The `impl Copy for E`
+  structural check.
+- **14b — user `Copy` + `clone`.** A user `impl Copy for E` (all-payloads-`Copy`
+  enforced) makes `E` implicitly duplicated; `clone(&x)` enables a second use of a
+  non-`Copy` value; the moved-twice error suggests `clone`.
+- **14c — generic `where T : Copy`.** The ownership pass treats a
+  `where T : Copy`-bound parameter as `Copy`; closes the Step 10 gap
+  (`def doubled<T>(x: T): Int where T : ToInt, T : Copy := to_int(x) + to_int(x)`).
+- **14d — tests + example + green.** `Copy` type used twice (no `clone`); non-`Copy`
+  used twice rejected (with the hint); `clone(&x)` permits a second use; user
+  `impl Copy` for an all-Copy enum accepted, for a non-Copy-containing enum
+  rejected; `where T : Copy` generic runs; a compiled `examples/*.sand`.
+
+**Retire `Ty::TOP`?** Still deferred — that needs a `Display` class wired into the
+`println`/`print` intrinsics; fold into a later core-library pass, not Step 14.
+
+**Out of scope:** `derive`/auto-derive, `x.clone()` dot sugar, deep/structural
+`Clone` for heap types (needs `Heaped`), `Display`.
 
 ---
 
@@ -1893,7 +1977,18 @@ allocated/reclaimed; regions (pure lifetimes) decide *whether a reference is
 still valid*. The compiler stays allocation-agnostic — it knows only `Ptr`,
 `drop_in_place`, and the `Heaped` hook protocol; `Box`/`Rc`/arenas are library.
 
-### Step A — Memory substrate
+### Step A — Memory substrate ✅
+
+**Status: complete.** `Ptr<T>` (`TyKind::Ptr`, `Copy`, region-free, `ptr`-sized);
+minimal FFI (`extern def`, signature-only functions + ctx registry, FFI-safe
+boundary types, codegen declares the C symbol, interpreters dispatch
+`malloc`/`free` to the cell-graph); generic pointer ops (`__ptr_read` /
+`__ptr_write` / `__ptr_cast` via the `IntrinsicCall` path, executed as
+load/store/identity in both interpreters and codegen); `__drop_in_place` (no-op
+`Top`→`Unit` intrinsic, inert until C); `Heaped` lang-item registration hook
+reserved. Verified end-to-end (alloc→write→read→free) across the HIR
+interpreter, MIR interpreter, and the LLVM backend (`examples/ptr_substrate.sand`,
+exit 42). `size_of`/`offset`/turbofish deferred to C. 674 tests, clippy clean.
 
 **Goal**: The minimal compiler/runtime primitives every `Heaped` strategy is
 built on. No allocation policy lives in the compiler.
@@ -1911,6 +2006,116 @@ built on. No allocation policy lives in the compiler.
 
 **Out of scope**: the `Heaped` typeclass itself (Step C); any allocation
 strategy; the user-facing `unsafe` model.
+
+**Deliberately removes nothing.** The existing codegen unconditionally boxes
+*every* payload-carrying enum (`emit_aggregate` mallocs a `{i64, ptr}` cell +
+a separate payload, no `free`) — this is a pre-`Heaped` stopgap that is the
+*only* reason recursive types are finite-sized today. It cannot be removed until
+`Heaped` provides explicit indirection for recursive types, so **the implicit
+`malloc` removal + stack-by-default representation flip is a Step C task**
+(see the box pre-step note, now folded into C), not Step A. Through A and B the
+legacy boxing stays; recursive types keep working (and keep leaking, as today).
+
+#### A — design: minimal FFI
+
+`alloc`/`free` are library functions over `Ptr` + FFI (not intrinsics), per the
+organizing principle "the compiler stays allocation-agnostic." Sand has no FFI
+yet, so Step A adds a **minimal** one. The libc-call machinery already exists in
+codegen (`get_or_declare_{printf,scanf,exit,malloc}` → `add_function` +
+`build_call`), so this exposes that capability at the language level rather than
+building it.
+
+- **Grammar**: keyword `extern`; `extern_decl = { "extern" ~ "def" ~ identifier
+  ~ "(" ~ parameters? ~ ")" ~ ":" ~ type_ ~ ";" }`. No generics, no
+  `where`-clause, no body. (Optional `= "c_symbol"` rename deferred; symbol =
+  the sand identifier for now.)
+- **Restrictions (what keeps it minimal)**: C ABI only; non-variadic; parameter
+  and return types limited to **FFI-safe** types — `Int` (→ `i64`), `Ptr<T>`
+  (→ `ptr`), `Unit` (→ `void`). Enums / tuples / borrows may not cross the
+  boundary. No `unsafe` gating yet (confine `Ptr`/FFI use to the core lib).
+- **Front-end**: collect `extern def` into the functions table as a **bodyless**
+  function flagged external (carrying its C symbol). Resolves and type-checks as
+  an ordinary `Call` (no `MethodCall` routing); no body to infer; ownership sees
+  a normal call (args are `Int`/`Ptr`, both `Copy`, so no affine surprises);
+  mono carries it through without seeking a body.
+- **Codegen**: pass 1 declares the extern under its C symbol with the FFI
+  signature (the existing `add_function` path); pass 2 skips it (no body). Calls
+  already resolve through the `FnRef → FunctionValue` map.
+- **Interpreters**: a real FFI call is impossible (the cell-graph value model has
+  no raw memory), so both interpreters **special-case the known externs**
+  (`malloc`/`free`) against a *simulated heap*. This is identical work whichever
+  route we'd picked — see the C-level fork below.
+
+#### A — design: `Ptr<T>` and its operations
+
+- `Ptr<T>` = a new `TyKind::Ptr(Ty)`: kind `Owned`, `is_copy = true`, no free
+  regions, `llvm_type = ptr`. Erased of element type at runtime (all pointers
+  are `ptr`); mono substitutes inside `T` but keeps the `Ptr`. `Ptr` is a
+  built-in generic type *name* in `build_core_type` (not a user enum).
+- **Generic pointer ops** reuse the existing `IntrinsicCall` machinery (already
+  plumbed through qualify → mono → explicate → MIR → both interpreters →
+  codegen): three new `Intrinsic` variants, recognized by name, type-checked
+  with bespoke generic rules (bypassing the monomorphic `INTRINSICS` table), and
+  given bespoke value handling at the leaves using the element type recovered
+  from the (monomorphized) argument / result types. Named with the `__` prefix
+  (signals "internal/unsafe", and avoids the reserved `read`):
+  - `__ptr_read(p: Ptr<T>): T` — load (result `T` ⇒ element type)
+  - `__ptr_write(p: Ptr<T>, v: T): Unit` — store
+  - `__ptr_cast(p: Ptr<A>): Ptr<B>` — reinterpret (runtime no-op); `B` comes
+    from the expected-type context (checking mode), e.g. `let q: Ptr<Int> =
+    __ptr_cast(p)`.
+
+  **Runtime model:** a `Ptr<T>` has the *same* runtime representation as a
+  reference — `ptr` in codegen, a cell handle in the interpreters' cell graph.
+  So `__ptr_read`/`__ptr_write` are a load/store through that pointer (the same
+  operation `Deref` already performs), and `malloc` in the interpreter just
+  allocates a fresh cell (`free` is a no-op; the `Rc` drop reclaims it). No
+  separate indexed "simulated heap" is needed.
+
+  `size_of<T>()` and `offset<T>(p, n)` are **deferred to Step C** (where the
+  compiler computes node layout, and turbofish syntax lands). The A.6 test uses
+  a literal byte size for `malloc`.
+- Core-lib raw FFI (void*-style, monomorphic):
+  `extern def malloc(size: Int): Ptr<Unit>;` and
+  `extern def free(p: Ptr<Unit>): Unit;`. The typed wrappers
+  `alloc<T>() := cast(malloc(size_of::<T>()))` and `free_t<T>(p) :=
+  free(cast(p))` are ordinary core-lib Sand code.
+
+> **Open decision (deferred to Step C, recorded here):** does the interpreter
+> ever see `Ptr`-level code? **(i)** It executes the core-lib `Ptr`/`alloc`
+> bodies → needs a simulated heap + `Ptr` value + malloc/free builtins; or
+> **(ii)** it intercepts at the `Heaped` *method* level (`alloc`/`borrow`/
+> `release` as lang-items) and substitutes its native cell graph, so
+> `Ptr`/`malloc` never reach it. (ii) reuses the interpreter's existing
+> cell-graph heap but requires `Heaped` methods to stay interceptable rather
+> than inlined to `Ptr` ops. Decide when C lands; for A the interpreter takes
+> route (i) only as far as the A acceptance test needs (alloc/write/read/free an
+> `Int`).
+
+#### A — implementation phases
+
+- **A.1 — `Ptr<T>` type.** `TyKind::Ptr`; wire `free_regions`, `has_param`,
+  `eq_modulo_regions`/`compatible`, `is_copy`, `Display`, `llvm_type`, mono
+  (keep `Ptr`, substitute inside `T`); parse `Ptr<T>` as a built-in generic in
+  `build_core_type`. Fill non-exhaustive matches. Green.
+- **A.2 — minimal FFI `extern def`.** Grammar + keyword; collect bodyless
+  external fn (+ C symbol) in `build_ast`; FFI-safe-type check; normal call
+  resolution + type-check; codegen declare-and-skip; interpreter built-in
+  dispatch for `malloc`/`free` over a simulated heap. Green.
+- **A.3 — generic Ptr ops.** `read`/`write`/`cast`/`size_of` as builtin generic
+  lang-items, lowered by name (codegen via LLVM `load`/`store`/`size_of`/no-op;
+  interpreter via the simulated heap). Green.
+- **A.4 — `drop_in_place`.** Intrinsic: compiler-generated structural field
+  recursion, bottoming out at no-op (inert until types gain a `release` in
+  B/C). Defined here; *wired* into drop insertion in B. Green.
+- **A.5 — `Heaped` lang-item registration hook.** Reserve the by-name
+  registration mechanism (like `clone_class`/`copy_class`); the `Heaped`
+  typeclass itself is declared in core lib at Step C, so the slot stays empty
+  until then. Green.
+- **A.6 — tests + example + green.** End-to-end A acceptance test: a core-lib /
+  example program that `alloc`s an `Int`, `write`s, `read`s it back, `free`s,
+  and prints — passing under *both* codegen and the interpreter(s). Clippy
+  clean.
 
 ### Step B — Drop / RAII
 

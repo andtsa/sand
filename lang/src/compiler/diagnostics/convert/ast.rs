@@ -275,7 +275,10 @@ pub fn ast_error_to_diagnostics(
         | AstError::MissingMethod { range, .. }
         | AstError::DuplicateInstance { range, .. }
         | AstError::OrphanInstance { range, .. }
-        | AstError::MissingSuperclass { range, .. }) => {
+        | AstError::MissingSuperclass { range, .. }
+        | AstError::CopyPayloadNotCopy { range }
+        | AstError::CopyOnGenericType { range }
+        | AstError::NonFfiSafeType { range, .. }) => {
             diagnostics.add_one(
                 file,
                 SandDiagnostic {
