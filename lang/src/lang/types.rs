@@ -30,7 +30,21 @@ pub enum Kind {
     /// The uninhabited kind: a diverging expression (e.g. an infinite loop)
     /// never produces a value, so it is usable where any kind is expected.
     Never,
+    /// A type-constructor kind `K₁ -> K₂` (higher-kinded type
+    /// parameters): the kind of a thing that, applied to a type of kind `K₁`,
+    /// yields a type of kind `K₂`, e.g. `Option : Owned -> Owned`. The arrow's
+    /// domain/codomain are held in a context-side **kind interner** (canonical,
+    /// so equal arrows share one [`KindId`] and derived `Eq`/`Hash`/`Ord` on the
+    /// id are structural). `Kind` therefore stays `Copy` and lifetime-free while
+    /// the arrow space is fully general (nesting / multi-argument via currying).
+    Arrow(KindId),
 }
+
+/// Canonical id of an interned arrow kind (`K₁ -> K₂`); see [`Kind::Arrow`].
+/// Interned per [`crate::compiler::context::CompileCtx`]; ids are only
+/// meaningful within one compilation (kinds never cross contexts).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct KindId(pub usize);
 
 impl Kind {
     /// Subkinding `self <: other` (Calculus §1.2): "`self` is usable where
@@ -181,6 +195,13 @@ pub enum TyKind<'tcx> {
     /// A type parameter use site (the `T` in a generic signature/body). Opaque
     /// until monomorphisation (Step 3) substitutes a concrete type for it.
     Param(TypeParamId),
+    /// A **higher-kinded** type parameter applied to arguments, `F<A>`
+    /// where `F` is a type *constructor* parameter (kind `Owned -> Owned`), not
+    /// a concrete enum. Distinct from [`TyKind::App`], whose head is a known
+    /// `EnumRef`. Opaque until monomorphisation substitutes a concrete
+    /// constructor for `F` (its `Subst` entry is the bare `Enum(er)`), turning
+    /// `F<A>` into `App(er, A)`. Like `Param`, it never survives mono.
+    ParamApp(TypeParamId, &'tcx [Ty<'tcx>]),
     /// A generic enum applied to concrete (or still-parametric) type arguments,
     /// e.g. `Option<Int>`. The `EnumRef` is the generic base enum; the slice is
     /// its type arguments, one per declared parameter. Distinct argument lists
@@ -249,6 +270,8 @@ impl<'tcx> Ty<'tcx> {
     pub fn has_param(self) -> bool {
         match self.kind() {
             TyKind::Param(_) => true,
+            // `F<A>` has a parameter head, so it is always non-concrete.
+            TyKind::ParamApp(_, _) => true,
             TyKind::Tuple(elems) => elems.iter().any(|t| t.has_param()),
             TyKind::App(_, args, _) => args.iter().any(|t| t.has_param()),
             TyKind::Region(t, _) => t.has_param(),
@@ -298,6 +321,11 @@ impl<'tcx> Ty<'tcx> {
                 xs.iter().zip(*ys).all(|(x, y)| x.eq_modulo_regions(*y))
             }
             (TyKind::Ptr(a), TyKind::Ptr(b)) => a.eq_modulo_regions(*b),
+            (TyKind::ParamApp(p1, xs), TyKind::ParamApp(p2, ys))
+                if p1 == p2 && xs.len() == ys.len() =>
+            {
+                xs.iter().zip(*ys).all(|(x, y)| x.eq_modulo_regions(*y))
+            }
             _ => false,
         }
     }
@@ -331,6 +359,11 @@ impl<'tcx> Ty<'tcx> {
                     out.push(*r);
                 }
             }
+            TyKind::ParamApp(_, args) => {
+                for a in args.iter() {
+                    a.free_regions(out);
+                }
+            }
             _ => {}
         }
     }
@@ -355,6 +388,11 @@ impl<'tcx> Ty<'tcx> {
             (TyKind::Ref(r1, a), TyKind::Ref(r2, b)) if r1 == r2 => a.compatible(*b),
             (TyKind::RefMut(r1, a), TyKind::RefMut(r2, b)) if r1 == r2 => a.compatible(*b),
             (TyKind::Ptr(a), TyKind::Ptr(b)) => a.compatible(*b),
+            (TyKind::ParamApp(p1, xs), TyKind::ParamApp(p2, ys))
+                if p1 == p2 && xs.len() == ys.len() =>
+            {
+                xs.iter().zip(*ys).all(|(x, y)| x.compatible(*y))
+            }
             _ => false,
         }
     }
@@ -406,6 +444,16 @@ impl fmt::Display for Ty<'_> {
             TyKind::Top => write!(f, "Top"),
             TyKind::Enum(er) => write!(f, "Enum({:?})", er),
             TyKind::Param(id) => write!(f, "Param({})", id.0),
+            TyKind::ParamApp(id, args) => {
+                write!(f, "Param({})<", id.0)?;
+                for (i, t) in args.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{t}")?;
+                }
+                write!(f, ">")
+            }
             TyKind::Tuple(ts) => {
                 write!(f, "(")?;
                 for (i, t) in ts.iter().enumerate() {

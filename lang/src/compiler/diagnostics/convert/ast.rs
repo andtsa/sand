@@ -281,7 +281,9 @@ pub fn ast_error_to_diagnostics(
         | AstError::NonFfiSafeType { range, .. }
         | AstError::NotDerivable { range, .. }
         | AstError::DuplicateDerive { range, .. }
-        | AstError::RecursiveTypeNeedsHeaped { range, .. }) => {
+        | AstError::RecursiveTypeNeedsHeaped { range, .. }
+        | AstError::NotATypeConstructor { range, .. }
+        | AstError::TypeConstructorNotApplied { range, .. }) => {
             diagnostics.add_one(
                 file,
                 SandDiagnostic {

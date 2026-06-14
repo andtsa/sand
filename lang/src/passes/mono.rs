@@ -240,9 +240,27 @@ impl<'tcx> Mono<'tcx> {
                 let spec_er = self.request_enum(ctx, base, args);
                 ctx.enum_ty(spec_er)
             }
+            // A higher-kinded application `F<A>`: `F` is bound to a
+            // concrete constructor (bare `Enum(er)`); apply it to the
+            // monomorphised args and specialise, exactly like `App`.
+            TyKind::ParamApp(id, args) => {
+                let args: Vec<Ty<'tcx>> = args
+                    .iter()
+                    .map(|a| self.mono_ty(ctx, *a, mapping))
+                    .collect();
+                match mapping.get(id).map(|t| t.kind()) {
+                    Some(TyKind::Enum(er)) => {
+                        let spec_er = self.request_enum(ctx, *er, args);
+                        ctx.enum_ty(spec_er)
+                    }
+                    other => internal_bug!(
+                        "higher-kinded parameter {id:?} not bound to a constructor at mono: {other:?}"
+                    ),
+                }
+            }
             // A non-generic enum is already concrete *unless* one of its variant
             // payloads embeds a generic instantiation (`Opt<Int>`) or a type
-            // parameter — e.g. a `deriving Heaped` node enum, whose recursive
+            // parameter, e.g. a `deriving Heaped` node enum, whose recursive
             // fields are `Unique<…>` (an `App`). Such payloads are never reached
             // through the `App` arm above (the enum is referenced bare), so
             // request a monomorphic copy here to lower them.
@@ -454,11 +472,11 @@ impl<'tcx> Mono<'tcx> {
         let mut recovered: Subst<'tcx> = Subst::new();
         for (param, arg) in f.parameters.iter().zip(orig_args) {
             let arg_ty = subst(ctx, arg.ty, caller_mapping);
-            unify(param.ty, arg_ty, &mut recovered)
+            unify(ctx, param.ty, arg_ty, &mut recovered)
                 .unwrap_or_else(|_| internal_bug!("mono: argument unification failed"));
         }
         let result_ty = subst(ctx, orig_result_ty, caller_mapping);
-        unify(f.ret_type, result_ty, &mut recovered)
+        unify(ctx, f.ret_type, result_ty, &mut recovered)
             .unwrap_or_else(|_| internal_bug!("mono: return unification failed"));
 
         // The recovered bindings may still carry `App`s; lower them to concrete
@@ -625,8 +643,8 @@ fn mangle_ty<'tcx>(ctx: &CompileCtx<'tcx>, ty: Ty<'tcx>) -> String {
         TyKind::RefMut(_, inner) => format!("RefMut_{}", mangle_ty(ctx, *inner)),
         // Raw pointers survive monomorphisation (A); the element type is mangled.
         TyKind::Ptr(inner) => format!("Ptr_{}", mangle_ty(ctx, *inner)),
-        // `Param`/`App`/`Region` are substituted / erased before mangling.
-        TyKind::Param(_) | TyKind::App(..) | TyKind::Region(..) => {
+        // `Param`/`ParamApp`/`App`/`Region` are substituted / erased before mangling.
+        TyKind::Param(_) | TyKind::ParamApp(..) | TyKind::App(..) | TyKind::Region(..) => {
             internal_bug!("type argument is not concrete during mangling: {ty}")
         }
     }

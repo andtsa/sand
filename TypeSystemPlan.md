@@ -1173,6 +1173,27 @@ consts, `dyn`/dictionaries, `x.method()` dot sugar, blanket impls, and retiring
 
 ## Step 11 — Higher-Kinded Type Parameters
 
+> **Status: ✅ DONE (machinery).** 730 tests, clippy clean. Higher-kinded type
+> parameters (`F : Owned -> Owned`), applied types `F<A>`, HKT-aware instance
+> resolution + mono, and **method-level generics** on typeclass methods all
+> work, demonstrated by an arrow-free `Container` class
+> (`examples/hkt.sand`, `tests/layer_tests/hkt_tests.rs`).
+> **Deviations from the literal scope (deliberate):**
+> - Arrow kinds are **interned** (`Kind::Arrow(KindId)` + a ctx kind interner),
+>   not `Arrow(Box<Kind>,Box<Kind>)` — keeps `Kind: Copy`/`Ord`/`Hash` while
+>   staying fully general (nesting / currying). Surface syntax accepts
+>   `Owned`/`Never` atoms, `->`, and parens.
+> - `F<A>` is a new `TyKind::ParamApp(TypeParamId, &[Ty])` (distinct from `App`,
+>   whose head is an `EnumRef`); a HK param's `Subst` entry is the bare
+>   `Enum(er)` constructor, and `unify(ParamApp, App)` recovers it (head-only
+>   conflict check). `ParamApp` never survives mono.
+> - **`Functor`/`Applicative`/`Monad` are deferred to Step 13** — their methods
+>   need function types (`A -> B`), which arrive with lambdas. Step 11 ships the
+>   HKT machinery; the demo uses an arrow-free class whose constructor parameter
+>   sits in *argument* position (so the instance resolves from a call argument,
+>   not return-position/expected-type inference).
+> - `Ty::TOP` retirement remains deferred (still no `Display` class).
+
 **Goal**: Allow type parameters of kind `Owned → Owned` (type
 constructors), enabling `Functor`, `Applicative`, and `Monad` to be
 expressed as typeclasses.

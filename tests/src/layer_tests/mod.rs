@@ -18,6 +18,7 @@ pub mod drop_tests;
 pub mod enum_tests;
 pub mod ffi_tests;
 pub mod generics_tests;
+pub mod hkt_tests;
 pub mod interpreter_tests;
 pub mod kind_tests;
 pub mod match_tests;
