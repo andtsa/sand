@@ -12,6 +12,7 @@ use crate::compiler::structure::EnumVariant;
 use crate::compiler::structure::FileRef;
 use crate::compiler::structure::FunRef;
 use crate::compiler::structure::FunSig;
+use crate::compiler::structure::ImplDef;
 use crate::compiler::structure::Map;
 use crate::compiler::structure::ModuleInfo;
 use crate::compiler::structure::ModuleRef;
@@ -22,8 +23,11 @@ use crate::compiler::structure::Range;
 use crate::compiler::structure::RegionParam;
 use crate::compiler::structure::RegionParamSpec;
 use crate::compiler::structure::Set;
+use crate::compiler::structure::TypeHead;
 use crate::compiler::structure::TypeParam;
 use crate::compiler::structure::TypeParamSpec;
+use crate::compiler::structure::TypeclassDef;
+use crate::compiler::structure::TypeclassRef;
 use crate::compiler::structure::UniqVar;
 use crate::compiler::structure::VarName;
 use crate::internal_bug;
@@ -183,6 +187,9 @@ pub struct CompileCtx<'tcx> {
     /// clauses at a call site (a generic caller can discharge a callee
     /// constraint with its own). Set by `infer_function`, restored on exit.
     cur_where_constraints: Vec<RegionConstraint>,
+    /// The `where T : C` typeclass constraints of the function currently being
+    /// checked — assumed while resolving method calls on its type parameters.
+    cur_type_constraints: Vec<crate::compiler::structure::TypeConstraint>,
 
     // type parameters
     /// Number of type parameters allocated so far.
@@ -216,6 +223,18 @@ pub struct CompileCtx<'tcx> {
     anon_tag_types: Map<Vec<String>, EnumRef<'tcx>>,
     /// The module currently being built (set in `build_function`).
     cur_build_module: Option<ModuleRef<'tcx>>,
+
+    // typeclasses (Step 10)
+    /// All registered typeclasses, indexed by `TypeclassRef`.
+    typeclasses: Vec<TypeclassDef<'tcx>>,
+    /// Class name -> ref. Global for now (class names are unique program-wide);
+    /// `src_module` on the def carries ownership for the orphan rule.
+    typeclass_names: Map<String, TypeclassRef>,
+    /// Method name -> its owning class (one class per method name, §decision
+    /// 1).
+    method_index: Map<String, TypeclassRef>,
+    /// The one global, coherent instance set, keyed by `(class, head type)`.
+    instances: Map<(TypeclassRef, TypeHead<'tcx>), ImplDef<'tcx>>,
 
     // modules
     project_modules: Vec<ModuleRef<'tcx>>,
@@ -335,6 +354,7 @@ impl<'tcx> CompileCtx<'tcx> {
             region_scope_stack: Vec::new(),
             region_depths: Default::default(),
             cur_where_constraints: Vec::new(),
+            cur_type_constraints: Vec::new(),
             type_param_count: 0,
             type_param_names: Default::default(),
             cur_type_params: Default::default(),
@@ -347,6 +367,10 @@ impl<'tcx> CompileCtx<'tcx> {
             enum_defs: Default::default(),
             enum_names: Default::default(),
             anon_tag_types: Default::default(),
+            typeclasses: Default::default(),
+            typeclass_names: Default::default(),
+            method_index: Default::default(),
+            instances: Default::default(),
             cur_build_module: None,
             project_modules: Default::default(),
             module_imports: Default::default(),
@@ -1316,6 +1340,142 @@ impl<'tcx> CompileCtx<'tcx> {
             internal_bug!("enum display indexed with oob variant: {enum_ref:?}[{variant}]");
         }
         variants[variant].name.clone()
+    }
+
+    // ========================== Typeclasses =================================
+
+    /// The instance-coherence head of a type: its outermost constructor. `None`
+    /// for types that cannot (yet) carry an instance (references, tuples, type
+    /// parameters, region-ascribed types).
+    pub fn type_head(&self, ty: Ty<'tcx>) -> Option<TypeHead<'tcx>> {
+        match ty.kind() {
+            TyKind::Int => Some(TypeHead::Int),
+            TyKind::Bool => Some(TypeHead::Bool),
+            TyKind::Unit => Some(TypeHead::Unit),
+            TyKind::Enum(er) => Some(TypeHead::Enum(*er)),
+            TyKind::App(er, _, _) => Some(TypeHead::Enum(*er)),
+            _ => None,
+        }
+    }
+
+    /// Register a typeclass, returning its ref. Also indexes its name and every
+    /// method name (the one-class-per-method-name rule is validated
+    /// separately).
+    pub fn register_typeclass(&mut self, def: TypeclassDef<'tcx>) -> TypeclassRef {
+        let tref = TypeclassRef(self.typeclasses.len());
+        self.typeclass_names.insert(def.name.clone(), tref);
+        // Index method names now (from declaration order) so the skeleton's
+        // methods can be filled in a later resolve phase.
+        for name in &def.method_order {
+            self.method_index.insert(name.clone(), tref);
+        }
+        self.typeclasses.push(def);
+        tref
+    }
+
+    /// Record the generic default-body function for a typeclass method
+    /// so impls that omit the method can dispatch to it.
+    pub fn set_method_default_fn(&mut self, class: TypeclassRef, method: &str, fr: FunRef<'tcx>) {
+        if let Some(m) = self.typeclasses[class.0].methods.get_mut(method) {
+            m.default_fn = Some(fr);
+        }
+    }
+
+    /// Fill in a class skeleton's resolved method signatures and superclass
+    /// refs (second phase, once all classes + enums exist).
+    pub fn set_typeclass_methods(
+        &mut self,
+        tref: TypeclassRef,
+        methods: Map<String, crate::compiler::structure::MethodDef<'tcx>>,
+        superclasses: Vec<TypeclassRef>,
+    ) {
+        let def = &mut self.typeclasses[tref.0];
+        def.methods = methods;
+        def.superclasses = superclasses;
+    }
+
+    pub fn lookup_typeclass(&self, name: &str) -> Option<TypeclassRef> {
+        self.typeclass_names.get(name).copied()
+    }
+
+    pub fn get_typeclass(&self, tref: TypeclassRef) -> &TypeclassDef<'tcx> {
+        &self.typeclasses[tref.0]
+    }
+
+    /// The class that owns method `name`, if any (call-resolution entry point).
+    pub fn method_class(&self, name: &str) -> Option<TypeclassRef> {
+        self.method_index.get(name).copied()
+    }
+
+    pub fn all_typeclasses(&self) -> impl Iterator<Item = TypeclassRef> + '_ {
+        (0..self.typeclasses.len()).map(TypeclassRef)
+    }
+
+    /// Look up the instance for `(class, head)`, if registered.
+    pub fn lookup_instance(
+        &self,
+        class: TypeclassRef,
+        head: TypeHead<'tcx>,
+    ) -> Option<&ImplDef<'tcx>> {
+        self.instances.get(&(class, head))
+    }
+
+    /// Enter the current function's `where T : C` constraints as assumptions
+    /// (used while resolving method calls on its type parameters); returns the
+    /// previous set to restore on exit.
+    pub fn set_type_assumptions(
+        &mut self,
+        constraints: Vec<crate::compiler::structure::TypeConstraint>,
+    ) -> Vec<crate::compiler::structure::TypeConstraint> {
+        std::mem::replace(&mut self.cur_type_constraints, constraints)
+    }
+
+    pub fn type_assumptions(&self) -> &[crate::compiler::structure::TypeConstraint] {
+        &self.cur_type_constraints
+    }
+
+    /// Whether having an instance of `have` guarantees one of `want`: i.e.
+    /// `want` is `have` or a (transitive) superclass of `have`. (An `impl B
+    /// for T` requires its superclasses' instances, so a `T : B` bound
+    /// licenses calling a superclass `A`'s methods on `T`.)
+    pub fn class_satisfies(&self, have: TypeclassRef, want: TypeclassRef) -> bool {
+        if have == want {
+            return true;
+        }
+        let mut stack = vec![have];
+        let mut seen = Set::new();
+        while let Some(c) = stack.pop() {
+            if !seen.insert(c) {
+                continue;
+            }
+            for &s in &self.typeclasses[c.0].superclasses {
+                if s == want {
+                    return true;
+                }
+                stack.push(s);
+            }
+        }
+        false
+    }
+
+    /// The `(class, head, range)` of every registered instance
+    /// for the superclass-presence check.
+    pub fn instance_keys(&self) -> Vec<(TypeclassRef, TypeHead<'tcx>, Range)> {
+        self.instances
+            .values()
+            .map(|d| (d.class, d.head, d.range))
+            .collect()
+    }
+
+    /// Register an instance. Returns `Err(existing range)` if an instance for
+    /// the same `(class, head)` already exists (coherence violation).
+    pub fn register_instance(&mut self, def: ImplDef<'tcx>) -> Result<(), Range> {
+        let key = (def.class, def.head);
+        if let Some(existing) = self.instances.get(&key) {
+            return Err(existing.range);
+        }
+        self.instances.insert(key, def);
+        Ok(())
     }
 
     // ============================ Modules ===================================

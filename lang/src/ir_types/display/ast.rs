@@ -108,6 +108,12 @@ fn dump_expr<'tcx>(out: &mut String, expr: &Expr<'tcx>, ctx: &CompileCtx<'tcx>, 
                 dump_expr(out, arg, ctx, level + 1);
             }
         }
+        Expression::MethodCall { method, args, .. } => {
+            let _ = writeln!(out, "method {method}");
+            for arg in args {
+                dump_expr(out, arg, ctx, level + 1);
+            }
+        }
         Expression::Var(v) => {
             let _ = writeln!(out, "var {}", ctx.uniq_variable_name(v));
         }

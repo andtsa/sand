@@ -118,6 +118,7 @@ impl<'tcx> Mono<'tcx> {
                 type_params: Vec::new(),
                 region_params: Vec::new(),
                 where_constraints: Vec::new(),
+                type_constraints: Vec::new(),
                 parameters,
                 ret_type,
                 body,
@@ -288,6 +289,34 @@ impl<'tcx> Mono<'tcx> {
                 let spec = self.specialise_callee(ctx, *fn_name, args, expr.ty, mapping);
                 Expression::Call {
                     fn_name: spec,
+                    args: new_args,
+                }
+            }
+            // Deferred typeclass dispatch (Step 10b): the receiver type is now
+            // concrete (the enclosing generic function has been specialised), so
+            // resolve the instance and lower to a direct call of its method.
+            Expression::MethodCall {
+                class,
+                method,
+                self_ty,
+                args,
+            } => {
+                let new_args: Vec<Expr<'tcx>> = args
+                    .iter()
+                    .map(|a| self.rewrite_expr(ctx, a, mapping))
+                    .collect();
+                let concrete = self.mono_ty(ctx, *self_ty, mapping);
+                let head = ctx.type_head(concrete).unwrap_or_else(|| {
+                    internal_bug!("method receiver {concrete:?} has no instance head at mono")
+                });
+                let fn_name = ctx
+                    .lookup_instance(*class, head)
+                    .and_then(|d| d.methods.get(method).copied())
+                    .unwrap_or_else(|| {
+                        internal_bug!("no instance for '{method}' on {concrete:?} at mono")
+                    });
+                Expression::Call {
+                    fn_name,
                     args: new_args,
                 }
             }

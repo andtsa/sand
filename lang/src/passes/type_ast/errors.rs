@@ -155,6 +155,23 @@ pub enum AstTypeError<'tcx> {
         range: Range,
     },
 
+    #[error("no instance of typeclass '{class}' for type {ty} at {range}")]
+    TypeclassNoInstance {
+        class: String,
+        ty: Ty<'tcx>,
+        range: Range,
+    },
+
+    #[error(
+        "cannot determine the receiver type for method '{method}' at {range} from its arguments"
+    )]
+    TypeclassCannotResolve { method: String, range: Range },
+
+    #[error(
+        "method '{method}' at {range} is called on a type parameter that is not constrained by a `where` clause"
+    )]
+    TypeclassNeedsConstraint { method: String, range: Range },
+
     #[error(
         "cannot mutably borrow immutable variable '{name}' at {range}: declare it `let mut {name}` (or a `mut` parameter)"
     )]

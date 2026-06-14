@@ -311,6 +311,18 @@ impl<'fmt, 'tcx> Iterator for TypedExprFormatter<'fmt, 'tcx> {
                         return Some((fn_name.to_string(), Nothing));
                     }
 
+                    MethodCall { method, args, .. } => {
+                        self.stack.push(Token(")".into(), Nothing));
+                        for (i, arg) in args.iter().enumerate().rev() {
+                            self.stack.push(Exp(&arg.expr));
+                            if i > 0 {
+                                self.stack.push(Token(",".into(), Space));
+                            }
+                        }
+                        self.stack.push(Token("(".into(), Any));
+                        return Some((method.clone(), Nothing));
+                    }
+
                     Block { statements, expr } => {
                         // emission order: { [newline+indent] stmts... [tail_expr] [dedent] }
                         //

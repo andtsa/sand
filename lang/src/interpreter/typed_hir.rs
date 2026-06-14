@@ -25,12 +25,15 @@ use std::rc::Rc;
 
 use crate::compiler::context::CompileCtx;
 use crate::compiler::structure::Map;
+use crate::compiler::structure::TypeHead;
+use crate::compiler::structure::TypeclassRef;
 use crate::compiler::structure::UniqVar;
 use crate::ir_types::typed_hir::*;
 use crate::lang::intrinsics::Intrinsic;
 use crate::lang::ops::*;
 use crate::lang::types::EnumRef;
 use crate::lang::types::Kind;
+use crate::lang::types::TyKind;
 
 #[derive(Debug, thiserror::Error)]
 pub enum InterpError {
@@ -81,6 +84,17 @@ type Env<'tcx> = Map<UniqVar<'tcx>, Cell<'tcx>>;
 
 fn cell<'tcx>(v: Value<'tcx>) -> Cell<'tcx> {
     Rc::new(RefCell::new(v))
+}
+
+/// The typeclass-instance head of a runtime value, for dynamic method dispatch.
+fn value_head<'tcx>(v: &Value<'tcx>) -> Option<TypeHead<'tcx>> {
+    match v {
+        Value::Int(_) => Some(TypeHead::Int),
+        Value::Bool(_) => Some(TypeHead::Bool),
+        Value::Unit => Some(TypeHead::Unit),
+        Value::Constructor { enum_ref, .. } => Some(TypeHead::Enum(*enum_ref)),
+        Value::Tuple(_) | Value::Ref(_) => None,
+    }
 }
 
 impl<'tcx> TypedProgram<'tcx> {
@@ -197,6 +211,15 @@ impl<'tcx> TypedProgram<'tcx> {
                 eval_intrinsic(*fn_name, vals, ctx, output)
             }
 
+            // A deferred (generic) typeclass method call: resolve the instance
+            // from the runtime receiver value's head type, then call its method.
+            Expression::MethodCall {
+                class,
+                method,
+                args,
+                ..
+            } => self.eval_method_call(*class, method, args, env, ctx, output),
+
             Expression::Constructor {
                 enum_ref,
                 variant_idx,
@@ -244,6 +267,56 @@ impl<'tcx> TypedProgram<'tcx> {
     /// Evaluate an expression *as a place* (lvalue), returning the storage cell
     /// it denotes. `&e`/`*r = e` use this to share / write through a location.
     ///
+    /// Evaluate a deferred typeclass method call (a generic dispatch the type
+    /// checker left unresolved). The instance is selected from the *runtime*
+    /// receiver value's head type (the argument whose method-parameter is the
+    /// class parameter), then the impl method is called like an ordinary
+    /// function.
+    fn eval_method_call(
+        &self,
+        class: TypeclassRef,
+        method: &str,
+        args: &[Expr<'tcx>],
+        env: &mut Env<'tcx>,
+        ctx: &CompileCtx<'tcx>,
+        output: &mut dyn std::io::Write,
+    ) -> Result<Value<'tcx>, InterpError> {
+        let arg_vals: Vec<Value<'tcx>> = args
+            .iter()
+            .map(|a| self.eval_expr(&a.expr, env, ctx, output))
+            .collect::<Result<_, _>>()?;
+
+        // the receiver = the argument at the method-parameter that is the class
+        // parameter (default to the first argument).
+        let cdef = ctx.get_typeclass(class);
+        let class_param = cdef.param;
+        let recv_idx = cdef.methods[method]
+            .param_tys
+            .iter()
+            .position(|t| matches!(t.kind(), TyKind::Param(id) if *id == class_param))
+            .unwrap_or(0);
+        let head = value_head(&arg_vals[recv_idx]).ok_or_else(|| {
+            InterpError::Runtime(format!(
+                "no typeclass instance head for the receiver of {method}"
+            ))
+        })?;
+        let impl_fn = ctx
+            .lookup_instance(class, head)
+            .and_then(|d| d.methods.get(method).copied())
+            .ok_or_else(|| {
+                InterpError::Runtime(format!("no instance providing method {method}"))
+            })?;
+
+        let function = &self.functions[&impl_fn];
+        let mut call_env = function
+            .parameters
+            .iter()
+            .zip(arg_vals)
+            .map(|(param, v)| (param.name, cell(v)))
+            .collect::<Env>();
+        self.eval_expr(&function.body.expr, &mut call_env, ctx, output)
+    }
+
     /// - `x` resolves to the variable's own cell (so `&mut x` aliases `x`).
     /// - `*r` resolves to the cell `r` points at (reborrow).
     /// - any other expression is a temporary: it is evaluated and a fresh cell

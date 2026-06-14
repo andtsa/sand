@@ -10,6 +10,7 @@ use pest::iterators::Pair;
 use crate::compiler::structure::ModuleRef;
 use crate::compiler::structure::Range;
 use crate::compiler::structure::RegionParam;
+use crate::compiler::structure::TypeConstraint;
 use crate::compiler::structure::UniqVar;
 use crate::lang::intrinsics::Intrinsic;
 use crate::lang::types::RegionConstraint;
@@ -102,6 +103,9 @@ pub struct FunSig<'tcx> {
     /// The function's `where 'a >= 's` outlives constraints, checked at each
     /// call site against the inferred region substitution.
     pub where_constraints: Vec<RegionConstraint>,
+    /// The function's `where T : C` typeclass constraints, checked at each call
+    /// site once `T` is concrete.
+    pub type_constraints: Vec<TypeConstraint>,
 }
 
 impl<'tcx> FunSig<'tcx> {
@@ -110,12 +114,14 @@ impl<'tcx> FunSig<'tcx> {
         ret_ty: Ty<'tcx>,
         region_params: Vec<RegionParam>,
         where_constraints: Vec<RegionConstraint>,
+        type_constraints: Vec<TypeConstraint>,
     ) -> Self {
         Self {
             args: args.iter().map(|a| (a.name, a.ty)).collect(),
             ret_ty,
             region_params,
             where_constraints,
+            type_constraints,
         }
     }
 }

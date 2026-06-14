@@ -221,9 +221,9 @@ impl<'tcx> OwnershipChecker<'_, 'tcx> {
                 self.check_expr(right, env)
             }
 
-            th::Expression::Call { args, .. } | th::Expression::IntrinsicCall { args, .. } => {
-                self.check_exprs(args, env)
-            }
+            th::Expression::Call { args, .. }
+            | th::Expression::IntrinsicCall { args, .. }
+            | th::Expression::MethodCall { args, .. } => self.check_exprs(args, env),
 
             th::Expression::If { cond, t, f } => {
                 self.check_expr(cond, env)?;
