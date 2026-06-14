@@ -61,8 +61,9 @@ The honest status of each:
   soundest part of the whole stack and the rules read correctly. See I.3.
 - **O1 and O3 are real, but the calculus underspecifies them** — see I.2, the
   biggest soundness-presentation gap.
-- **O4 is described (§6.11) but observationally inert** everywhere today (drop is
-  a no-op in all three backends), so it is *unverified at runtime*. See II.3.
+- **O4 is now executed**: drop *placement* (§6.11) is realised as a real *effect* —
+  codegen frees via structural `drop_glue`, the interpreters auto-reclaim via their
+  `Rc` cell graph. Residual edge-case leaks only (see II.3).
 
 ### I.2 The biggest gap: affinity is not expressed in the typing rules
 
@@ -120,22 +121,18 @@ language (you can't name an out-of-scope region), but it is exactly the kind of
 side-condition a mechanized proof would force you to state as an invariant of
 well-formed call contexts. Flagging it as the one non-obvious step.
 
-### I.4 The kind lattice (§1) — sound, but the "region-free" claim is now false
+### I.4 The kind lattice (§1) — sound, and region-free as stated
 
-The `{Owned, Borrowed, BorrowedMut, InteriorMut, Never}` lattice with `Owned` top,
-`Never` bottom, three incomparable borrow modes is a clean lattice; join (§1.4) is
-the correct LUB. Subkinding (§1.2) as subsumption is fine. No soundness concern in
-the lattice itself.
-
-**But** §1.1 spends a paragraph asserting "**Kinds are region-free** … a borrow's
-region is part of its type, not its kind." The implementation contradicts this:
-`Kind::Borrowed(Region)` and `Kind::BorrowedMut(Region)` *carry* the region
-(introduced in Step 7/9a, originally so the Step 8b escape check could read the
-region off the kind). Post-R1 the escape check moved onto the type's
-`freeRegions`, so the region-on-the-kind is now *vestigial* for safety but still
-present in the data type. This is a documentation/representation divergence, not
-an unsoundness — but the calculus's stated rationale no longer matches the code.
-Recorded as the §1 divergence.
+The live `Kind` enum is exactly `{Owned, Borrowed, BorrowedMut, Never}` with
+`Owned` top, `Never` bottom, and the two borrow modes mutually incomparable — a
+clean lattice; join (§1.4) is the correct LUB and subkinding (§1.2) as subsumption
+is fine. **Kinds are region-free, matching §1.1**: the borrow's region lives on
+the type (`&'r T`) and escape is checked on the type's `freeRegions` (§I.3), never
+on the kind. (An earlier draft of this audit wrongly claimed the kind carried the
+region — based on the plan's superseded Step-7/9a notes; the code does not.) The
+only deviation from §1's text is that **`InteriorMut` is reserved, not
+implemented** — the lattice's shape accommodates it, but no `InteriorMut` logic
+exists. No soundness concern.
 
 ### I.5 Subtyping (§6.1 Sub) is used but never defined
 
@@ -166,7 +163,7 @@ generality. Recorded as the §6.1 divergence.
   consumes the scrutinee" holds.
 - **§6.11 Drop** — the *placement* logic (reverse-decl order, completing drops at
   merges, no runtime flags) is sound and implemented (Step B). The *effect* (free)
-  is inert until Step C lands for all types; see O4 / II.3.
+  is now live too (Memory C: codegen frees, interpreters auto-reclaim); see O4 / II.3.
 - **§6.5 App / §6.6 Box / §6.7 Ascribe / §6.10 Reuse / §7.1–7.3 HKT classes** —
   describe **unimplemented** features (lambdas, `box`, ascription expressions,
   `reuse`, Functor/Monad). They can't be unsound (nothing realises them) but they
@@ -183,8 +180,9 @@ generality. Recorded as the §6.1 divergence.
   *misleading* as a standalone artifact. Fix by documenting (or by adding
   context-splitting).
 - **`<:` is undefined** though used; pin it down.
-- **Drop/free** (O4) is described but unverified at runtime — soundness of the
-  *memory* model is currently untested because nothing frees yet.
+- **Drop/free** (O4) is now executed (Memory C): codegen frees structurally, the
+  interpreters auto-reclaim. The common path is leak-free; only documented edge
+  cases leak (II.3).
 - Nothing here is a *latent unsoundness in the implementation* that I can see; the
   gaps are (a) presentation gaps in the calculus and (b) features described ahead
   of implementation.
@@ -245,32 +243,43 @@ The comments in both files acknowledge this ("the static region/escape checker
 already guarantees no dangling, so the interpreter never models deallocation").
 
 If you want runtime to *witness* region/affine bugs, the LLVM path is the only
-candidate — and even it can't today, because nothing frees (II.3). So right now
-**no backend can falsify a soundness bug in O1–O3.** That's the single biggest
+candidate. Now that codegen frees (II.3), a missed escape *could* in principle
+surface as a use-after-free under LLVM + a sanitizer — but the interpreters still
+can't see it (they never deallocate), so interpreter-based tests remain blind. So
+in practice **no backend reliably falsifies a soundness bug in O1–O3.** That's the
+single biggest
 "backends vs. the sound calculus" gap. It's a known/accepted design point, not a
 regression, but it's worth stating plainly: the soundness of O1–O3 rests entirely
 on the front-end, untested by execution.
 
-### II.3 Drop/free (O4) is inert everywhere — the memory model is unexecuted
+### II.3 Drop/free (O4) — codegen now frees; interpreters auto-reclaim
 
-- typed-HIR: `Expression::Block { drops, .. }` ignores `drops`; `DropInPlace` → `Unit`.
-- MIR interp: `Statement::Drop { .. } => Ok(())`; `DropInPlace` → `Unit`.
-- LLVM: `Statement::Drop { .. } => {}`; `DropInPlace` → unit const.
+> *(Updated after Memory C landed in-tree. An earlier draft of this audit, written
+> against a pre-Memory-C working tree, claimed drop was a no-op everywhere and
+> heaped programs leaked. That is no longer true for codegen.)*
 
-And `emit_aggregate` **unconditionally `malloc`s** every payload-carrying *heaped*
-enum cell (`{i64, ptr}` + a separate payload malloc) **with no `free`** — the
-interim Step-C boxing. So:
+The current state across backends:
 
-- Heaped/recursive programs **leak** under LLVM (acknowledged: "keep working and
-  keep leaking, as today").
-- §6.11's "uniformly consumed at the merge — no leak" is realised only as *drop
-  placement*; the placement is correct (Step B has structural tests) but the
-  *effect* is a no-op until Step C.5 wires `unique_release`.
+- **LLVM: drop genuinely frees.** `Statement::Drop` lowers to structural
+  `drop_glue` (`ensure_drop_glue` / `emit_drop_glue_body`): a `Unique<T>` frees its
+  cell via `free` after recursing the node; aggregates recurse their fields. The
+  heap-lowering pass (`passes::heap_lower`, run before ownership + mono) rewrites
+  every heaped enum to `Unique<E$Node>` + `unique_alloc`/`unique_take`, so **no
+  heaped enum reaches codegen** and the old interim-boxing path is gone.
+- **Interpreters: drop is a no-op, but the `Rc` cell graph auto-reclaims.** Both
+  model the heap as `Rc<RefCell<…>>`; when a handle's last reference is dropped the
+  cell is reclaimed. So `Statement::Drop`/`DropInPlace` doing nothing is harmless —
+  observable behaviour matches codegen (Ledger §5, "by design, not a defect").
 
-**Faithful to the plan, divergent from the calculus.** §6.11 reads as if drops
-free; today they don't. The whole O4 guarantee is therefore unverified by any
-execution. When Step C.5 lands, this is the area to re-audit hardest (double-free
-vs. leak on every branch).
+So O4's "uniformly consumed at the merge — no leak" (§6.11) is now realised both as
+correct *placement* (Step B, structurally tested) and as a real *effect* (Step C's
+structural free under codegen; auto-reclaim under the interpreters). **Residual
+known leaks** (Ledger §5, edge cases — not the common path): a refutable heaped
+`let`-pattern whose value is a *different* variant carrying heaped fields
+(shallow-free); and nullary heaped variants each `malloc` (no niche optimisation —
+performance, not a correctness leak). Re-audit target when Memory D/E land:
+double-free vs. leak interactions with `reuse` (in-place husk reuse) and the Shared
+refcount decrement.
 
 ### II.4 `size_of` diverges between interpreter and binary (intended)
 
@@ -318,8 +327,10 @@ size-dependent programs or special-case them.
 - Reference/write-through and aggregate semantics are **faithfully and
   consistently** realised across all three backends. ✓
 - The backends are **permissive by design**: they cannot witness O1/O2/O3
-  violations, and O4 (free) is inert. So execution validates *functional*
-  behaviour, not *safety* — safety rests entirely on the front-end passes.
+  violations (the interpreters never deallocate; codegen frees but isn't exercised
+  adversarially). O4 (free) *is* now executed (Memory C: codegen structural free,
+  interpreters auto-reclaim). So execution validates *functional* behaviour and
+  basic memory reclamation, but not O1–O3 *safety* — those rest on the front-end.
 - Two real **interp-vs-binary output divergences** exist today: `size_of`
   (II.4) and `println` of a payload enum (II.5). Both matter if you ever treat the
   interpreter as an oracle for the binary.
@@ -334,7 +345,7 @@ divergence callouts).
 
 | Calculus § | Feature | Status |
 |---|---|---|
-| §1 | `Owned/Borrowed/BorrowedMut/Never` kinds | ✅ (kind carries region; `InteriorMut` reserved) |
+| §1 | `Owned/Borrowed/BorrowedMut/Never` kinds | ✅ region-free, as stated (`InteriorMut` reserved) |
 | §2.1 | Variance defaults (producer/consumer) | ⚠️ always-covariant default; full polarity deferred (Step 13) |
 | §2.3 | `&'r T`, `&'r mut T`, `T @ 'r` | ✅ |
 | §2.3 | `T₁ →[k] T₂` function types | ❌ deferred (Step 13) |
@@ -351,10 +362,10 @@ divergence callouts).
 | §6.6 | `Box` typing | ❌ superseded |
 | §6.9 | match Heaped drain / `Slot` | ❌ Step D |
 | §6.10 | `reuse` | ❌ Step D |
-| §6.11 | RAII drop placement | ✅ placement; ⚠️ free is inert until Step C.5 |
+| §6.11 | RAII drop placement + free | ✅ placement (Step B) **and** free (Memory C: codegen structural free, interpreters auto-reclaim); edge-case leaks only |
 | §7.1–7.3 | Functor / Applicative / Monad | ❌ deferred (Step 11, needs HKT) |
 | §7.4 | Clone / Copy | ✅ (Step 14) |
-| §7.5 | Heaped / HeapedUnique / HeapedShared | ⚠️ base `Heaped` partial (Step C); Unique extras Step D; Shared Step E |
+| §7.5 | Heaped / HeapedUnique / HeapedShared | ✅ base `Heaped` (Step C: `deriving Heaped`, full `heap_lower` rewrite, free); `reuse`/`take` Step D; `share` Step E. `HeapedUnique` redundant (uniqueness is ambient) |
 | §8.3 | `band` for bitwise AND | ⚠️ shipped as `&&` (bitwise) + `and` (logical) instead |
 | §8.5/8.6 | lambda / box grammar | ❌ deferred / superseded |
 | — | `deriving`, `extern` keywords | ✅ added, *not in calculus §8 keyword list* |

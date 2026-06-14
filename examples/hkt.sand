@@ -1,0 +1,42 @@
+//@TEST:{0}[42,7,41]
+// Step 11 — higher-kinded type parameters.
+//
+// `Container<F : Owned -> Owned>` quantifies over a type *constructor* (not a
+// type): `F` has kind `Owned -> Owned`, and methods mention `F<A>`. Each
+// instance is given per constructor (`impl Container for Opt` / `for Cell`), and
+// the right instance is recovered from a call argument by unifying the method's
+// `F<A>` against the concrete `Opt<Int>` / `Cell<Int>`.
+//
+// (`Functor`/`Monad` need function types `A -> B`, which arrive with lambdas in
+// Step 13; these arrow-free container methods exercise the HKT machinery on its
+// own.)
+
+type Opt<a> = Nothing | Just(a)
+
+type Cell<a> = Wrap(a)
+
+typeclass Container<F : Owned -> Owned> {
+    def unwrap_or<A>(x: F<A>, fallback: A): A
+}
+
+impl Container for Opt {
+    def unwrap_or<A>(x: Opt<A>, fallback: A): A := match x {
+        Opt#Nothing => fallback,
+        Opt#Just(v) => v,
+    }
+}
+
+impl Container for Cell {
+    def unwrap_or<A>(x: Cell<A>, fallback: A): A := match x {
+        Cell#Wrap(v) => v,
+    }
+}
+
+def main(): Int := {
+    println(unwrap_or(Opt#Just(42), 0));     // 42 — Opt instance, value present
+    let none: Opt<Int> = Opt#Nothing;
+    println(unwrap_or(none, 7));             // 7  — Opt instance, fallback used
+    // one call dispatches to the Cell instance, the other to Opt:
+    println(unwrap_or(Cell#Wrap(40), 0) + unwrap_or(Opt#Just(1), 0));  // 41
+    0
+}

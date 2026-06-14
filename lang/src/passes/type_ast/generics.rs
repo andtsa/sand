@@ -47,6 +47,23 @@ pub fn subst<'tcx>(ctx: &mut CompileCtx<'tcx>, ty: Ty<'tcx>, mapping: &Subst<'tc
             let inner = subst(ctx, *inner, mapping);
             ctx.ptr_ty(inner)
         }
+        // `F<A>`: substitute the arguments, then apply the constructor
+        // `F` is bound to. A binding to the bare `Enum(er)` reconstructs the
+        // concrete `App(er, ...)`; a binding to another type-constructor parameter
+        // re-applies it; an absent binding leaves `F<A>` parametric.
+        TyKind::ParamApp(id, args) => {
+            let args: Vec<Ty<'tcx>> = args.iter().map(|a| subst(ctx, *a, mapping)).collect();
+            match mapping.get(id).copied() {
+                Some(bound) => match bound.kind() {
+                    TyKind::Enum(er) => ctx.intern_app(*er, args, Vec::new()),
+                    TyKind::Param(g) => ctx.param_app_ty(*g, args),
+                    _ => crate::internal_bug!(
+                        "higher-kinded parameter bound to a non-constructor: {bound}"
+                    ),
+                },
+                None => ctx.param_app_ty(*id, args),
+            }
+        }
         _ => ty,
     }
 }
@@ -64,6 +81,7 @@ pub enum UnifyError {
 /// accumulating parameter bindings into `mapping`. A parameter binds to the
 /// actual type on first encounter; a second encounter must agree.
 pub fn unify<'tcx>(
+    ctx: &CompileCtx<'tcx>,
     declared: Ty<'tcx>,
     actual: Ty<'tcx>,
     mapping: &mut Subst<'tcx>,
@@ -84,25 +102,51 @@ pub fn unify<'tcx>(
         },
         (TyKind::Tuple(ds), TyKind::Tuple(acts)) if ds.len() == acts.len() => {
             for (d, a) in ds.iter().zip(*acts) {
-                unify(*d, *a, mapping)?;
+                unify(ctx, *d, *a, mapping)?;
             }
             Ok(())
         }
         // region args are region-blind here (inferred separately); unify type args.
         (TyKind::App(de, da, _), TyKind::App(ae, aa, _)) if de == ae && da.len() == aa.len() => {
             for (d, a) in da.iter().zip(*aa) {
-                unify(*d, *a, mapping)?;
+                unify(ctx, *d, *a, mapping)?;
+            }
+            Ok(())
+        }
+        // A higher-kinded parameter `F<...>` unifies against a concrete
+        // application `Base<...>` by binding `F` to the bare `Enum(Base)`
+        // constructor (head only, so two uses `F<A>`, `F<B>` agree on `F`), then
+        // unifying the arguments.
+        (TyKind::ParamApp(fid, da), TyKind::App(ae, aa, _)) if da.len() == aa.len() => {
+            let ctor = ctx.enum_ty(*ae);
+            match mapping.get(fid) {
+                Some(&bound) if !bound.type_eq(ctor) => return Err(UnifyError::Conflict),
+                Some(_) => {}
+                None => {
+                    mapping.insert(*fid, ctor);
+                }
+            }
+            for (d, a) in da.iter().zip(*aa) {
+                unify(ctx, *d, *a, mapping)?;
+            }
+            Ok(())
+        }
+        (TyKind::ParamApp(f1, da), TyKind::ParamApp(f2, aa))
+            if f1 == f2 && da.len() == aa.len() =>
+        {
+            for (d, a) in da.iter().zip(*aa) {
+                unify(ctx, *d, *a, mapping)?;
             }
             Ok(())
         }
         // References and region ascriptions unify their pointee/inner types. The
         // regions are not constrained here — they carry no type parameters, are
         // erased by monomorphisation, and call-site region inference is handled
-        // separately — so `&T` unifies against `&Int` regardless of region.
-        (TyKind::Ref(_, di), TyKind::Ref(_, ai)) => unify(*di, *ai, mapping),
-        (TyKind::RefMut(_, di), TyKind::RefMut(_, ai)) => unify(*di, *ai, mapping),
-        (TyKind::Region(di, _), TyKind::Region(ai, _)) => unify(*di, *ai, mapping),
-        (TyKind::Ptr(di), TyKind::Ptr(ai)) => unify(*di, *ai, mapping),
+        // separately, so `&T` unifies against `&Int` regardless of region.
+        (TyKind::Ref(_, di), TyKind::Ref(_, ai)) => unify(ctx, *di, *ai, mapping),
+        (TyKind::RefMut(_, di), TyKind::RefMut(_, ai)) => unify(ctx, *di, *ai, mapping),
+        (TyKind::Region(di, _), TyKind::Region(ai, _)) => unify(ctx, *di, *ai, mapping),
+        (TyKind::Ptr(di), TyKind::Ptr(ai)) => unify(ctx, *di, *ai, mapping),
         _ => {
             if declared.type_eq(actual) {
                 Ok(())

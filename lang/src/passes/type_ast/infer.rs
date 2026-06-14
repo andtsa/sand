@@ -198,8 +198,8 @@ pub(super) fn infer_constructor<'tcx>(
                 let tp = infer(ctx, env, p)?;
                 // A unification failure here is a payload *type* mismatch (the
                 // argument's type doesn't fit the variant's declared payload), not
-                // a missing payload — report it as such.
-                unify(decl, tp.ty, &mut mapping).map_err(|_| AstTypeError::TypeError {
+                // a missing payload, report it as such.
+                unify(ctx, decl, tp.ty, &mut mapping).map_err(|_| AstTypeError::TypeError {
                     message: format!(
                         "constructor '{enum_name}#{variant_name}' payload has the wrong type"
                     ),
@@ -746,7 +746,7 @@ fn infer_method_call<'tcx>(
     let mut mapping: Subst<'tcx> = Map::new();
     if mdef.param_tys.len() == arg_exprs.len() {
         for (decl, a) in mdef.param_tys.iter().zip(&arg_exprs) {
-            let _ = unify(*decl, a.ty, &mut mapping);
+            let _ = unify(ctx, *decl, a.ty, &mut mapping);
         }
     }
     let receiver =
@@ -1213,7 +1213,7 @@ pub(super) fn infer<'tcx>(
             let mut mapping: Subst<'tcx> = Map::new();
             for (&decl, a) in expected_tys.iter().zip(&arg_exprs) {
                 if decl.has_param() {
-                    unify(decl, a.ty, &mut mapping).map_err(|_| {
+                    unify(ctx, decl, a.ty, &mut mapping).map_err(|_| {
                         AstTypeError::FunctionCallTypeError {
                             message: format!(
                                 "could not infer type parameters of '{}' from its arguments",

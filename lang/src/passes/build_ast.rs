@@ -198,6 +198,16 @@ pub enum AstError {
     },
 
     #[error(
+        "'{name}' is not a type constructor (it has a value kind), so it cannot be applied as '{name}<...>' at {range}"
+    )]
+    NotATypeConstructor { name: String, range: Range },
+
+    #[error(
+        "'{name}' is a type constructor (higher-kinded) and must be applied to arguments (e.g. `{name}<T>`) rather than used as a type at {range}"
+    )]
+    TypeConstructorNotApplied { name: String, range: Range },
+
+    #[error(
         "parameter '{param}' of '{type_name}' is declared contravariant but appears in a covariant (producer) position at {range}"
     )]
     UnsoundVariance {
@@ -417,7 +427,8 @@ fn collect_enum_skeleton<'i, 'run>(
     let (type_params, region_params) =
         if inner.peek().map(|p| p.as_rule()) == Some(Rule::type_params) {
             let tp_pair = inner.next().missing("type parameters", range)?;
-            let type_params = ctx.begin_type_params(&collect_type_params(tp_pair.clone()));
+            let specs = collect_type_params(ctx, tp_pair.clone());
+            let type_params = ctx.begin_type_params(&specs);
             let region_params = ctx.begin_region_params(&collect_region_params(tp_pair));
             (type_params, region_params)
         } else {
@@ -611,7 +622,7 @@ fn collect_typeclass<'i, 'run>(
     // grammar requires `type_params`; a class carries exactly one type parameter
     // and no region parameters (Step 10).
     let tp_pair = inner.next().missing("typeclass type parameter", range)?;
-    let type_param_specs = collect_type_params(tp_pair.clone());
+    let type_param_specs = collect_type_params(ctx, tp_pair.clone());
     let region_param_specs = collect_region_params(tp_pair);
     if type_param_specs.len() != 1 || !region_param_specs.is_empty() {
         return Err(AstError::TypeclassParamArity { name, range });
@@ -802,9 +813,17 @@ fn build_method_def<'run>(
         .missing("method name", range)?
         .as_str()
         .to_string();
-    if inner.peek().map(|p| p.as_rule()) == Some(Rule::type_params) {
-        return Err(AstError::MethodGenericsUnsupported { range });
-    }
+    // A method may declare its own generics (`def fmap<A, B>(...`)
+    // they are in scope *alongside* the class parameter while the signature is resolved
+    //
+    // Pushed onto the current (class-parameter) scope and retracted afterwards.
+    let method_params = if inner.peek().map(|p| p.as_rule()) == Some(Rule::type_params) {
+        let tp_pair = inner.next().missing("method type parameters", range)?;
+        let specs = collect_type_params(ctx, tp_pair);
+        ctx.extend_type_params(&specs)
+    } else {
+        Vec::new()
+    };
 
     let mut param_tys = Vec::new();
     if inner.peek().map(|p| p.as_rule()) == Some(Rule::parameters) {
@@ -824,11 +843,13 @@ fn build_method_def<'run>(
         }
     }
 
+    ctx.retract_type_params(&method_params);
+
     Ok((
         name.clone(),
         MethodDef {
             name,
-            type_params: Vec::new(),
+            type_params: method_params,
             param_tys,
             ret_ty,
             has_default,
@@ -875,10 +896,28 @@ fn build_impl<'run>(
             range,
         })?;
     let ty_pair = inner.next().missing("impl target type", range)?;
-    let for_ty = build_type(ctx, ty_pair)?;
-    let head = ctx
-        .type_head(for_ty)
-        .ok_or(AstError::NonInstanceableType { range })?;
+    // For a higher-kinded class (`class C<F : Owned -> Owned>`), the impl head is
+    // a *type constructor* (`impl C for Opt`), written as a bare generic-enum
+    // name, which `build_type` would reject as under-applied. Resolve it
+    // directly to the constructor's `TypeHead` instead.
+    let class_param = ctx.get_typeclass(tref).param;
+    let class_is_hk = matches!(ctx.type_param_kind(class_param), Kind::Arrow(_));
+    let (for_ty, head) = if class_is_hk {
+        let cname = ty_pair.as_str().trim().to_string();
+        let er = ctx
+            .lookup_enum_current(&cname)
+            .ok_or(AstError::UnknownType {
+                name: cname,
+                range,
+            })?;
+        (ctx.enum_ty(er), TypeHead::Enum(er))
+    } else {
+        let for_ty = build_type(ctx, ty_pair)?;
+        let head = ctx
+            .type_head(for_ty)
+            .ok_or(AstError::NonInstanceableType { range })?;
+        (for_ty, head)
+    };
 
     // orphan rule: the impl is legal only if the class or the implemented type is
     // *at home* — declared in the impl's own module. (This is the whole-program
@@ -1119,7 +1158,8 @@ fn build_function<'run>(
     let (type_params, region_params) =
         if inner.peek().map(|p| p.as_rule()) == Some(Rule::type_params) {
             let tp_pair = inner.next().missing("type parameters", range)?;
-            let type_params = ctx.begin_type_params(&collect_type_params(tp_pair.clone()));
+            let specs = collect_type_params(ctx, tp_pair.clone());
+            let type_params = ctx.begin_type_params(&specs);
             let region_params = ctx.begin_region_params(&collect_region_params(tp_pair));
             (type_params, region_params)
         } else {
@@ -1475,7 +1515,7 @@ fn ty_mentions_param(ty: Ty<'_>, id: TypeParamId) -> bool {
 /// variance (`Covariant`) and kind (`Owned`) when their annotations are absent.
 /// Region parameters in the same `<...>` list are handled by
 /// [`collect_region_params`] and skipped here.
-fn collect_type_params(pair: Pair<Rule>) -> Vec<TypeParamSpec> {
+fn collect_type_params(ctx: &mut CompileCtx<'_>, pair: Pair<Rule>) -> Vec<TypeParamSpec> {
     assert_eq!(pair.as_rule(), Rule::type_params);
     pair.into_inner()
         .filter(|p| p.as_rule() == Rule::type_param)
@@ -1495,12 +1535,7 @@ fn collect_type_params(pair: Pair<Rule>) -> Vec<TypeParamSpec> {
                         };
                     }
                     Rule::identifier => name = part.as_str().to_string(),
-                    Rule::kind_ann => {
-                        kind = match part.as_str() {
-                            "Never" => Kind::Never,
-                            _ => Kind::Owned,
-                        };
-                    }
+                    Rule::kind_ann => kind = build_kind(ctx, part),
                     _ => {}
                 }
             }
@@ -1512,6 +1547,36 @@ fn collect_type_params(pair: Pair<Rule>) -> Vec<TypeParamSpec> {
             }
         })
         .collect()
+}
+
+/// Parse a `kind_ann` into a [`Kind`], interning arrow kinds.
+/// `kind_ann = { kind_atom ~ ("->" ~ kind_atom)* }`; `->` is right-associative,
+/// so `A -> B -> C` is `A -> (B -> C)`.
+fn build_kind(ctx: &mut CompileCtx<'_>, pair: Pair<Rule>) -> Kind {
+    assert_eq!(pair.as_rule(), Rule::kind_ann);
+    let atoms: Vec<Kind> = pair
+        .into_inner()
+        .filter(|p| p.as_rule() == Rule::kind_atom)
+        .map(|a| build_kind_atom(ctx, a))
+        .collect();
+    let mut it = atoms.into_iter().rev();
+    let mut acc = it.next().expect("kind_ann has at least one atom");
+    for from in it {
+        acc = ctx.intern_kind(from, acc);
+    }
+    acc
+}
+
+/// `kind_atom = { "Owned" | "Never" | "(" ~ kind_ann ~ ")" }`.
+fn build_kind_atom(ctx: &mut CompileCtx<'_>, pair: Pair<Rule>) -> Kind {
+    assert_eq!(pair.as_rule(), Rule::kind_atom);
+    match pair.clone().into_inner().next() {
+        Some(inner) if inner.as_rule() == Rule::kind_ann => build_kind(ctx, inner),
+        _ => match pair.as_str().trim() {
+            "Never" => Kind::Never,
+            _ => Kind::Owned,
+        },
+    }
 }
 
 /// Parse each `region_param` (`'r`) in a `type_params` pair. Type parameters in
@@ -1684,6 +1749,57 @@ fn build_core_type<'run>(
                 }
             }
 
+            // A higher-kinded type parameter applied: `F<A>` where `F` is a
+            // type-constructor parameter in scope (Step 11). Unlike a concrete
+            // enum application this produces a `ParamApp`, opaque until
+            // monomorphisation binds `F` to a concrete constructor.
+            if let Some(id) = ctx.lookup_type_param(&name) {
+                if !region_args.is_empty() {
+                    return Err(AstError::RegionArgArityMismatch {
+                        name: name.clone(),
+                        expected: 0,
+                        found: region_args.len(),
+                        range,
+                    });
+                }
+                // Unfold the constructor's arrow kind into its expected argument
+                // kinds (currying) and final result kind.
+                let mut cur = ctx.type_param_kind(id);
+                let mut domains: Vec<Kind> = Vec::new();
+                while let Kind::Arrow(aid) = cur {
+                    let (from, to) = ctx.kind_arrow(aid);
+                    domains.push(from);
+                    cur = to;
+                }
+                if domains.is_empty() {
+                    return Err(AstError::NotATypeConstructor {
+                        name: name.clone(),
+                        range,
+                    });
+                }
+                if domains.len() != arg_tys.len() {
+                    return Err(AstError::TypeArgArityMismatch {
+                        name: name.clone(),
+                        expected: domains.len(),
+                        found: arg_tys.len(),
+                        range,
+                    });
+                }
+                for (dom, &arg) in domains.iter().zip(&arg_tys) {
+                    let arg_kind = ctx.kind_of(arg);
+                    if !arg_kind.is_subkind(*dom) {
+                        return Err(AstError::KindArgMismatch {
+                            type_name: name.clone(),
+                            param: "<argument>".to_string(),
+                            expected: *dom,
+                            found: arg_kind,
+                            range,
+                        });
+                    }
+                }
+                return Ok(ctx.param_app_ty(id, arg_tys));
+            }
+
             // `Ptr<T>` is a built-in generic primitive (Memory Step A), not a
             // user enum: exactly one type argument, no region arguments (a raw
             // pointer is outside the region discipline).
@@ -1785,6 +1901,14 @@ fn build_core_type<'run>(
                 // shadows any same-named enum and resolves to `Ty::Param`.
                 other if ctx.lookup_type_param(other).is_some() => {
                     let id = ctx.lookup_type_param(other).unwrap();
+                    // A higher-kinded parameter is a constructor; it cannot stand
+                    // alone as a type. It must be applied (`F<T>`).
+                    if matches!(ctx.type_param_kind(id), Kind::Arrow(_)) {
+                        return Err(AstError::TypeConstructorNotApplied {
+                            name: other.to_string(),
+                            range,
+                        });
+                    }
                     Ok(ctx.param_ty(id))
                 }
                 other => {

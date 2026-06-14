@@ -35,6 +35,7 @@ use crate::ir_types::hhir::HirVar;
 use crate::lang::types::CommonTypes;
 use crate::lang::types::EnumRef;
 use crate::lang::types::Kind;
+use crate::lang::types::KindId;
 use crate::lang::types::Region;
 use crate::lang::types::RegionConstraint;
 use crate::lang::types::RegionVar;
@@ -159,6 +160,14 @@ pub struct CompileCtx<'tcx> {
     /// Interner for region-ascribed types `T @ 'r`, keyed by inner type +
     /// region.
     region_ty_interner: Map<(Ty<'tcx>, Region), Ty<'tcx>>,
+    /// Interner for arrow kinds `K₁ -> K₂`. `kind_arrows[id]` is the
+    /// `(domain, codomain)` pair; `kind_arrow_ids` maps the pair back to its
+    /// canonical [`KindId`], so equal arrows share an id.
+    kind_arrows: Vec<(Kind, Kind)>,
+    kind_arrow_ids: Map<(Kind, Kind), KindId>,
+    /// Interner for higher-kinded parameter applications `F<A>`,
+    /// keyed by the constructor parameter + its type arguments.
+    param_app_interner: Map<(TypeParamId, Vec<Ty<'tcx>>), Ty<'tcx>>,
 
     // regions
     /// Number of region variables allocated so far.
@@ -197,6 +206,10 @@ pub struct CompileCtx<'tcx> {
     type_param_count: usize,
     /// Display names of every allocated type parameter, keyed by id.
     type_param_names: Map<TypeParamId, String>,
+    /// Declared kind of every allocated type parameter, keyed by id
+    /// `Owned` for ordinary params, an arrow for higher-kinded ones. Ids are
+    /// globally unique, so this persists across declarations.
+    type_param_kinds: Map<TypeParamId, Kind>,
     /// Name → id for the type parameters in scope while the current generic
     /// declaration is being built (set by [`Self::begin_type_params`]).
     cur_type_params: Map<String, TypeParamId>,
@@ -369,6 +382,9 @@ impl<'tcx> CompileCtx<'tcx> {
             ty_interner,
             tuple_interner: Default::default(),
             app_interner: Default::default(),
+            kind_arrows: Default::default(),
+            kind_arrow_ids: Default::default(),
+            param_app_interner: Default::default(),
             region_ty_interner: Default::default(),
             region_count: 0,
             cur_regions: Default::default(),
@@ -379,6 +395,7 @@ impl<'tcx> CompileCtx<'tcx> {
             cur_type_constraints: Vec::new(),
             type_param_count: 0,
             type_param_names: Default::default(),
+            type_param_kinds: Default::default(),
             cur_type_params: Default::default(),
             var_count: 0,
             variable_usages: Default::default(),
@@ -523,6 +540,51 @@ impl<'tcx> CompileCtx<'tcx> {
     /// reference, it carries no region and survives monomorphisation.
     pub fn ptr_ty(&mut self, inner: Ty<'tcx>) -> Ty<'tcx> {
         self.intern_ty(TyKind::Ptr(inner))
+    }
+
+    /// Intern a higher-kinded parameter application `F<args>`.
+    pub fn param_app_ty(&mut self, param: TypeParamId, args: Vec<Ty<'tcx>>) -> Ty<'tcx> {
+        let key = (param, args);
+        if let Some(&ty) = self.param_app_interner.get(&key) {
+            return ty;
+        }
+        let (param, args) = key;
+        let slice = self.arenas.alloc_ty_slice(&args);
+        let kind_ref = self.arenas.alloc_ty(TyKind::ParamApp(param, slice));
+        let ty = Ty(kind_ref);
+        self.param_app_interner.insert((param, args), ty);
+        ty
+    }
+
+    /// Intern the arrow kind `from -> to`, returning the canonical
+    /// `Kind::Arrow`. Equal arrows share one [`KindId`].
+    pub fn intern_kind(&mut self, from: Kind, to: Kind) -> Kind {
+        if let Some(&id) = self.kind_arrow_ids.get(&(from, to)) {
+            return Kind::Arrow(id);
+        }
+        let id = KindId(self.kind_arrows.len());
+        self.kind_arrows.push((from, to));
+        self.kind_arrow_ids.insert((from, to), id);
+        Kind::Arrow(id)
+    }
+
+    /// The `(domain, codomain)` of an interned arrow kind.
+    pub fn kind_arrow(&self, id: KindId) -> (Kind, Kind) {
+        self.kind_arrows[id.0]
+    }
+
+    /// Render a kind for diagnostics (`Owned`, `Never`, `Owned -> Owned`, ...).
+    pub fn display_kind(&self, k: Kind) -> String {
+        match k {
+            Kind::Owned => "Owned".to_string(),
+            Kind::Borrowed => "Borrowed".to_string(),
+            Kind::BorrowedMut => "BorrowedMut".to_string(),
+            Kind::Never => "Never".to_string(),
+            Kind::Arrow(id) => {
+                let (from, to) = self.kind_arrow(id);
+                format!("{} -> {}", self.display_kind(from), self.display_kind(to))
+            }
+        }
     }
 
     /// Canonicalise the region of every reference (`&'r T`, `&'r mut T`) in
@@ -942,6 +1004,7 @@ impl<'tcx> CompileCtx<'tcx> {
             let id = TypeParamId(self.type_param_count);
             self.type_param_count += 1;
             self.type_param_names.insert(id, spec.name.clone());
+            self.type_param_kinds.insert(id, spec.kind);
             scope.insert(spec.name.clone(), id);
             params.push(TypeParam {
                 id,
@@ -960,6 +1023,37 @@ impl<'tcx> CompileCtx<'tcx> {
     /// [`Self::begin_type_params`], this allocates no new ids.
     pub fn enter_type_param_scope(&mut self, params: &[TypeParam]) {
         self.cur_type_params = params.iter().map(|p| (p.name.clone(), p.id)).collect();
+    }
+
+    /// Allocate fresh type parameters and **add** them to the current scope
+    /// used for a typeclass method's own generics, which are in
+    /// scope *alongside* the class parameter. Pair with
+    /// [`Self::retract_type_params`] to remove them again.
+    pub fn extend_type_params(&mut self, specs: &[TypeParamSpec]) -> Vec<TypeParam> {
+        let mut params = Vec::with_capacity(specs.len());
+        for spec in specs {
+            let id = TypeParamId(self.type_param_count);
+            self.type_param_count += 1;
+            self.type_param_names.insert(id, spec.name.clone());
+            self.type_param_kinds.insert(id, spec.kind);
+            self.cur_type_params.insert(spec.name.clone(), id);
+            params.push(TypeParam {
+                id,
+                name: spec.name.clone(),
+                range: spec.range,
+                variance: spec.variance,
+                kind: spec.kind,
+            });
+        }
+        params
+    }
+
+    /// Remove type parameters added by [`Self::extend_type_params`] from the
+    /// current scope (by name), leaving the enclosing scope intact.
+    pub fn retract_type_params(&mut self, params: &[TypeParam]) {
+        for p in params {
+            self.cur_type_params.remove(&p.name);
+        }
     }
 
     /// Allocate the region parameters for a generic declaration and make them
@@ -1003,6 +1097,13 @@ impl<'tcx> CompileCtx<'tcx> {
     }
 
     /// The interned [`Ty`] for a type parameter use site.
+    /// The declared kind of a type parameter: `Owned` for ordinary
+    /// params, an arrow for higher-kinded ones. Defaults to `Owned` for ids with
+    /// no recorded kind (none should occur in practice).
+    pub fn type_param_kind(&self, id: TypeParamId) -> Kind {
+        self.type_param_kinds.get(&id).copied().unwrap_or(Kind::Owned)
+    }
+
     pub fn param_ty(&mut self, id: TypeParamId) -> Ty<'tcx> {
         self.intern_ty(TyKind::Param(id))
     }

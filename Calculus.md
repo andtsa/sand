@@ -1,1004 +1,400 @@
-# Core Calculus
+# Core Calculus (current)
 
-a formal description of the kind, type, region, and term systems for the sand language.
+The kind, type, region, ownership, and typeclass systems for the sand language as
+they stand **now plus the immediate roadmap** — i.e. everything implemented today
+*and* everything in the next planned steps ([Step 11, 13, 15, Memory D, E per
+`TypeSystemLedger.md` §2](TypeSystemLedger.md)). It excludes only what is
+genuinely deferred (Ledger §3) or obsolete (`box`, subsumed by `Heaped`).
+
+This is the *intersection* of three sources, with the live code as the tiebreaker:
+- [`Calculus.md`](Calculus.md) — the original design.
+- [`TypeSystemLedger.md`](TypeSystemLedger.md) / [`TypeSystemPlan.md`](TypeSystemPlan.md) — durable verdicts + roadmap + deviations.
+- the live code — `lang/src/{passes,ir_types,interpreter,lang}`, `grammar.pest`.
+
+Soundness + backend audits: [`Calculus-soundness.md`](Calculus-soundness.md).
+
+> **Status tags.** Each construct is tagged:
+> - **[live]** — type-checked *and* executed (both interpreters + LLVM) today.
+> - **[planned: N]** — designed and on the immediate roadmap (Ledger §2), not yet
+>   built. Included here "like everything else," per the calculus's role as the
+>   target.
+> - **[erased]** — present in the type system, removed by monomorphisation before
+>   runtime (regions; references become plain pointers).
+
+> **Two enforcement layers (read first).** Safety is split across two passes, and
+> this document is organized around that split:
+> 1. the **type checker** (`passes/type_ast/`) — kinds, types, regions, the
+>    region-escape check (§7–10).
+> 2. the **ownership pass** (`passes/ownership/`) — a move/borrow **dataflow over
+>    the already-typed program** enforcing affinity (at-most-one use), `&mut`
+>    exclusivity, and RAII drop placement (§11).
+>
+> The typing judgment is **deliberately affine-agnostic**: it does not split the
+> context, so it alone does not reject use-after-move. That is the ownership pass's
+> job. This is the chief way the live system departs from a textbook substructural
+> calculus.
 
 ---
 
-## Notation Conventions
+## 1. Notation
 
 ```
-Metavariables:
-  k          kind
-  'r, 's     region variables
-  a, b       type variables
-  T, U       types
-  F          type constructor name
-  x, y       term variables
-  e          expression
-  s          statement
-  v          value
-  Γ          typing context
-  v̂          variance annotation
-
-  ≥          outlives: 'r ≥ 's means region 'r outlives 's
-  ε          empty (context, sequence, etc.)
-  T̄, ē       sequences (T₁, T₂, ..., Tₙ)
+k          kind            'r,'s   regions ('static | param | scope)
+a,b        type variables  T,U     types
+F          enum reference  x,y     term variables (UniqVar)
+e          expression      s       statement
+Γ          typing context (type checker)     Δ   ownership env (ownership pass)
+≥          outlives        ⊑       region-aware subtyping on types
+T̄,ē        sequences       ε       empty
 ```
 
 ---
 
-## 1. Kinds
+## 2. Kinds
 
-### 1.1 Grammar
-
-```
-Region        'r  ::=  'r              -- region variable
-                    |  'static         -- permanent region (outlives everything)
-
-Region context
-               R  ::=  ε               -- empty
-                    |  R, 'r           -- introduce region variable
-                    |  R, 'r ≥ 's      -- outlives constraint ('r outlives 's)
-
-Kind           k  ::=  Owned
-                    |  Borrowed
-                    |  BorrowedMut
-                    |  InteriorMut
-                    |  Never
-```
-
-**Kinds are region-free.** A kind records only *capability* — owned, shared
-borrow, exclusive borrow, interior-mutable, or uninhabited. A borrow's **region**
-is part of its **type** (`&'r T`, `&'r mut T`; §2.3), not its kind: regions belong
-to the type system, and region safety (escape) is checked on the type's free
-regions (§6.3), not on the kind. So `&'r T : Borrowed` and `&'r mut T :
-BorrowedMut` — the `'r` lives on the type, the kind is just `Borrowed` /
-`BorrowedMut`.
-
-### 1.2 Subkinding
-
-The relation `k₁ <: k₂` reads "`k₁` is usable where `k₂` is expected."
-`Owned` is at the top, since it carries the most capability; the three borrow
-modes are mutually incomparable; `Never` is at the bottom, a subkind of
-everything, corresponding to the uninhabited type.
+### 2.1 Grammar
 
 ```
-──────────  (SK-Refl)
-k <: k
+Kind  k  ::=  Owned                 -- a normal owned value             
+           |  Borrowed              -- shared borrow (capability only)  
+           |  BorrowedMut           -- exclusive borrow
+           |  InternalMut           -- unchecked shared borrow
+           |  Never                 -- uninhabited / diverging          
+           |  k₁ → k₂               -- type-constructor kind (HKT)
+```
 
+### 2.2 Subkinding `<:`  
 
-────────────────────────  (SK-OwnedBorrowed)
-Owned <: Borrowed
-
-
-──────────────────────────  (SK-OwnedBorrowedMut)
+```
+k <: k                                 (refl)
+Never <: k                             (Never is bottom)
+Owned <: Borrowed                      (auto-reborrow capability)
 Owned <: BorrowedMut
-
-
-────────────────────────  (SK-OwnedInteriorMut)
-Owned <: InteriorMut
-
-
-────────────  (SK-Never)
-Never <: k
+Owned <: InternalMut
 ```
 
-There is intentionally no rule relating `Borrowed`, `BorrowedMut`, and
-`InteriorMut` to each other, indicating they are incomparable branches of the lattice.
+`Borrowed`, `BorrowedMut`, and `InternalMut` are **incomparable**.
 
-### 1.3 Kind Lattice
+### 2.3 Join `∨`
 
-```
-                   Owned                        ← top (maximum capability)
-                 /   |   \
-               /     |     \
-             /       |       \
-           /         |         \
-   Borrowed     BorrowedMut     InteriorMut    ← mutually incomparable
-           \         |         /
-             \       |       /
-               \     |     /
-                 \   |   /
-                   Never                        ← bottom (uninhabited)
-```
-
-### 1.4 Kind Join
-
-The least upper bound of two kinds, written `k₁ ∨ k₂`. Used during
-inference to resolve kind variables when two branches must agree.
+Merges branch kinds at `if`/`match`:
 
 ```
-k ∨ k = k                               (join-refl)
-Borrowed ∨ BorrowedMut = Owned   (join-borrow-modes)
-Borrowed ∨ InteriorMut   = Owned
-BorrowedMut ∨ InteriorMut = Owned
-Never ∨ k = k                           (join-never)
-k ∨ Never = k
+k ∨ k = k
+Never ∨ k = k         k ∨ Never = k
+Borrowed ∨ BorrowedMut = Owned         (distinct borrow modes → Owned)
 ```
 
-The join of any two distinct borrow modes is `Owned`, reflecting that
-the lattice has no intermediate kind between the borrow modes and the top.
+`Owned` is the top of the implemented lattice; `Never` is bottom and drives divergence (a `while true` loop has kind `Never` and coerces to any expected type in checking mode, via `coerce_never`).
 
 ---
 
-## 2. Types
+## 3. Regions and the Outlives Lattice
 
-### 2.1 Variance
-
-```
-Variance   v̂  ::=  +     -- covariant
-                |  -     -- contravariant
-                |  ∅     -- invariant
-```
-
-Default variance is determined by the kind of the type parameter and
-the positions in which it appears in the type constructor body:
+Regions are **pure lexical lifetimes** governing *reference validity only*, wholly decoupled from allocation (allocation is `Heaped`, §12.3). Regions are erased by monomorphisation.
 
 ```
-Owned,       producer position only  →  +  (covariant)
-Owned,       consumer position only  →  -  (contravariant)
-Owned,       both positions          →  ∅  (invariant)
-Borrowed, any position            →  +  (read-only, always covariant)
-BorrowedMut, any position            →  ∅  (read-write, always invariant)
-InteriorMut, any position            →  ∅  (hidden mutation, always invariant)
+Region  'r  ::=  'static             -- outlives everything
+              |  'a                  -- a declared lifetime parameter
+              |  scope region        -- the function frame F, or a block Bᵢ
 ```
 
-Declaration-site annotations (`+`, `-`, `∅`) override these defaults.
-The kind checker verifies that the declared variance is sound for the
-given kind. For example, declaring `+a : BorrowedMut` is a kind error.
+Scope regions carry a **depth** (outer is smaller). `'static` and lifetime parameters sit below the frame (depth 0); each nested block is one deeper.
 
-### 2.2 Type Constructor Parameters
+**Outlives `≥`**:
 
 ```
-Parameter   p  ::=  v̂ a : k
+'static ≥ 'r                          'a ≥ F          F ≥ B₀ ≥ B₁ ≥ …
+'r ≥ 'r                               where 'a >= 'b  (assumed edges)
 ```
 
-Each parameter carries a variance annotation and a kind. The variance
-annotation may be omitted to accept the default. Examples:
-
-```
--- Option holds an owned value, covariant (default for Owned producer)
-type Option<+a : Owned> = #none | #some(a)
-
--- Either holds two owned values, both covariant
-type Either<+a : Owned, +b : Owned> = #left(a) | #right(b)
-
--- Ref is a built-in: borrows a value from region 'r, covariant
-type Ref<+a : Owned, 'r>
-
--- Cell is a built-in: wraps a value with interior mutability, invariant
--- The kind annotation on the type constructor itself is InteriorMut
-type Cell<∅ a : Owned> : InteriorMut
-```
-
-### 2.3 Type Grammar
-
-```
-Type   T  ::=  a                        -- type variable (kind given by context)
-            |  Int                      -- primitive integer        (Owned)
-            |  Bool                     -- primitive boolean        (Owned)
-            |  Unit                     -- unit type                (Owned)
-            |  T @ 'r                   -- T in region 'r           (Owned)
-            |  &'r T                    -- shared borrow            (Borrowed)
-            |                           --   sugar for Ref<T> @ 'r
-            |  &'r mut T                -- mutable borrow           (BorrowedMut)
-            |  T₁ →[k] T₂              -- function type            (Owned)
-            |  F<T̄>                     -- type constructor application
-            |  (T₁, ..., Tₙ)           -- tuple  (n ≥ 2)           (Owned)
-            |  #tag₁ | ... | #tagₙ     -- ad-hoc tag union          (Owned)
-            |  mod::F                   -- qualified type constructor
-            |  ∀(a : k). T             -- kind-polymorphic type
-            |  ∀'r. T                  -- region-polymorphic type
-            |  Slot<L>                  -- reuse token / husk        (Owned)
-                                        --   layout-indexed; see §6.10, §7.5
-```
-
-The function arrow `→[k]` carries the *ownership mode of the function*:
-
-```
-T₁ →[Owned] T₂        -- consuming function: argument is moved in, single-use
-T₁ →[Borrowed] T₂  -- borrowing function: argument is borrowed, reusable
-```
-
-The owned and borrowed variants of `fmap` differ at the
-type level, via the arrow kind, not by the argument kind:
-
-```
--- owned map: consumes the container
-fmap     : (a →[Owned] b)       →[Owned]       F<a> →[Owned] F<b>
-
--- borrowing map: borrows the container, produces a new one
-fmap_ref : (a →[Borrowed] b) →[Borrowed] &'r F<a> →[Owned] F<b>
-```
-
-Region ascription `T @ 'r` is a type-level construct only. There is no
-term-level `@` operator, meaning regions are tracked through the type system,
-not annotated on expressions directly.
+plus transitive closure. Two distinct lifetime parameters (or a parameter vs. the frame) are incomparable without an explicit `where` (such constraints are conservatively rejected — sound, more conservative than Rust).
 
 ---
 
-## 3. Terms
+## 4. Types
 
-### 3.1 Values
-
-```
-Value   v  ::=  x                           -- variable
-             |  ()                          -- unit literal
-             |  n                           -- integer literal
-             |  true  |  false              -- boolean literals
-             |  (v₁, ..., vₙ)              -- tuple  (n ≥ 2)
-             |  F#Tag                       -- nullary enum constructor
-             |  F#Tag(v)                    -- enum constructor with payload
-             |  #Tag                        -- bare tag (check mode only)
-             |  #Tag(v)                     -- bare tag with payload
-             |  fn (x : T) -> e            -- consuming lambda   (Owned arg)
-             |  fn &(x : T) -> e           -- borrowing lambda   (Borrowed arg)
-             |  fn &mut (x : T) -> e       -- mut-borrowing lambda
-```
-
-Lambdas are not yet in the grammar (marked TODO). The calculus introduces
-them here; the grammar will need extending before they can be used.
-
-### 3.2 Expressions
+### 4.1 Grammar
 
 ```
-Expr   e  ::=
-
-  v                                -- value
-
-  { s̄; e }                        -- block: sequence of statements closed
-                                   --   by a final expression. Each block
-                                   --   introduces an implicit fresh region.
-                                   --   Corresponds to `{ statement* expression? }`
-
-  e₁(e₂)                          -- function application
-
-  let x : T = e₁; e₂              -- consuming let: x owns the result of e₁
-  let &x : T = e₁; e₂             -- borrow let: x borrows from e₁
-  let &mut x : T = e₁; e₂         -- mutable borrow let
-
-  let (x₁, ..., xₙ) = e₁; e₂     -- tuple destructure (consuming)
-  let F#Tag(x) = e₁ else e₂; e₃   -- constructor destructure with fallback
-
-  x = e                            -- assignment (x must be BorrowedMut)
-
-  box(e)                           -- heap allocation intrinsic;
-                                   --   moves e into the heap ('static) region
-
-  if e₁ then e₂ else e₃           -- conditional
-  while e₁ do e₂                  -- loop
-  match e { arm* }                 -- pattern match (scrutinee consumed)
-
-  e : T                            -- type ascription; enters checking mode
+Type  T  ::=  a                       -- type variable        Ty::Param   (Owned)
+           |  Int | Bool | Unit       -- primitives                       (Owned,Copy)
+           |  &'r T                   -- shared reference     Ty::Ref     (Borrowed)
+           |  &'r mut T               -- exclusive ref        Ty::RefMut  (BorrowedMut)
+           |  T @ 'r                  -- region ascription    Ty::Region  (Owned)
+           |  (T₁,…,Tₙ)               -- tuple (n ≥ 2)        Ty::Tuple    (Owned)
+           |  F                       -- non-parametric enum  Ty::Enum     (Owned)
+           |  F<T̄ ; 'r̄>               -- applied enum/ADT     Ty::App     (Owned)
+           |  #tag₁ | … | #tagₙ       -- anonymous tag union (an Enum)  
+           |  Ptr<T>                  -- raw pointer          Ty::Ptr     (Owned,Copy)
+           |  Slot<L>                 -- reuse husk, layout-indexed       (Owned) 
+           |  T₁ →[k] T₂              -- function type                    (Owned)       
+           |  Top                     -- println/print arg only (intrinsic escape hatch)
 ```
 
-`move`, `copy`, and `drop` are not term-level syntax. Move semantics are
-implicit in assignment and application. `drop` is a library function
-`fn drop<T>(x : T) -> Unit`. `Clone` and `Copy` are typeclasses (see §7).
+- **`&'r T` is a dedicated `Ty::Ref(Region, Ty)`** 
+- **`F<T̄ ; 'r̄>` is `Ty::App(EnumRef, &[Ty], &[Region])`** containing type *and* region arguments. Region args make a borrow stored in a payload part of the type, so `freeRegions` sees it (closes escape-via-data, §10). `Ty::Enum` is used only for
+  fully non-parametric enums.
+- **`Ptr<T>`**: raw, `Copy`, region-free substrate pointer (§12.3); element type erased to an opaque `ptr` at runtime.
+- **`T₁ →[k] T₂`**: the function arrow carries the *ownership mode of the function* — `→[Owned]` consumes its argument (single-use), `→[Borrowed]` borrows it (reusable). Arrives with lambdas (§5.4); always `Owned` itself.
+- References are erased to plain pointers at runtime
 
-### 3.3 Statements
+### 4.2 Generic parameters
 
-Statements appear only inside blocks. They are not expressions and do
-not produce values on their own. The block's value comes from its final
-expression.
-
-```
-Statement   s  ::=
-  let x : T = e                   -- consuming declaration
-  let &x : T = e                  -- borrow declaration
-  let &mut x : T = e              -- mutable borrow declaration
-  let (x̄) = e                     -- tuple destructure
-  let F#Tag(x) = e else e         -- constructor destructure with fallback
-  x = e                           -- assignment (x must be BorrowedMut)
-  e                               -- expression statement (result dropped)
-```
-
-### 3.4 Patterns and Match Arms
+Polymorphism is parameter *lists* on `def`s and `type`s, fully removed by monomorphisation before MIR:
 
 ```
-Arm       arm  ::=  pat => e
-
-Pattern   pat  ::=
-  _                               -- wildcard (discard, no binding)
-  x                               -- binding  (consuming)
-  (pat₁, ..., patₙ)              -- tuple pattern
-  #Tag                            -- nullary tag
-  #Tag(pat)                       -- tag with payload pattern
-  F#Tag(pat)                      -- qualified constructor pattern
-  n                               -- integer literal (refutable)
-  true  |  false                  -- boolean literal (refutable)
+type Holder<'a, +a : Owned> = H(&'a a)
+def  longest<'a, 'b>(x: &'a Int, y: &'b Int): &'a Int  where 'a >= 'b := …
 ```
 
-Match always consumes the scrutinee. Each arm receives owned bindings
-for the variables it introduces.
+Lifetimes come **before** type parameters (declaration and use). Recursive types additionally require `deriving Heaped` (§12.2 / K-HeapedRec).
+
+### 4.3 Region-aware subtyping `⊑`  
+
+```
+T ⊑ T                                           (identity, by interning)
+Never inhabits any T                            (coerce_never, checking mode)
+&'r T ⊑ &'s T'         iff  'r ≥ 's ∧ T ⊑ T'    (& covariant in region)
+&'r mut T ⊑ &'s mut T' iff  'r = 's ∧ T = T'    (&mut invariant)
+```
+
+### 4.4 Variance
+
+Parameters carry optional variance (`+`/`-`) and a kind. Default variance is determined by position
+
+| Position | Variance |
+| --- | ---|
+| producer position only | + |
+| consumer position only | - |
+| both | ∅ |
+| Borrowed param | + (always) |
+| BorrowedMut/InteriorMut param | ∅ (always) |
+
+Because mono erases generics and there is no concrete-type subtyping, variance is a **declaration/use-site soundness check**, not a coercion. `+a : BorrowedMut` is a kind error.
 
 ---
 
-## 4. Typing Contexts
+## 5. Terms
+
+### 5.1 Expressions (live `Expression`, plus planned)
 
 ```
-Context   Γ  ::=
-  ε                               -- empty context
-  Γ, x :ₖ T                      -- term variable x of type T at kind k
-  Γ, a : k                        -- type variable a of kind k
-  Γ, 'r                           -- region variable
-  Γ, 'r ≥ 's                      -- outlives constraint
+Expr e ::=
+         |  n | true | false | ()                                 -- literals                         
+         |  x                                                     -- variable                         
+         |  &e | &mut e                                           -- borrow (Borrow, is_mutable)      
+         |  *e                                                    -- deref / read-through (Deref)     
+         |  e₁ ⊕ e₂ | ⊖ e                                         -- bin / un ops                     
+         |  { s̄; e? }                                             -- block (carries drop metadata)    
+         |  if e then e else e   |   while e do e                 -- control flow                     
+         |  match e { arm* }                                      -- pattern match (scrutinee consumed)
+         |  F#Tag | F#Tag(e) | #Tag | #Tag(e)                     -- constructors                     
+         |  (e₁,…,eₙ)                                             -- tuple                            
+         |  f(ē)                                                  -- call to a def / extern           
+         |  m(ē)                                                  -- typeclass method call (MethodCall)
+         |  __intrinsic(ē) | size_of::<T>()                       -- intrinsic / turbofish            
+         |  e₁(e₂)                                                -- application of a value           
+         |  fn (x:T) -> e | fn &(x:T) -> e | fn &mut (x:T) -> e   -- lambdas             
+         |  reuse cell as #C(ē)                                   -- in-place reuse                   
+         |  e.share()                                             -- duplicate a Shared handle        
 ```
 
-The subscript on `:ₖ` is the ownership mode of the binding:
 
-- `x :_Owned T`            - x is consumed on use; removed from Γ afterward
-- `x :_(Borrowed) T`    - x may be used multiple times within 'r; stays in Γ
-- `x :_(BorrowedMut) T` - same, but exclusive write access within 'r
-- `x :_InteriorMut T`      - x may be used multiple times; mutation is internal
-
----
-
-## 5. Kinding Rules
-
-Kinding judgments assign a kind to a type expression: `Γ ⊢ T : k`.
-These run as a pre-pass over type expressions before type inference.
+### 5.2 Statements
 
 ```
-─────────────────  (K-Int)        ─────────────────  (K-Bool)
-Γ ⊢ Int : Owned                   Γ ⊢ Bool : Owned
-
-
-──────────────────  (K-Unit)
-Γ ⊢ Unit : Owned
-
-
-(a : k) ∈ Γ
-────────────────  (K-Var)
-Γ ⊢ a : k
-
-
-Γ ⊢ T : Owned    'r ∈ Γ
-─────────────────────────  (K-Region)
-Γ ⊢ T @ 'r : Owned
-
-
-Γ ⊢ T : Owned    'r ∈ Γ
-─────────────────────────  (K-Borrow)
-Γ ⊢ &'r T : Borrowed
-
-
-Γ ⊢ T : Owned    'r ∈ Γ
-──────────────────────────  (K-BorrowMut)
-Γ ⊢ &'r mut T : BorrowedMut
-
-
-Γ ⊢ T₁ : k₁    Γ ⊢ T₂ : k₂
-──────────────────────────────  (K-Arrow)
-Γ ⊢ T₁ →[k] T₂ : Owned
--- function types are always Owned; k describes how the argument is used
-
-
-F declared with parameter kinds k̄, result kind kF    Γ ⊢ T̄ : k̄
-──────────────────────────────────────────────────────────────────  (K-App)
-Γ ⊢ F<T̄> : kF
-
-
-Γ ⊢ T₁ : Owned  ...  Γ ⊢ Tₙ : Owned
-───────────────────────────────────────  (K-Tuple)
-Γ ⊢ (T₁, ..., Tₙ) : Owned
-
-
-Γ, a : k ⊢ T : k'
-────────────────────────  (K-ForallKind)
-Γ ⊢ ∀(a : k). T : k'
-
-
-Γ, 'r ⊢ T : k
-─────────────────────  (K-ForallRegion)
-Γ ⊢ ∀'r. T : k
-
-
-F (mutually) recursive    Heaped impl exists for F
-──────────────────────────────────────────────────────  (K-HeapedRec)
-Γ ⊢ F<T̄> : Owned
--- a recursive type constructor is well-kinded only with a `Heaped` impl;
--- its values are an Owned pointer handle (§7.5)
-
-
-L a layout class
-─────────────────────  (K-Slot)
-Γ ⊢ Slot<L> : Owned
+Stmt s ::=
+         | let x : T = e                             -- consuming declaration   (Declaration)
+         | let &x = e   |   let &mut x = e           -- borrow declaration (desugared)        
+         | let (x̄) = e                               -- tuple destructure       (LetTuple)     
+         | let F#Tag(x) = e else e                   -- constructor destructure (LetPattern)   
+         | x = e                                     -- variable assignment     (Assignment)   
+         | *r = e                                    -- write-through           (DerefAssign)  
+         | e                                         -- expression statement    (Expr)         
 ```
 
----
 
-## 6. Bidirectional Typing Rules
-
-Two judgments, extending Pierce & Turner with kinds:
+### 5.3 Patterns (live `MatchPattern`)
 
 ```
-Γ ⊢ e ⇒ T : k      synthesis: infer both the type and kind of e
-Γ ⊢ e ⇐ T : k      checking:  verify e has type T at kind k
+pat ::= 
+      | _ 
+      | x 
+      | (pat̄) 
+      | #Tag 
+      | #Tag(pat) 
+      | F#Tag(pat) 
+      | n 
+      | true 
+      | false     
+      | cell @ pat
 ```
 
-### 6.1 Subsumption
+A match **always consumes** the scrutinee; bindings are owned. Only `Variant` patterns are refutable. For a **heaped** scrutinee, the consuming match is lowered (by `heap_lower`, §12.2) to `unique_take` + an ordinary node match. A consuming match binds *every* payload position, including wildcards (which bind to generated temporary values), so all un-moved fields are `drop`ped on scope exit.
 
-The bridge between synthesis and checking. Applies subkinding and
-subtyping simultaneously, enabling implicit coercions (e.g. passing
-an `Owned` value where `Borrowed` is expected).
-
-```
-Γ ⊢ e ⇒ T : k    k <: k'    T <: T'
-──────────────────────────────────────  (Sub)
-Γ ⊢ e ⇐ T' : k'
-```
-
-### 6.2 Variables
-
-```
-(x :_Owned T) ∈ Γ    Γ' = Γ \ {x}
-────────────────────────────────────  (Var-Owned)
-Γ' ⊢ x ⇒ T : Owned
--- x is consumed: it is removed from the context on use
-
-
-(x :_k T) ∈ Γ    k ≠ Owned
-────────────────────────────  (Var-Borrow)
-Γ ⊢ x ⇒ T : k
--- borrowed/interior variables remain in context; can be used multiple times
-```
-
-### 6.3 Blocks
-
-Each block introduces a fresh implicit region `'r`. The final expression
-is the block's result. *The result type must not mention `'r`* is
-the formal statement of lifetime safety: values cannot outlive their region.
-
-```
-Γ, 'r ⊢ s̄ ⊣ Γ'    Γ' ⊢ e ⇒ T : k    'r ∉ freeRegions(T)
-────────────────────────────────────────────────────────────  (Block)
-Γ ⊢ { s̄; e } ⇒ T : k
-```
-
-### 6.4 Let Bindings
-
-```
-Γ ⊢ e₁ ⇒ T : Owned    Γ, x :_Owned T ⊢ e₂ ⇒ U : k
-──────────────────────────────────────────────────────  (Let-Owned)
-Γ ⊢ (let x : T = e₁; e₂) ⇒ U : k
-
-
-Γ ⊢ e₁ ⇒ T : Owned
-'r fresh    Γ, x :_(Borrowed) T ⊢ e₂ ⇒ U : k    'r ∉ freeRegions(U)
-────────────────────────────────────────────────────────────────────────  (Let-Borrow)
-Γ ⊢ (let &x : T = e₁; e₂) ⇒ U : k
-
-
-Γ ⊢ e₁ ⇒ T : Owned
-'r fresh    Γ, x :_(BorrowedMut) T ⊢ e₂ ⇒ U : k    'r ∉ freeRegions(U)
-──────────────────────────────────────────────────────────────────────────────  (Let-BorrowMut)
-Γ ⊢ (let &mut x : T = e₁; e₂) ⇒ U : k
-```
-
-The freshness condition `'r ∉ freeRegions(U)` ensures borrowed bindings
-cannot escape the scope in which they are introduced.
-
-### 6.5 Functions and Application
+### 5.4 Lambdas and application 
 
 ```
 Γ, x :_Owned T ⊢ e ⇒ U : k
 ──────────────────────────────────────────────  (Lam-Owned)
-Γ ⊢ fn (x : T) -> e  ⇒  T →[Owned] U : Owned
+Γ ⊢ fn (x:T) -> e ⇒ T →[Owned] U : Owned
 
-
-'r fresh
-Γ, x :_(Borrowed) T ⊢ e ⇒ U : k    'r ∉ freeRegions(U)
+'r fresh   Γ, x :_(Borrowed) T ⊢ e ⇒ U : k   'r ∉ freeRegions(U)
 ──────────────────────────────────────────────────────────────  (Lam-Borrow)
-Γ ⊢ fn &(x : T) -> e  ⇒  T →[Borrowed] U : Owned
+Γ ⊢ fn &(x:T) -> e ⇒ T →[Borrowed] U : Owned
 
-
-Γ ⊢ e₁ ⇒ T →[Owned] U : Owned    Γ ⊢ e₂ ⇐ T : Owned
-────────────────────────────────────────────────────────  (App-Owned)
-Γ ⊢ e₁(e₂) ⇒ U : Owned
-
-
-Γ ⊢ e₁ ⇒ T →[Borrowed] U : Owned    Γ ⊢ e₂ ⇐ T : Borrowed
-────────────────────────────────────────────────────────────────────  (App-Borrow)
+Γ ⊢ e₁ ⇒ T →[m] U : Owned    Γ ⊢ e₂ ⇐ T : (Owned if m=Owned else Borrowed)
+──────────────────────────────────────────────────────────────────────────  (App)
 Γ ⊢ e₁(e₂) ⇒ U : Owned
 ```
 
-### 6.6 Heap Allocation
+Closures capture by move or borrow (inferred from use); in codegen that is a function-pointer + captured-environment fat pointer. Function-argument positions are the first *contravariant* positions, as previously seen in §4.4 (variance).
 
-`box` is the single allocation intrinsic. It moves a value into the
-heap region, which is referred to as the `'static` region, which 
-outlives every other region.
+---
 
-```
-Γ ⊢ e ⇒ T : Owned
-──────────────────────────────────────  (Box)
-Γ ⊢ box(e) ⇒ Box<T> @ 'static : Owned
-```
-
-### 6.7 Ascription
-
-Type ascription is the explicit entry point into checking mode.
-It also serves as the place where kind annotations are verified.
+## 6. Typing Context (type checker)
 
 ```
-Γ ⊢ T : k    Γ ⊢ e ⇐ T : k
-──────────────────────────────  (Ascribe)
-Γ ⊢ (e : T) ⇒ T : k
+Γ ::= ε
+    | Γ, x : T @ k @ home('r)      -- term var: type, kind, home scope region
+    | Γ, a : k                     -- type variable
+    | Γ, 'r                        -- region variable / parameter (with a depth)
+    | Γ, 'a ≥ 'b                   -- assumed outlives edge (from a where-clause)
 ```
 
-### 6.8 Conditionals
+Each term binding records its **home region** (parameters to their frame, locals to their block) and the escape check (§10) reads it.
 
-Both branches must agree on type and kind. The condition is `Bool : Owned`.
+> In practice, the context `Γ` does not remove consumed term bindings.
+> Affinity is enforced in the ownership environment `Δ` (§11), not here.
+
+---
+
+## 7. Kinding Rules
+
+`Γ ⊢ T : k`, a pre-pass over type expressions.
 
 ```
-Γ ⊢ e₁ ⇐ Bool : Owned
-Γ ⊢ e₂ ⇒ T : k
-Γ ⊢ e₃ ⇐ T : k
-────────────────────────────────────────  (If)
+───────────────  (K-Prim)            
+Γ ⊢ Int|Bool|Unit : Owned            
+                                     
+(a : k) ∈ Γ
+───────────  (K-Var)
+Γ ⊢ a : k
+
+Γ ⊢ T : Owned                        
+─────────────────  (K-Region)        
+Γ ⊢ T @ 'r : Owned                   
+
+Γ ⊢ T : Owned
+─────────────────  (K-Borrow)
+Γ ⊢ &'r T : Borrowed
+
+Γ ⊢ T : Owned                        
+──────────────────────  (K-BorrowMut)
+Γ ⊢ &'r mut T : BorrowedMut          
+
+Γ ⊢ Tᵢ : Owned (each i)
+ ───────────────────────  (K-Tuple)
+Γ ⊢ (T₁,…,Tₙ) : Owned
+
+F : (k̄ ; 'r̄ kinds) → kF   Γ ⊢ T̄ : k̄          
+──────────────────────────────────  (K-App)  
+Γ ⊢ F<T̄ ; 'r̄> : kF                           
+
+Γ ⊢ T : Owned
+───────────────  (K-Ptr)
+Γ ⊢ Ptr<T> : Owned
+
+F (mutually) recursive   F derives Heaped
+─────────────────────────────────────────  (K-HeapedRec)
+Γ ⊢ F<…> : Owned
+
+Γ ⊢ T₁ : k₁   Γ ⊢ T₂ : k₂            
+──────────────────────────  (K-Arrow) 
+Γ ⊢ T₁ →[k] T₂ : Owned 
+
+L a layout class
+─────────────────  (K-Slot)
+Γ ⊢ Slot<L> : Owned 
+```
+
+---
+
+## 8. Bidirectional Typing
+
+`Γ ⊢ e ⇒ T : k` (synthesis), `Γ ⊢ e ⇐ T : k` (checking). **Context threaded structurally, never split**; affinity conditions are *not* stated here (§11).
+
+### 8.1 Subsumption 
+
+```
+Γ ⊢ e ⇒ T : k    k <: k'    T ⊑ T'
+──────────────────────────────────────  (Sub)
+Γ ⊢ e ⇐ T' : k'
+```
+
+`<:` is the subkinding of §2.2; `⊑` is the region-aware type relation of §4.3 (not
+a general subtype relation).
+
+### 8.2 Variables, literals, borrow, deref  [live]
+
+```
+(x : T @ k) ∈ Γ                       Γ ⊢ e ⇒ T : k
+─────────────────  (Var)              'r = home-region of e
+Γ ⊢ x ⇒ T : k                         ──────────────────────────  (Borrow)
+                                      Γ ⊢ &e ⇒ &'r T : Borrowed
+──────────────────  (Lit)               ( &mut e ⇒ &'r mut T : BorrowedMut )
+Γ ⊢ n|b|() ⇒ Prim : Owned
+
+Γ ⊢ e ⇒ &'r T : Borrowed  (or &'r mut)
+──────────────────────────────────────  (Deref)
+Γ ⊢ *e ⇒ T : kind_of(T)
+```
+
+`Var` returns the binding's stored kind and **never consumes** `x`. `&mut e`
+additionally requires `e` to name a `mut` place (`MutBorrowOfImmutable`). A
+borrow's type region is the referent's *home scope* (the per-scope, not
+per-binding, deviation from `Calculus.md` §6.4).
+
+### 8.3 Blocks & the escape check  [live]
+
+```
+'B fresh block region (depth = enclosing + 1)
+Γ,'B ⊢ s̄ ⊣ Γ'    Γ' ⊢ e ⇒ T : k    freeRegions(T) names no region of depth ≥ 'B
+──────────────────────────────────────────────────────────────────────────────  (Block)
+Γ ⊢ { s̄; e } ⇒ T : k
+```
+
+### 8.4 Let, control flow, calls  [live]
+
+```
+Γ ⊢ e₁ ⇒ T : Owned    Γ, x : T @ Owned @ home(cur) ⊢ e₂ ⇒ U : k
+────────────────────────────────────────────────────────────────  (Let-Owned)
+Γ ⊢ (let x : T = e₁; e₂) ⇒ U : k
+
+Γ ⊢ e₁ ⇐ Bool : Owned   Γ ⊢ e₂ ⇒ T₂ : k₂   Γ ⊢ e₃ ⇒ T₃ : k₃
+T = join_region_ty(T₂,T₃)   k = k₂ ∨ k₃
+────────────────────────────────────────────────────────────────  (If)
 Γ ⊢ if e₁ then e₂ else e₃ ⇒ T : k
-```
 
-### 6.9 Match
-
-The scrutinee is always consumed. Each arm receives owned bindings for
-the variables it introduces. All arms must agree on result type and kind.
-
-```
-Γ ⊢ e ⇒ T : Owned
-∀ armᵢ = (patᵢ => eᵢ):   Γ, bindings(patᵢ, T) ⊢ eᵢ ⇒ U : k
-all arms agree on U and k
-──────────────────────────────────────────────────────────────  (Match)
+Γ ⊢ e ⇒ T : Owned   ∀ armᵢ: Γ, bindings(patᵢ,T) ⊢ eᵢ ⇒ Uᵢ : kᵢ
+U = join over Uᵢ (region meet)   k = ∨ kᵢ
+────────────────────────────────────────────────────────────────  (Match)
 Γ ⊢ match e { arm* } ⇒ U : k
+
+f : (T̄ ; 'ᾱ) → U declared   Γ ⊢ eᵢ ⇐ Tᵢ   σ = infer_region_subst(declared, actual)
+each callee `where 'a >= 'b` holds under σ + Γ's assumptions
+────────────────────────────────────────────────────────────────────  (Call)
+Γ ⊢ f(ē) ⇒ region_subst(U, σ) : Owned
 ```
 
-When the scrutinee `e` is a *consumed* `Heaped` value, the constructor pattern
-*drains* it: the bindings are *owned* (moved out via `take`, §7.5) and the arm
-may additionally bind a reuse token `cell : Slot<L>` (the husk). When `e` is only
-*borrowed*, the bindings are borrows (`borrow`, §7.5) and no `Slot` is produced.
-
-### 6.10 In-Place Reuse
-
-A reuse token (husk) drained from a `Heaped` node may be rebuilt into, with no
-allocation, provided the new constructor's layout matches.
-
-```
-Γ ⊢ cell ⇒ Slot<L> : Owned    layout(#C) = L    Γ ⊢ ēᵢ ⇐ fieldᵢ(#C)
-─────────────────────────────────────────────────────────────────────  (Reuse)
-Γ ⊢ (reuse cell as #C(ē)) ⇒ T_{#C} : Owned
--- consumes the token and the arguments; allocates nothing. An unused `Slot`
--- is dropped (frees the husk) like any other Owned value.
-```
-
-### 6.11 Drop Elaboration (conditional moves)
-
-`drop` insertion is implicit (RAII): an Owned binding is dropped at the end of
-the innermost block where it is still owned, in reverse declaration order. When a
-value is moved on some branches of an `if`/`match` but not others, a *completing*
-`drop` is inserted on the branches where it is still owned, so it is uniformly
-consumed at the merge — no runtime drop flags, no leak.
+`let &x`/`let &mut x` desugar to a borrow-typed `let`. Branches agree on type
+**modulo the region meet** `join_region_ty` (so an escape *through any branch* is
+caught) and join their kinds. A call infers a per-parameter region substitution,
+stamps the result with it (a GLB bounded below by the call-site scope (total)
+§10), and checks the callee's region `where` clauses under it. Typeclass `where`
+checking at call sites: see §12.1.
 
 ---
 
-## 7. Standard Typeclasses
-
-### 7.1 Functor
-
-Two variants, differing in the ownership mode of the container and
-the mapping function.
-
-```
--- Consumes the container. The natural case for owned containers.
-typeclass OwnedFunctor<F : Owned → Owned> {
-  fmap : ∀(a b : Owned).
-         (a →[Owned] b) →[Owned] F<a> →[Owned] F<b>
-}
-
--- Borrows the container without consuming it.
-typeclass BorrowedFunctor<F : Owned → Owned> {
-  fmap_ref : ∀(a b : Owned)('r).
-             (a →[Borrowed] b) →[Borrowed] &'r F<a> →[Owned] F<b>
-}
-```
-
-### 7.2 Applicative
-
-Sits between Functor and Monad. Adds `pure` (wrapping) and `ap`
-(applying a wrapped function to a wrapped value). The key distinction
-from Monad: `ap` combines two *independent* effects, whereas `bind`
-sequences *dependent* effects.
-
-```
-typeclass Applicative<F : Owned → Owned>
-  requires OwnedFunctor<F>
-{
-  pure : ∀(a : Owned).
-         a →[Owned] F<a>
-         -- wraps a value; allocates only if F itself requires it
-
-  ap : ∀(a b : Owned).
-       F<(a →[Owned] b)> →[Owned] F<a> →[Owned] F<b>
-       -- both F<a → b> and F<a> are independent; neither depends on
-       -- the result of the other before being computed
-}
-```
-
-### 7.3 Monad
-
-Extends `Applicative` with `bind`, which sequences dependent effects:
-the second computation `a →[Owned] M<b>` can observe the result of
-the first `M<a>`.
-
-```
-typeclass Monad<M : Owned → Owned>
-  requires Applicative<M>
-{
-  bind : ∀(a b : Owned).
-         M<a> →[Owned] (a →[Owned] M<b>) →[Owned] M<b>
-}
-```
-
-`bind` consumes `M<a>`, extracts the inner `a` (still owned), and
-passes it to the continuation. Ownership transfers linearly through
-the chain with no hidden allocation.
-
-`Monad` is only well-kinded at `Owned → Owned` type constructors.
-Attempting to instantiate it at a `Borrowed` constructor is a kind
-error, and the lattice is able to enforce this structurally, rather
-than by convention.
-
-`fmap` and `ap` can both be derived from `pure` and `bind`, so a
-`Monad` instance needs only provide those two. The `Functor` and
-`Applicative` methods are then available for free.
-
-### 7.4 Clone and Copy
-
-`Clone` and `Copy` are typeclasses, not language primitives.
-
-```
-typeclass Clone<T : Owned> {
-  clone : &'r T →[Borrowed] T
-  -- borrows, produces a new owned copy; implementation decides the cost
-}
-
-typeclass Copy<T : Owned> requires Clone<T> {}
--- Copy carries no new methods. It is a marker: "cloning this type is
--- cheap enough for the compiler to do implicitly."
--- For all other types, clone must be called explicitly: x.clone()
-```
-
-Primitive types (`Int`, `Bool`, `Unit`) implement `Copy` automatically.
-Heap-allocated types (`Box<T>`) do not, and require explicit `clone()`.
-
-### 7.5 Heaped — Allocation Strategies
-
-`Heaped` is the lang-item typeclass that gives a type a heap representation. A
-(mutually) recursive `type` is well-formed only if it implements `Heaped`; the
-impl supplies the finite-size handle and the allocation/reclamation strategy,
-declared once at the type: `type List<+a> : Heaped(Unique)`. The compiler knows
-the typeclass by name (to emit calls) but nothing about allocation policy —
-`Box`/`Rc`/arenas are library strategies. The hierarchy encodes the
-reuse-vs-share tradeoff structurally:
-
-```
-typeclass Heaped<T> {
-  type Handle                      -- the pointer-sized runtime representation
-  alloc   : Node          → T      -- construct: store a node, return the handle
-  borrow  : &T            → &Node  -- deref: read/match (borrow into the root)
-  release : T             → Unit   -- drop: Unique frees; Shared decs (free at 0)
-}
-
-typeclass HeapedUnique<T> requires Heaped<T> {
-  borrow_mut : &mut T → &mut Node       -- exclusive (Unique-only) mutation
-  take       : T      → (Node, Slot<L>) -- owning drain → fields + reuse husk
-  reuse      : (Slot<L>, Node) → T      -- rebuild into a husk, no allocation
-}
-
-typeclass HeapedShared<T> requires Heaped<T> {
-  share : &T → T                        -- duplicate the handle (refcount ++)
-}
-```
-
-`take`/`reuse`/`borrow_mut` are `HeapedUnique`-only: moving out of, or mutating,
-shared storage would need a runtime uniqueness check, excluded by design. So **a
-Unique type can `reuse`, a Shared type can `share`, never both — enforced by the
-hierarchy.** The user writes `#C(ē)`, `match`, `reuse`, `.share()` and lets values
-drop; the compiler lowers these to the methods above; the core library writes the
-bodies (over `Ptr`, raw alloc/free, `drop_in_place`, and interior mutation for
-the Shared counter). The single non-affine note: a Shared handle stays affine;
-`.share()` returns a fresh handle (so the compiler inserts no implicit dups).
-
----
-
-## 8. Grammar Changes Required
-
-The following additions and changes to the existing `.pest` grammar
-are needed to support the type system described above.
-
-### 8.1 Updated Keyword List
-
-```
-KEYWORD = {
-  "if" | "then" | "else" | "let" | "def" | "true" | "false"
-  | "Unit" | "Int" | "Bool" | "while" | "do" | "module"
-  | "mut" | "type" | "match"
-  | "fn" | "box"          -- new
-}
-```
-
-`move`, `copy`, and `drop` are library identifiers, not keywords.
-`clone` is a method name.
-
-### 8.2 Lifetime / Region Syntax
-
-```
-lifetime    = @{ "'" ~ identifier }          -- e.g. 'r, 'heap, 'static
-```
-
-### 8.3 Type Extensions
-
-```
--- borrow types
-borrow_type = { "&" ~ lifetime? ~ "mut"? ~ type_ }
-              -- &T, &'r T, &mut T, &'r mut T
-
--- region ascription (type-level only; no term-level @ operator)
-region_type = { type_ ~ "@" ~ lifetime }
-              -- T @ 'r
-```
-
-Extend `type_` to include `borrow_type` and `region_type`.
-
-Free `&` from its current use as bitwise AND. Suggested replacement:
-`bitand = { "band" }` (keyword operator), leaving `&` solely for borrows.
-`|` remains as tag union separator and match arm separator; bitwise OR
-can similarly become `bor` if needed.
-
-### 8.4 Type Parameters (Generics)
-
-```
-kind_ann     = { "Owned" | "Borrowed" | "BorrowedMut" | "InteriorMut" | "Never" }
-variance_ann = { "+" | "-" }
-type_param   = { variance_ann? ~ identifier ~ (":" ~ kind_ann)? }
-              -- e.g.  a,  +a,  +a : Owned,  ∅ a : BorrowedMut
-region_param = { lifetime }
-type_params  = { "<" ~ (type_param | region_param)
-                     ~ ("," ~ (type_param | region_param))* ~ ">" }
-```
-
-Extend `type_alias` and `function` to optionally accept `type_params`:
-
-```
-type_alias = { "type" ~ identifier ~ type_params?
-               ~ "=" ~ enum_variant ~ ("|" ~ enum_variant)* ~ ";"? }
-
-function   = { "def" ~ identifier ~ type_params?
-               ~ "(" ~ parameters? ~ ")" ~ ":" ~ type_ ~ ":=" ~ expression }
-```
-
-### 8.5 Lambda Expressions
-
-```
-lambda_param = { ("&" ~ "mut"?)? ~ "(" ~ identifier ~ ":" ~ type_ ~ ")" }
-             -- ()        →  consuming lambda
-             -- &()       →  borrowing lambda
-             -- &mut ()   →  mutable-borrowing lambda
-
-lambda_expr  = { "fn" ~ lambda_param ~ "->" ~ expression }
-```
-
-Add `lambda_expr` to `primary`.
-
-### 8.6 Box Expression
-
-```
-box_expr = { "box" ~ "(" ~ expression ~ ")" }
-```
-
-Add `box_expr` to `primary`.
-
-### 8.7 Borrow Expressions
-
-```
-borrow_expr = { "&" ~ "mut"? ~ expression }
-```
-
-Add `borrow_expr` to `primary`. Produces a `Borrowed` or `BorrowedMut`
-reference to the sub-expression.
-
-### 8.7b Heaped Types, Reuse, and Husk Patterns
-
-```
--- a recursive type declares its allocation strategy once, at the type
-heaped_ann  = { ":" ~ "Heaped" ~ "(" ~ identifier ~ ")" }   -- e.g.  : Heaped(Unique)
--- attach `heaped_ann?` to `type_alias` (after `type_params?`)
-
--- in-place reuse: rebuild a drained husk with no allocation
-reuse_expr  = { "reuse" ~ expression ~ "as" ~ constructor }
--- add `reuse_expr` to `primary`
-
--- husk-capturing as-pattern: bind the reuse token of a drained node
---   (legal only in a consuming match)
-as_pattern  = { identifier ~ "@" ~ pattern }   -- e.g.  cell @ #cons(x, rest)
-```
-
-`.share()` is an ordinary method call (no new grammar). New keywords: `reuse`,
-`as`; `Heaped` appears in the type-annotation position.
-
-### 8.8 Typeclass Declaration
-
-A typeclass declares an abstract interface over a type or type constructor.
-It may require other typeclasses be satisfied first (`requires`), may
-declare abstract methods, and may provide default implementations for
-methods that can be derived from others.
-
-```
-typeclass_decl = {
-  "typeclass" ~ identifier ~ type_params?
-  ~ ("requires" ~ typeclass_constraint
-      ~ ("," ~ typeclass_constraint)*)?
-  ~ "{" ~ typeclass_member* ~ "}"
-}
-
-typeclass_constraint = {
-  identifier ~ ("<" ~ (type_ | lifetime)
-                    ~ ("," ~ (type_ | lifetime))* ~ ">")?
-}
--- e.g.  OwnedFunctor<F>,  Clone<T>,  Eq<T>
-
-typeclass_member = {
-  typeclass_method_sig
-  | typeclass_default_method
-}
-
--- abstract method: signature only, no body
-typeclass_method_sig = {
-  identifier ~ type_params?
-  ~ ":" ~ type_
-  ~ where_clause?
-}
-
--- default method: has a body; impls may override
-typeclass_default_method = {
-  "def" ~ identifier ~ type_params?
-  ~ "(" ~ parameters? ~ ")" ~ ":" ~ type_
-  ~ where_clause?
-  ~ ":=" ~ expression
-}
-```
-
-Examples:
-
-```
-typeclass OwnedFunctor<+F : Owned → Owned> {
-  fmap : ∀(a b : Owned). (a →[Owned] b) →[Owned] F<a> →[Owned] F<b>
-}
-
-typeclass Applicative<+F : Owned → Owned>
-  requires OwnedFunctor<F>
-{
-  pure : ∀(a : Owned). a →[Owned] F<a>
-  ap   : ∀(a b : Owned). F<(a →[Owned] b)> →[Owned] F<a> →[Owned] F<b>
-
-  -- default: fmap derived from pure and ap
-  def fmap<a : Owned, b : Owned>(f : a →[Owned] b, x : F<a>) : F<b>
-    := ap(pure(f), x)
-}
-
-typeclass Monad<+M : Owned → Owned>
-  requires Applicative<M>
-{
-  bind : ∀(a b : Owned). M<a> →[Owned] (a →[Owned] M<b>) →[Owned] M<b>
-
-  -- defaults: pure and ap derived from bind
-  def pure<a : Owned>(x : a) : M<a>
-    := bind(x, fn (a) -> a)   -- identity monad lift; impl may override
-
-  def ap<a : Owned, b : Owned>(mf : M<(a →[Owned] b)>, mx : M<a>) : M<b>
-    := bind(mf, fn (f) -> bind(mx, fn (x) -> pure(f(x))))
-}
-```
-
-### 8.9 Typeclass Implementation
-
-An `impl` block provides a concrete implementation of a typeclass for
-a specific type or type constructor. All non-default methods must be
-provided. Default methods may be overridden.
-
-```
-impl_decl = {
-  "impl" ~ typeclass_constraint
-  ~ "for" ~ type_
-  ~ type_params?
-  ~ where_clause?
-  ~ "{" ~ impl_method* ~ "}"
-}
-
-impl_method = {
-  "def" ~ identifier ~ type_params?
-  ~ "(" ~ parameters? ~ ")" ~ ":" ~ type_
-  ~ where_clause?
-  ~ ":=" ~ expression
-}
-```
-
-Examples:
-
-```
--- Option is a Functor
-impl OwnedFunctor<Option> {
-  def fmap<a : Owned, b : Owned>(f : a →[Owned] b, x : Option<a>) : Option<b>
-    := match x {
-         #none    => #none
-         #some(v) => #some(f(v))
-       }
-}
-
--- Option is a Monad (provides bind and pure; ap is derived)
-impl Monad<Option> {
-  def pure<a : Owned>(x : a) : Option<a>
-    := #some(x)
-
-  def bind<a : Owned, b : Owned>(x : Option<a>, f : a →[Owned] Option<b>) : Option<b>
-    := match x {
-         #none    => #none
-         #some(v) => f(v)
-       }
-}
-```
-
-Note: because `Monad` requires `Applicative` which requires `OwnedFunctor`,
-implementing `Monad<Option>` without also implementing `OwnedFunctor<Option>`
-and `Applicative<Option>` is a compile error. The compiler checks that all
-required typeclass constraints are satisfied, either by explicit `impl` blocks
-or by default method derivation.
-
-### 8.10 Where Clauses
-
-Typeclass constraints on generic functions and type constructors are
-expressed with `where` clauses. They appear on both `def` and `impl`.
-
-```
-where_clause = {
-  "where" ~ where_constraint ~ ("," ~ where_constraint)*
-}
-
-where_constraint = {
-  typeclass_constraint             -- e.g.  F : OwnedFunctor
-  | lifetime ~ ">=" ~ lifetime    -- e.g.  'r >= 's  (region outlives)
-}
-```
-
-Examples:
-
-```
--- a function requiring any Monad
-def sequence<M : Owned → Owned, a : Owned>(xs : List<M<a>>) : M<List<a>>
-  where M : Monad
-  := ...
-
--- a function requiring Clone and Eq
-def deduplicate<+a : Owned>(xs : List<a>) : List<a>
-  where a : Clone, a : Eq
-  := ...
-
--- a region outlives constraint
-def longest<'r, 's>(x : &'r Str, y : &'s Str) : &'r Str
-  where 'r >= 's
-  := ...
-```
-
-### 8.11 Updated Keyword List (Final)
-
-```
-KEYWORD = {
-  "if" | "then" | "else" | "let" | "def" | "true" | "false"
-  | "Unit" | "Int" | "Bool" | "while" | "do" | "module"
-  | "mut" | "type" | "match"
-  | "fn" | "box"               -- ownership
-  | "typeclass" | "impl"       -- typeclass system
-  | "requires" | "for"         -- typeclass relations
-  | "where"                    -- constraints
-  | "reuse" | "as"             -- in-place reuse
-}
-
-```
+rest still todo

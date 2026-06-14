@@ -93,11 +93,15 @@ le       = { "<=" | "≤" }
 
 // type parameters on a generic declaration: `<T>`, `<+a : Owned, -b>`.
 // each parameter carries an optional variance annotation (`+`/`-`; absent =
-// default) and an optional kind annotation (`: Owned`/`: Never`; absent =
-// `Owned`). only appears in declaration position (right after the def/type
-// name); uses of a type parameter inside a type are bare identifiers.
+// default) and an optional kind annotation (absent = `Owned`). a kind is a base
+// kind (`Owned`/`Never`) or a type-constructor arrow `Owned -> Owned` (Step 11,
+// higher-kinded params); `->` is right-associative and may be parenthesised
+// (`(Owned -> Owned) -> Owned`). only appears in declaration position (right
+// after the def/type name); uses of a type parameter inside a type are bare
+// identifiers (applied via `F<A>`).
 variance_ann = { "+" | "-" }
-kind_ann     = { "Owned" | "Never" }
+kind_atom    = { "Owned" | "Never" | "(" ~ kind_ann ~ ")" }
+kind_ann     = { kind_atom ~ ("->" ~ kind_atom)* }
 type_param   = { variance_ann? ~ identifier ~ (":" ~ kind_ann)? }
 // a region (lifetime) parameter `'r` declared on a generic item (Calculus §8.4).
 region_param = { lifetime }
