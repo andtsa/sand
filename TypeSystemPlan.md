@@ -2117,23 +2117,128 @@ building it.
   and prints — passing under *both* codegen and the interpreter(s). Clippy
   clean.
 
-### Step B — Drop / RAII
+### Step B — Drop / RAII ✅
+
+**Status: complete.** The ownership pass is now a `TypedProgram → TypedProgram`
+transformer: `OwnershipEnv` uses `im::OrdMap` (declaration order via
+`UniqVar.idx`) and `merge_with_drops` computes completing drops; each
+`Expression::Block` carries a `drops: Vec<UniqVar>` slot filled with scope-exit
+drops (owned, non-`Copy` block-locals, reverse-declaration order) plus
+completing drops at `if`/`match` merges and owned-parameter drops at function
+exit. Explicate lowers `Block.drops` to a first-class MIR `Statement::Drop(Place)`
+(after the block's value — temp-routed in tail position, drop-continuation in
+assign/effect, pre-branch in predicate position); MIR-interp / codegen lower it
+to `__drop_in_place` (no-op until Step C). Behaviour-neutral: all prior tests
+unchanged; 8 structural drop-placement tests added. 682 tests, clippy clean.
+Future drop reordering/elision and the `Drop` typeclass attach to the MIR
+`Statement::Drop`.
 
 **Goal**: Make deterministic destruction first-class and correct under
-conditional moves.
+conditional moves (Calculus §6.11). The ownership pass becomes a *transformer*
+that elaborates drops into the typed HIR; runtime behaviour is unchanged in
+Step B (`__drop_in_place` is still a no-op until Step C gives types `release`),
+so this step is **observationally inert** — its content is *drop placement*, the
+scaffolding that makes Step C's destructors fire exactly once on every path.
 
 **Scope**:
-- Formalize drop insertion at scope exit, reverse declaration order.
-- **Conditional-move completing drop**: refine the ownership pass's branch
-  merge (`OwnershipEnv::merge` in `passes/ownership/`) so a value moved on some
-  branches is *dropped* on the others (as if `else drop(x)`) — replacing
-  today's silent leak. No runtime drop flags; drop is placed statically at the
-  end of the innermost block where the value is last owned.
-- Wire `drop_in_place` (Step A) as the structural-drop mechanism.
-- `drop` remains a library fn; `Copy` types are exempt from move/drop.
+- **Drop placement at scope exit**, reverse declaration order: at a block's
+  exit, every block-local binding still `Owned` (not moved, not `Copy`) is
+  dropped, in reverse order of declaration. Applies to function-body scope
+  (owned-but-unmoved parameters) and `match`-arm scopes (pattern bindings) too.
+- **Conditional-move completing drop**: at an `if`/`match` merge, a value
+  `Owned` on one branch but `Moved` on another is dropped on the owning
+  branch(es), so it is uniformly consumed at the join — replacing today's silent
+  leak. Falls straight out of the existing `OwnershipEnv::merge` semantics
+  ("`Moved` if moved on *either* branch"): for every var the merge marks
+  `Moved` that a given branch left `Owned`, that branch gets a completing drop.
+- **No runtime drop flags**: drop points are static (placement decided at
+  compile time); a value is never conditionally-dropped at runtime.
+- The returned value is never dropped (it is `Moved` out as the block's final
+  expression, so it is not in the owned set); borrows are not dropped (`Copy`,
+  non-owning). `drop` remains a library fn; `Copy` types are exempt.
+
+**Design decisions (surfaced for review):**
+
+1. **Drop representation in the IR. (DECIDED: HIR scope-metadata → first-class
+   MIR `Statement::Drop`.)** Two separable concerns: drop *placement* is
+   scope-based (innermost block, branch merges), and scopes are an HIR notion
+   that dissolves into MIR's flat CFG — so placement is computed on HIR, where
+   the move analysis already lives; drop *optimization* (reorder / elide / sink)
+   and the future **`Drop` typeclass** dispatch want a first-class node to
+   operate on, which belongs in MIR. So:
+   - **`Expression::Block` gains `drops: Vec<UniqVar>`** — *scope-drop metadata*
+     (the vars this scope drops, in reverse-declaration order), not a statement
+     and not optimized. The HIR interpreter ignores it (no-op). It also
+     **unifies completing-drops**: a completing drop is the other branch's var
+     added to that branch-block's `drops` (wrapping a non-block branch in a
+     `Block`). A drop slot (run after the block's value) rather than a
+     `Statement::Drop` avoids the "drops must run after the final expr" temp
+     problem.
+   - **explicate lowers `Block.drops` → a first-class MIR `Statement::Drop(Place)`**,
+     emitted after the block's value is in a local. This is the node MIR
+     passes reorder/elide, and where the `Drop` typeclass slots in: a
+     `Drop(place)` lowers to *“`Drop::drop(&mut place)` if the type has an
+     instance, then `__drop_in_place(place)` for the fields.”*
+   - **MIR-interp / codegen lower `Statement::Drop`** → `__drop_in_place` for
+     now (no-op), `Drop::drop` + structural later.
+
+   (Rejected for Step B: pure-MIR drop elaboration — ownership stays a checker,
+   explicate threads explicit drop-scopes into MIR, a fresh move/init dataflow
+   pass inserts drops. The Rust-faithful end-state, but far more machinery, and
+   placement still derives from scope info clearest on HIR. Possible future
+   refactor.)
+
+2. **Where elaboration lives. (DECIDED: fuse into the ownership pass.)**
+   Convert `passes::ownership::check` from a pure checker into a
+   checker-and-transformer that returns a rebuilt typed HIR with drops inserted.
+   It already holds the precise ownership/move state, clones envs per branch,
+   and computes the merges — so it is the single source of truth and avoids a
+   second, divergence-prone analysis. `check` already has the right shape
+   (`TypedProgram -> Result<TypedProgram>`); the change is internal:
+   `check_expr` / `check_statement` return the (drop-augmented) node instead of
+   `()`.
+
+3. **Declaration-order tracking. (DECIDED: order by `UniqVar` via
+   `im::BTreeMap`.)** Replace `OwnershipEnv`'s unordered `im::HashMap`s with
+   `im::BTreeMap`s, keyed by `UniqVar`. `UniqVar` is ordered by its
+   uniquification index `idx`, which the uniquify pass assigns in a source-order
+   pre-order walk — so within a scope, key order *is* declaration order, and
+   reverse-iterating the block-locals gives reverse-declaration order for free
+   (no separate `Vec`). *Verify during B.1 that `idx` is monotonic with
+   declaration order; the structural ordering tests in B.4 will catch any
+   violation.*
+
+**Insertion points (the precise algorithm):**
+- *Block*: after checking statements + final expr, before `restrict_to`, append
+  `__drop_in_place` for each block-local still `Owned` and non-`Copy`, in
+  reverse declaration order. The final-expr's moved-out value is already
+  excluded (it is `Moved`).
+- *If*: after checking both branches, compute the merge; for each var the merge
+  makes `Moved` but a branch left `Owned`, append a completing drop to that
+  branch's body (wrapping it in a block if needed). Then the normal block-exit
+  drops of each branch still apply for branch-locals.
+- *Match*: same as `If`, per arm, against the merged arm env.
+- *While*: a move out of an outer var in the body is already an error
+  (`MoveInLoop`), so only body-locals are dropped — handled by the body block's
+  own scope-exit drops (they run each iteration).
+
+**Phases:**
+- **B.1** — declaration-order tracking + the `OwnershipEnv` merge returning the
+  per-branch completing-drop sets (the analysis half; pass still type-checks).
+- **B.2** — convert the pass to a transformer: rebuild blocks with scope-exit
+  drops (reverse order, owned non-`Copy` locals). Green.
+- **B.3** — completing drops at `if`/`match` merges. Green.
+- **B.4** — first-class MIR `Statement::Drop(Place)`: explicate lowers
+  `Block.drops` to it (after the block value); MIR-interp / codegen lower it to
+  `__drop_in_place` (no-op). Structural tests (assert MIR `Drop` placement:
+  scope-exit order, completing drop on the owning branch, no drop of
+  returned/moved/`Copy` values, params dropped at function exit) + confirm the
+  whole existing suite stays green (runtime unchanged) and HIR/MIR agree.
+  Clippy clean.
 
 **Out of scope**: dynamic drop flags (rejected by design); `Drop` overriding
-(folds into Step C/E's `release`).
+(folds into Step C/E's `release`); the actual freeing behaviour (Step C makes
+`__drop_in_place` structural / calls `release`).
 
 ### Step C — `Heaped` (Unique)
 

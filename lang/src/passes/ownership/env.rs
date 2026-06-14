@@ -1,11 +1,16 @@
 //! # Ownership environment
 //! the persistent data structure threaded through the checker
 
-use im::HashMap as Map;
+// Ordered by `UniqVar` (its uniquification `idx`, assigned in a source-order
+// pre-order walk) so that iterating block-local bindings yields them in
+// declaration order — which `drop` insertion (Step B) reverses for scope-exit
+// drop order. The map is persistent, so per-branch snapshots stay cheap clones.
 use im::HashSet as Set;
+use im::OrdMap as Map;
 
 use crate::compiler::structure::Range;
 use crate::compiler::structure::UniqVar;
+use crate::lang::types::Ty;
 
 /// the ownership state of a single variable.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,6 +46,10 @@ pub struct OwnershipEnv<'tcx> {
     /// restored on exit, so borrows created inside a block are released
     /// when it closes.
     borrows: Map<UniqVar<'tcx>, BorrowState>,
+    /// the declared type of each in-scope variable, so scope-exit drop
+    /// insertion (Step B) can exempt `Copy` bindings. A variable's type is
+    /// fixed at declaration and never changes.
+    types: Map<UniqVar<'tcx>, Ty<'tcx>>,
 }
 
 impl<'tcx> OwnershipEnv<'tcx> {
@@ -52,8 +61,14 @@ impl<'tcx> OwnershipEnv<'tcx> {
     ///
     /// should be used for new declarations and for re-assignments that restore
     /// ownership
-    pub fn declare(&mut self, var: UniqVar<'tcx>) {
+    pub fn declare(&mut self, var: UniqVar<'tcx>, ty: Ty<'tcx>) {
         self.states.insert(var, OwnershipState::Owned);
+        self.types.insert(var, ty);
+    }
+
+    /// the declared type of `var`, if in scope.
+    pub fn var_ty(&self, var: &UniqVar<'tcx>) -> Option<Ty<'tcx>> {
+        self.types.get(var).copied()
     }
 
     /// look up the ownership state of `var`
@@ -127,7 +142,44 @@ impl<'tcx> OwnershipEnv<'tcx> {
                 })
                 .or_insert(*state);
         }
+        // types are identical for a var on both branches; union is enough.
+        for (var, ty) in &right.types {
+            merged.types.entry(*var).or_insert(*ty);
+        }
         merged
+    }
+
+    /// Conservative join *and* the per-branch completing drops (Step B,
+    /// Calculus §6.11). The merged env is exactly [`merge`](Self::merge); in
+    /// addition, a variable that one branch left `Owned` but the merge makes
+    /// `Moved` (because the *other* branch moved it) must be dropped on the
+    /// owning branch, so it is uniformly consumed at the join. Returns
+    /// `(merged, drop_on_left, drop_on_right)`, each drop list in
+    /// reverse-declaration order. Such candidates are always non-`Copy`: a
+    /// `Copy` value is never marked `Moved`, so it never appears here.
+    pub fn merge_with_drops(
+        left: &Self,
+        right: &Self,
+    ) -> (Self, Vec<UniqVar<'tcx>>, Vec<UniqVar<'tcx>>) {
+        let merged = Self::merge(left, right);
+        let drops_for = |branch: &Self| -> Vec<UniqVar<'tcx>> {
+            // `states` iterates in ascending `UniqVar` order (declaration
+            // order); reverse for drop order.
+            let mut vars: Vec<UniqVar<'tcx>> = merged
+                .states
+                .iter()
+                .filter(|(var, st)| {
+                    matches!(st, OwnershipState::Moved { .. })
+                        && matches!(branch.states.get(var), Some(OwnershipState::Owned))
+                })
+                .map(|(var, _)| *var)
+                .collect();
+            vars.reverse();
+            vars
+        };
+        let drop_on_left = drops_for(left);
+        let drop_on_right = drops_for(right);
+        (merged, drop_on_left, drop_on_right)
     }
 
     /// snapshot the set of variables currently in scope
@@ -139,7 +191,19 @@ impl<'tcx> OwnershipEnv<'tcx> {
     ///
     /// use on block exit to drop block-local variables from the environment
     pub fn restrict_to(&mut self, vars: &Set<UniqVar<'tcx>>) {
-        self.states.retain(|v, _| vars.contains(v));
+        // `im::OrdMap` has no `retain`; rebuild keeping only in-scope keys.
+        self.states = self
+            .states
+            .iter()
+            .filter(|(v, _)| vars.contains(*v))
+            .map(|(v, s)| (*v, s.clone()))
+            .collect();
+        self.types = self
+            .types
+            .iter()
+            .filter(|(v, _)| vars.contains(*v))
+            .map(|(v, t)| (*v, *t))
+            .collect();
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&UniqVar<'tcx>, &OwnershipState)> {

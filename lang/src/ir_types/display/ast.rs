@@ -126,7 +126,9 @@ fn dump_expr<'tcx>(out: &mut String, expr: &Expr<'tcx>, ctx: &CompileCtx<'tcx>, 
         Expression::Unit => {
             let _ = writeln!(out, "unit");
         }
-        Expression::Block { statements, expr } => {
+        Expression::Block {
+            statements, expr, ..
+        } => {
             let _ = writeln!(out, "block");
             for stmt in statements {
                 dump_statement(out, stmt, ctx, level + 1);

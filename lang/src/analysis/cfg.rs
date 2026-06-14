@@ -174,6 +174,7 @@ fn build_cfg_expr<'tcx>(
         Expression::Block {
             statements,
             expr: block_expr,
+            ..
         } => {
             let mut current_node = next;
 

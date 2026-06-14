@@ -168,6 +168,9 @@ fn execute_statement<'tcx>(
             eval_rvalue(value, ctx.types.unit, locals, prog, ctx)?;
             Ok(())
         }
+        // Drop (Step B) is a no-op until types acquire destructors (Step C);
+        // the cell's `Rc` reclaims storage when it falls out of scope.
+        Statement::Drop { .. } => Ok(()),
     }
 }
 

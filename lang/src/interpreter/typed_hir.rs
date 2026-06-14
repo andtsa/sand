@@ -177,7 +177,12 @@ impl<'tcx> TypedProgram<'tcx> {
                 eval_unop(*op, v, ctx)
             }
 
-            Expression::Block { statements, expr } => {
+            Expression::Block {
+                statements,
+                expr,
+                // drops are no-ops until Step C; the HIR interpreter ignores them.
+                ..
+            } => {
                 statements
                     .iter()
                     .try_for_each(|stmt| eval_stmt(self, stmt, env, ctx, output))?;

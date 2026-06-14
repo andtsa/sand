@@ -326,12 +326,18 @@ impl<'tcx> Mono<'tcx> {
                     args: new_args,
                 }
             }
-            Expression::Block { statements, expr } => Expression::Block {
+            Expression::Block {
+                statements,
+                expr,
+                drops,
+            } => Expression::Block {
                 statements: statements
                     .iter()
                     .map(|s| self.rewrite_stmt(ctx, s, mapping))
                     .collect(),
                 expr: expr.as_ref().map(|e| self.boxed(ctx, e, mapping)),
+                // drops name locals, which monomorphisation does not rename.
+                drops: drops.clone(),
             },
             Expression::Constructor {
                 variant_idx,

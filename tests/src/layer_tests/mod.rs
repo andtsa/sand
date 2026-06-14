@@ -13,6 +13,7 @@
 pub mod borrow_tests;
 pub mod clone_copy_tests;
 pub mod deref_tests;
+pub mod drop_tests;
 pub mod enum_tests;
 pub mod ffi_tests;
 pub mod generics_tests;
