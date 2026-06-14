@@ -22,13 +22,13 @@ fn assert_hir_mir_agree(src: &str) {
         .interpret(&ctx)
         .unwrap_or_else(|e| panic!("HIR interpret failed:\n  {e}"));
 
-    let mir = MirProgram::from_typed_program(&ast);
+    let mir = MirProgram::from_typed_program(&ast, &ctx);
     let mir_result = mir
         .interpret(&ctx)
         .unwrap_or_else(|e| panic!("MIR interpret failed:\n  {e}"));
 
     // convert MirValue → Expression for comparison
-    let mir_as_expr = mir_value_to_expr(mir_result);
+    let mir_as_expr = mir_value_to_expr(mir_result, &ctx);
 
     assert_eq!(
         hir_result, mir_as_expr,
@@ -58,7 +58,7 @@ fn agree_arithmetic_expression() {
 
 #[test]
 fn agree_chained_booleans() {
-    assert_hir_mir_agree("def main(): Bool := (1 < 2) & (3 > 2) | false");
+    assert_hir_mir_agree("def main(): Bool := (1 < 2) and (3 > 2) | false");
 }
 
 #[test]
@@ -163,7 +163,7 @@ fn agree_power_operator() {
 
 #[test]
 fn agree_complex_boolean_expression() {
-    assert_hir_mir_agree("def main(): Bool := !false & (1 == 1) | (2 != 3)");
+    assert_hir_mir_agree("def main(): Bool := !false and (1 == 1) | (2 != 3)");
 }
 
 #[test]

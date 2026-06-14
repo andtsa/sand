@@ -244,7 +244,11 @@ fn match_result_used_in_arithmetic() {
 // ── cross-module enum match
 // ───────────────────────────────────────────────────
 
-/// A match on a cross-module enum using local constructors works.
+/// A match on a cross-module enum: the scrutinee is qualified
+/// (`colors::Light#…`) and the arms use bare `#tag` patterns, which resolve
+/// against the scrutinee's type. (Under the module redesign, the foreign type
+/// name `Light` is *not* in `app`'s scope, so unqualified `Light#…` patterns
+/// would not resolve — bare tags are the idiomatic cross-module match.)
 #[test]
 fn match_cross_module_enum() {
     let val = run_mir(
@@ -254,9 +258,9 @@ fn match_cross_module_enum() {
          module app;
          def main(): Int :=
              match colors::Light#Yellow {
-                 Light#Red => 0,
-                 Light#Yellow => 1,
-                 Light#Green => 2,
+                 #Red => 0,
+                 #Yellow => 1,
+                 #Green => 2,
              }",
     );
     assert_eq!(val, MirValue::Int(1));
@@ -366,7 +370,7 @@ fn match_duplicate_pattern_is_error() {
     );
 }
 
-/// An arm after a wildcard is unreachable — type error.
+/// An arm after a wildcard is unreachable: type error.
 #[test]
 fn match_arm_after_wildcard_is_error() {
     typecheck_fails(
@@ -501,7 +505,7 @@ fn match_destructured_payload_used_in_arithmetic() {
 }
 
 /// a wildcard sub-pattern discards the payload while still requiring the
-/// tag to match — equivalent to "match this variant, ignore its payload".
+/// tag to match, equivalent to "match this variant, ignore its payload".
 #[test]
 fn match_variant_payload_wildcard() {
     let val = run_mir(
@@ -601,7 +605,7 @@ fn match_destructure_dispatches_and_binds_correct_arm() {
 // ──────────────────────────────────────────────
 
 /// duplicate bindings in the same pattern (`(x, x)`) are a uniquify error
-/// (decision D2 — mirrors Rust's E0416).
+/// (mirrors Rust's E0416).
 #[test]
 fn match_duplicate_binding_in_pattern_is_error() {
     qualify_fails(
@@ -624,7 +628,7 @@ fn match_tuple_pattern_arity_mismatch_is_error() {
 }
 
 /// a pattern that doesn't destructure a payload-carrying variant's payload
-/// is a type error — the payload must be bound or wildcarded.
+/// is a type error; the payload must be bound or wildcarded.
 #[test]
 fn match_undestructured_payload_is_error() {
     typecheck_fails(
@@ -652,7 +656,7 @@ fn match_destructure_nullary_variant_is_error() {
 }
 
 /// When nested variant arms together cover ALL inner variants the outer variant
-/// is now considered fully covered — the match is exhaustive without a
+/// is now considered fully covered. the match is exhaustive without a
 /// wildcard. (Nested exhaustiveness, todo 7.)
 #[test]
 fn match_nested_variant_all_inner_covered_is_exhaustive() {
@@ -878,7 +882,7 @@ fn match_tuple_pattern_against_non_tuple_is_error() {
 
 // ─── Int / Bool literal patterns ──────────────────────────────────────
 
-/// match on Int with literal patterns — requires a wildcard/binding catch-all.
+/// match on Int with literal patterns requires a wildcard/binding catch-all.
 #[test]
 fn match_int_literal_exhaustive_with_wildcard() {
     run_hir(

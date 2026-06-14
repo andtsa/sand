@@ -8,10 +8,10 @@ use crate::compiler::diagnostics::SdRelatedInfo;
 use crate::compiler::structure::FileRef;
 use crate::passes::type_ast::AstTypeError;
 
-pub fn type_error_to_diagnostic(
-    ctx: &CompileCtx,
+pub fn type_error_to_diagnostic<'tcx>(
+    ctx: &CompileCtx<'tcx>,
     file: FileRef,
-    err: &AstTypeError,
+    err: &AstTypeError<'tcx>,
 ) -> SandDiagnostics {
     use crate::passes::type_ast::AstTypeError::*;
     let mut diagnostics = SandDiagnostics::default();
@@ -455,6 +455,145 @@ pub fn type_error_to_diagnostic(
                 SandDiagnostic {
                     severity: DiagnosticSeverity::Error,
                     message: "the `else` expression must be a constructor of the same variant as the LHS pattern so that destructuring the fallback always succeeds".to_string(),
+                    range: *range,
+                    related: vec![],
+                    file: Some(file),
+                    ..Default::default()
+                },
+            );
+        }
+
+        CannotInferTypeArguments { enum_name, range } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    message: format!(
+                        "cannot infer the type arguments of generic enum '{enum_name}'; add a type annotation"
+                    ),
+                    range: *range,
+                    related: vec![],
+                    file: Some(file),
+                    ..Default::default()
+                },
+            );
+        }
+
+        RegionEscape { range } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    message: "borrow would escape its scope: the value it refers to does not live long enough".to_string(),
+                    range: *range,
+                    related: vec![],
+                    file: Some(file),
+                    ..Default::default()
+                },
+            );
+        }
+
+        RegionConstraintUnsatisfied {
+            longer,
+            shorter,
+            range,
+        } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    message: format!(
+                        "call does not satisfy the callee's lifetime constraint `'{longer} >= '{shorter}`"
+                    ),
+                    range: *range,
+                    related: vec![],
+                    file: Some(file),
+                    ..Default::default()
+                },
+            );
+        }
+
+        TypeclassNoInstance { class, ty, range } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    message: format!("no instance of typeclass '{class}' for type {ty}"),
+                    range: *range,
+                    related: vec![],
+                    file: Some(file),
+                    ..Default::default()
+                },
+            );
+        }
+        TypeclassCannotResolve { method, range } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    message: format!(
+                        "cannot determine the receiver type for method '{method}' from its arguments"
+                    ),
+                    range: *range,
+                    related: vec![],
+                    file: Some(file),
+                    ..Default::default()
+                },
+            );
+        }
+        TypeclassNeedsConstraint { method, range } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    message: format!(
+                        "method '{method}' is called on a type parameter not constrained by a `where` clause"
+                    ),
+                    range: *range,
+                    related: vec![],
+                    file: Some(file),
+                    ..Default::default()
+                },
+            );
+        }
+
+        MutBorrowOfImmutable { name, range } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    message: format!(
+                        "cannot mutably borrow immutable variable '{name}'; declare it `let mut {name}` (or a `mut` parameter)"
+                    ),
+                    range: *range,
+                    related: vec![],
+                    file: Some(file),
+                    ..Default::default()
+                },
+            );
+        }
+
+        DerefOfNonReference { ty, range } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    message: format!(
+                        "cannot dereference value of type {ty}: `*` requires a reference (`&T` or `&mut T`)"
+                    ),
+                    range: *range,
+                    related: vec![],
+                    file: Some(file),
+                    ..Default::default()
+                },
+            );
+        }
+        PtrOpError { message, range } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    message: format!("invalid raw-pointer operation: {message}"),
                     range: *range,
                     related: vec![],
                     file: Some(file),

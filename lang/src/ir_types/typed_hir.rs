@@ -10,6 +10,10 @@ use crate::compiler::structure::FunRef;
 use crate::compiler::structure::Map;
 use crate::compiler::structure::ModuleRef;
 use crate::compiler::structure::Range;
+use crate::compiler::structure::RegionParam;
+use crate::compiler::structure::TypeConstraint;
+use crate::compiler::structure::TypeParam;
+use crate::compiler::structure::TypeclassRef;
 use crate::compiler::structure::UniqVar;
 pub use crate::ir_types::qhir::Parameter;
 use crate::lang::intrinsics::Intrinsic;
@@ -17,27 +21,31 @@ use crate::lang::ops::*;
 use crate::lang::types::*;
 
 #[derive(Debug, Clone)]
-pub struct TypedProgram {
-    pub functions: Map<FunRef, TypedFunction>,
+pub struct TypedProgram<'tcx> {
+    pub functions: Map<FunRef<'tcx>, TypedFunction<'tcx>>,
 }
 
 #[derive(Debug, Clone)]
-pub struct TypedFunction {
-    pub name: FunRef,
+pub struct TypedFunction<'tcx> {
+    pub name: FunRef<'tcx>,
     pub range: Range,
-    pub parameters: Vec<Parameter>,
-    pub ret_type: Ty,
-    pub body: Expr,
-    pub src_module: ModuleRef,
+    pub type_params: Vec<TypeParam>,
+    pub region_params: Vec<RegionParam>,
+    pub where_constraints: Vec<RegionConstraint>,
+    pub type_constraints: Vec<TypeConstraint>,
+    pub parameters: Vec<Parameter<'tcx>>,
+    pub ret_type: Ty<'tcx>,
+    pub body: Expr<'tcx>,
+    pub src_module: ModuleRef<'tcx>,
 }
 
 #[derive(Debug, Clone)]
-pub enum Statement {
+pub enum Statement<'tcx> {
     Declaration {
-        name: UniqVar,
+        name: UniqVar<'tcx>,
         range: Range,
-        ty: Ty,
-        val: Expr,
+        ty: Ty<'tcx>,
+        val: Expr<'tcx>,
     },
 
     /// Flat tuple-pattern binding after type-checking.
@@ -46,9 +54,9 @@ pub enum Statement {
     /// MIR lowering desugars this to a temporary + per-element
     /// `RValue::Field` extractions (no change to LLVM codegen needed).
     LetTuple {
-        elems: Vec<(UniqVar, Ty, bool, Range)>,
+        elems: Vec<(UniqVar<'tcx>, Ty<'tcx>, bool, Range)>,
         range: Range,
-        val: Expr,
+        val: Expr<'tcx>,
     },
 
     /// Constructor-pattern binding with mandatory else fallback.
@@ -56,91 +64,129 @@ pub enum Statement {
     /// `let E#V(payload) = expr else fallback`
     ///
     /// The `pattern` is always a `MatchPattern::Variant` (its sub-pattern is
-    /// irrefutable — only bindings/wildcards/tuples inside). `else_branch` has
-    /// the same type as `val`; its outermost expression is guaranteed by the
-    /// type checker to be `Constructor { variant_idx == pattern.variant_idx }`.
+    /// irrefutable). `else_branch` has the same type as `val`; its outermost
+    /// expression is guaranteed by the type checker to be
+    /// `Constructor { variant_idx == pattern.variant_idx }`.
     ///
     /// MIR lowering desugars to a discriminant branch: if the discriminant
     /// matches, extract from `val`; otherwise evaluate `else_branch` and
     /// extract from that (guaranteed to succeed).
     LetPattern {
-        pattern: MatchPattern,
-        val: Expr,
-        else_branch: Expr,
+        pattern: MatchPattern<'tcx>,
+        val: Expr<'tcx>,
+        else_branch: Expr<'tcx>,
         range: Range,
     },
 
     Assignment {
-        name: UniqVar,
+        name: UniqVar<'tcx>,
         range: Range,
-        val: Expr,
+        val: Expr<'tcx>,
     },
 
-    Expr(Expr),
+    /// Write-through `*reference = value` (Calculus §3.2). `reference : &mut
+    /// T`, `value : T`.
+    DerefAssign {
+        reference: Expr<'tcx>,
+        value: Expr<'tcx>,
+        range: Range,
+    },
+
+    Expr(Expr<'tcx>),
 }
 
-/// `Expr` wraps an `Expression` and
-/// carries its expected type &
-/// start/end positions (line,col)
+/// `Expr` wraps an `Expression` and carries its type, kind, and source
+/// position. `kind` is `Owned` for ordinary expressions and `Never` for
+/// diverging ones (e.g. an infinite loop); only `expr` participates in
+/// equality/hashing (see the impls below), so `ty`/`kind` are free to differ.
 #[derive(Debug, Clone)]
-pub struct Expr {
-    pub expr: Expression,
-    pub ty: Ty,
+pub struct Expr<'tcx> {
+    pub expr: Expression<'tcx>,
+    pub ty: Ty<'tcx>,
+    pub kind: Kind,
     pub range: Range,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Expression {
+pub enum Expression<'tcx> {
     If {
-        cond: Box<Expr>,
-        t: Box<Expr>,
-        f: Box<Expr>,
+        cond: Box<Expr<'tcx>>,
+        t: Box<Expr<'tcx>>,
+        f: Box<Expr<'tcx>>,
     },
     While {
-        cond: Box<Expr>,
-        body: Box<Expr>,
+        cond: Box<Expr<'tcx>>,
+        body: Box<Expr<'tcx>>,
     },
     BinOp {
-        left: Box<Expr>,
+        left: Box<Expr<'tcx>>,
         op: Bop,
-        right: Box<Expr>,
+        right: Box<Expr<'tcx>>,
     },
     UnOp {
         op: Uop,
-        right: Box<Expr>,
+        right: Box<Expr<'tcx>>,
     },
     Call {
-        fn_name: FunRef,
-        args: Vec<Expr>,
+        fn_name: FunRef<'tcx>,
+        args: Vec<Expr<'tcx>>,
     },
     IntrinsicCall {
         fn_name: Intrinsic,
-        args: Vec<Expr>,
+        args: Vec<Expr<'tcx>>,
+        /// Explicit turbofish type arguments (Memory Step C); monomorphised
+        /// alongside the rest. Empty except for `size_of::<T>()` and friends.
+        type_args: Vec<Ty<'tcx>>,
     },
-    Var(UniqVar),
+    /// A typeclass method call whose instance is **not yet known** because the
+    /// receiver is a type parameter (under a `where T : C` bound).
+    /// Monomorphisation resolves it to a concrete `Call` once `self_ty` is
+    /// concrete (Step 10b); concrete calls are resolved to `Call` already
+    /// during type-checking, so this never survives mono.
+    MethodCall {
+        class: TypeclassRef,
+        method: String,
+        self_ty: Ty<'tcx>,
+        args: Vec<Expr<'tcx>>,
+    },
+    Var(UniqVar<'tcx>),
     Int(i64),
     Bool(bool),
     Unit,
+    /// borrow `&e` (shared) or `&mut e` (exclusive, the `bool` is `true`)
+    /// (Calculus §3.2).
+    Borrow(Box<Expr<'tcx>>, bool),
+    /// dereference `*e`: read through a reference (`&T`/`&mut T` -> T).
+    /// Transparent at runtime (borrows are erased), so it lowers like `Borrow`.
+    Deref(Box<Expr<'tcx>>),
     Block {
-        statements: Vec<Statement>,
-        expr: Option<Box<Expr>>,
+        statements: Vec<Statement<'tcx>>,
+        expr: Option<Box<Expr<'tcx>>>,
+        /// Scope-exit drops (Memory Step B, Calculus §6.11): the owned,
+        /// non-`Copy` bindings this block must drop *after* its value
+        /// is computed, in reverse declaration order. Filled by the
+        /// ownership pass (empty until then); also carries an
+        /// `if`/`match` branch's *completing* drops.
+        /// The HIR interpreter ignores it (drops are no-ops until Step C);
+        /// explicate lowers it to first-class MIR `Statement::Drop`.
+        drops: Vec<UniqVar<'tcx>>,
     },
     Constructor {
-        enum_ref: EnumRef,
+        enum_ref: EnumRef<'tcx>,
         variant_idx: usize,
-        payload: Option<Box<Expr>>,
+        payload: Option<Box<Expr<'tcx>>>,
     },
     Match {
-        scrutinee: Box<Expr>,
-        arms: Vec<TypedMatchArm>,
+        scrutinee: Box<Expr<'tcx>>,
+        arms: Vec<TypedMatchArm<'tcx>>,
     },
-    Tuple(Vec<Expr>),
+    Tuple(Vec<Expr<'tcx>>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct TypedMatchArm {
-    pub pattern: MatchPattern,
-    pub body: Expr,
+pub struct TypedMatchArm<'tcx> {
+    pub pattern: MatchPattern<'tcx>,
+    pub body: Expr<'tcx>,
     pub range: Range,
 }
 
@@ -148,28 +194,28 @@ pub struct TypedMatchArm {
 /// all constructor and tag patterns have been resolved to (EnumRef,
 /// variant_idx). wildcards are left as-is.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum MatchPattern {
+pub enum MatchPattern<'tcx> {
     Variant {
-        /// the enum type — the type of the value matched against this pattern.
+        /// the enum type
         /// Carried for the same reason `Tuple` carries its `ty` and `Binding`
         /// carries its `ty`: MIR lowering operates without `CompileCtx` access
         /// and needs the type to correctly allocate extraction temporaries when
         /// this pattern appears in a *nested* (sub-pattern) position.
-        ty: Ty,
-        enum_ref: EnumRef,
+        ty: Ty<'tcx>,
+        enum_ref: EnumRef<'tcx>,
         variant_idx: usize,
         /// `Some((payload_ty, sub_pattern))` when the pattern destructures
         /// the variant's payload. `payload_ty` is the variant's *declared*
-        /// payload type — carried here for the same reason as `ty`.
-        payload: Option<(Ty, Box<MatchPattern>)>,
+        /// payload type
+        payload: Option<(Ty<'tcx>, Box<MatchPattern<'tcx>>)>,
     },
-    /// tuple destructuring `(p1, p2, ...)`. `ty` is the tuple's own type —
+    /// tuple destructuring `(p1, p2, ...)`. `ty` is the tuple's own type,
     /// needed by MIR lowering for the same reason `Variant.payload` carries
     /// its type (typing extraction temporaries for nested destructuring,
     /// e.g. the inner tuple in `Wrap((x, y))`).
     Tuple {
-        ty: Ty,
-        elems: Vec<MatchPattern>,
+        ty: Ty<'tcx>,
+        elems: Vec<MatchPattern<'tcx>>,
     },
     /// integer literal in pattern position: `42` or `-7`.
     IntLit(i64),
@@ -177,8 +223,8 @@ pub enum MatchPattern {
     BoolLit(bool),
     /// a variable binding that destructures part of the scrutinee
     Binding {
-        var: UniqVar,
-        ty: Ty,
+        var: UniqVar<'tcx>,
+        ty: Ty<'tcx>,
         range: Range,
     },
     Wildcard,
@@ -186,7 +232,7 @@ pub enum MatchPattern {
 
 // --- trait implementations ---
 
-impl PartialEq for Statement {
+impl<'tcx> PartialEq for Statement<'tcx> {
     fn eq(&self, other: &Self) -> bool {
         use Statement::*;
         match (self, other) {
@@ -244,9 +290,9 @@ impl PartialEq for Statement {
     }
 }
 
-impl Eq for Statement {}
+impl<'tcx> Eq for Statement<'tcx> {}
 
-impl Hash for Statement {
+impl<'tcx> Hash for Statement<'tcx> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         use Statement::*;
         std::mem::discriminant(self).hash(state);
@@ -274,21 +320,27 @@ impl Hash for Statement {
                 name.hash(state);
                 val.hash(state);
             }
+            DerefAssign {
+                reference, value, ..
+            } => {
+                reference.hash(state);
+                value.hash(state);
+            }
             Expr(e) => e.hash(state),
         }
     }
 }
 
-impl PartialEq for Expr {
+impl<'tcx> PartialEq for Expr<'tcx> {
     fn eq(&self, other: &Self) -> bool {
         self.expr == other.expr
     }
 }
 
-impl Hash for Expr {
+impl<'tcx> Hash for Expr<'tcx> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.expr.hash(state);
     }
 }
 
-impl Eq for Expr {}
+impl<'tcx> Eq for Expr<'tcx> {}

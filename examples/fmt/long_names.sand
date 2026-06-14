@@ -5,8 +5,8 @@ def compute_the_absolute_maximum_value_of_two_integers(first_integer_value: Int,
     if first_integer_value > second_integer_value then first_integer_value else second_integer_value
 
 def calculate_the_greatest_common_divisor_using_euclidean_algorithm(dividend_integer: Int, divisor_integer: Int): Int := {
-    let current_dividend_value: Int = dividend_integer;
-    let current_divisor_value: Int = divisor_integer;
+    let mut current_dividend_value: Int = dividend_integer;
+    let mut current_divisor_value: Int = divisor_integer;
 
     while current_divisor_value != 0 do {
         let temporary_remainder_storage: Int = current_divisor_value;
@@ -18,11 +18,11 @@ def calculate_the_greatest_common_divisor_using_euclidean_algorithm(dividend_int
 }
 
 def determine_whether_integer_is_within_acceptable_inclusive_bounds(value_to_check_against_bounds: Int, lower_bound_inclusive: Int, upper_bound_inclusive: Int): Bool :=
-    value_to_check_against_bounds >= lower_bound_inclusive & value_to_check_against_bounds <= upper_bound_inclusive
+    value_to_check_against_bounds >= lower_bound_inclusive and value_to_check_against_bounds <= upper_bound_inclusive
 
 def accumulate_sum_of_integers_from_lower_bound_to_upper_bound_inclusive(iteration_lower_bound: Int, iteration_upper_bound: Int): Int := {
-    let accumulated_sum_of_all_integers_in_range: Int = 0;
-    let current_iteration_counter_variable: Int = iteration_lower_bound;
+    let mut accumulated_sum_of_all_integers_in_range: Int = 0;
+    let mut current_iteration_counter_variable: Int = iteration_lower_bound;
 
     while current_iteration_counter_variable <= iteration_upper_bound do {
         accumulated_sum_of_all_integers_in_range = accumulated_sum_of_all_integers_in_range + current_iteration_counter_variable;

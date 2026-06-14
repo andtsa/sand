@@ -6,9 +6,9 @@ def max(a: Int, b: Int): Int := __max(a, b)
 
 def clamp(n: Int, lo: Int, hi: Int): Int := min(max(n, lo), hi)
 
-def is_odd(n: Int): Bool := (n & 1) != 0
+def is_odd(n: Int): Bool := (n && 1) != 0
 
-def is_even(n: Int): Bool := (n & 1) == 0
+def is_even(n: Int): Bool := (n && 1) == 0
 
 def pow(base: Int, exp: Int): Int :=
     if base == 0 then 0
@@ -22,3 +22,66 @@ def pow(base: Int, exp: Int): Int :=
 def read_int(): Int := __read_int()
 
 def exit(code: Int): Unit := __exit(code)
+
+// Types that implement `Clone` can use
+// `clone(x : &T) -> T` to receive a duplicate of the borrowed value `x`.
+// `clone` returns a fresh owned value; for primitives that is just a dereference,
+// for other types it may be a deep copy.
+typeclass Clone<T> { def clone(x: &T): T }
+
+// Implementing `Copy` on a type signals to the compiler
+// that values of that type can be copied/cloned implicitly.
+typeclass Copy<T> requires Clone { }
+
+impl Clone for Int { def clone(x: &Int): Int := *x }
+impl Copy for Int { }
+
+impl Clone for Bool { def clone(x: &Bool): Bool := *x }
+impl Copy for Bool { }
+
+impl Clone for Unit { def clone(x: &Unit): Unit := *x }
+impl Copy for Unit { }
+
+// ── Heaped: the `Unique` (Box-like) allocation strategy (Memory Step C) ──────
+//
+// The compiler-internal strategy backing `deriving Heaped`. A `Unique<T>` is a
+// non-`Copy` handle owning one heap node of type `T`; the compiler lowers a
+// heaped type's construct / match / drop to `unique_alloc` / `unique_borrow`
+// (Step C.5) / `unique_release`. The allocation policy lives *here*, over the
+// Step-A `Ptr` primitives — swapping the allocator is swapping these functions.
+
+extern def malloc(size: Int): Ptr<Unit>;
+extern def free(p: Ptr<Unit>): Unit;
+
+type Unique<T> = U(Ptr<T>)
+
+// Move a value onto the heap, returning the owning handle.
+def unique_alloc<T>(value: T): Unique<T> := {
+    let p: Ptr<T> = __ptr_cast(malloc(size_of::<T>()));
+    __ptr_write(p, value);
+    Unique#U(p)
+}
+
+// Drop a handle: structurally drop the node (recursing through nested `Unique`
+// fields via the compiler's structural `__drop_in_place`), then free the
+// backing allocation. This is the *deep* release used when an owned heaped
+// value goes out of scope without being consumed.
+def unique_release<T>(handle: Unique<T>): Unit := match handle {
+    Unique#U(p) => {
+        __drop_in_place(__ptr_read(p));
+        free(__ptr_cast(p))
+    }
+}
+
+// Move the node out of a handle and free *only* the backing cell (a shallow
+// release): the node value is returned by move, so its fields become the
+// caller's responsibility. This backs a consuming `match` on a heaped value —
+// the node is read onto the stack and destructured, its bound fields moving to
+// the arm bindings while the husk allocation is reclaimed here.
+def unique_take<T>(handle: Unique<T>): T := match handle {
+    Unique#U(p) => {
+        let value: T = __ptr_read(p);
+        free(__ptr_cast(p));
+        value
+    }
+}

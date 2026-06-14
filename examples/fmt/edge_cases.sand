@@ -19,7 +19,7 @@ def empty_then_branch(flag: Bool, x: Int): Int :=
 def unit_block(): Unit := {
     0;
     1;
-    0
+    0;
 }
 
 // operators with no spaces

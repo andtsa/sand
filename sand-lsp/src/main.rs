@@ -3,6 +3,7 @@
 pub mod annotate;
 pub mod backend;
 pub mod diagnostics;
+pub mod goto_definition;
 pub mod hover;
 pub mod lsp;
 pub mod protocol;

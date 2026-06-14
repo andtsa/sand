@@ -134,7 +134,7 @@ fn parse_comparison_operators() {
 
 #[test]
 fn parse_boolean_operators() {
-    parse("def f(a: Bool, b: Bool): Bool := a & b");
+    parse("def f(a: Bool, b: Bool): Bool := a and b");
     parse("def f(a: Bool, b: Bool): Bool := a | b");
     parse("def f(a: Bool, b: Bool): Bool := a # b");
 }
@@ -192,6 +192,31 @@ fn parse_multiple_functions() {
         "def a(): Int := 1
          def b(): Int := 2
          def main(): Int := a()",
+    );
+}
+
+// ── keyword-prefixed type names ───────────────────────────────────────
+
+#[test]
+fn parse_type_name_with_keyword_prefix() {
+    // A type name that begins with a primitive-type keyword (`Int`) must lex
+    // as a single identifier, not as the `Int` keyword followed by a stray
+    // `List` suffix. Regression test for the greedy keyword match in the
+    // `core_type` grammar rule.
+    parse(
+        "type IntList = Nil | Cons((Int, IntList)) deriving Heaped
+         def main(): Int := 0",
+    );
+}
+
+#[test]
+fn parse_type_names_with_each_keyword_prefix() {
+    // The same word-boundary requirement applies to every primitive keyword
+    // (`Bool`, `Unit`), not just `Int`.
+    parse(
+        "type Boolean = T | F
+         type Unite = One | Two
+         def f(x: Boolean, y: Unite): Int := 0",
     );
 }
 

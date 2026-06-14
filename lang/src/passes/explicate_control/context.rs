@@ -10,25 +10,34 @@ use crate::ir_types::typed_hir as th;
 use crate::lang::ops::Bop;
 use crate::lang::ops::CompOp;
 use crate::lang::ops::Uop;
+use crate::lang::types::CommonTypes;
+use crate::lang::types::Kind;
 use crate::lang::types::Ty;
 
-pub(super) struct FnCx {
+pub(super) struct FnCx<'tcx> {
     #[allow(dead_code)]
-    name: FunRef,
+    name: FunRef<'tcx>,
     #[allow(dead_code)]
     range: Range,
     #[allow(dead_code)]
-    ret_type: Ty,
+    ret_type: Ty<'tcx>,
 
-    pub(super) locals: Vec<LocalDecl>,
-    local_map: Map<UniqVar, LocalId>,
+    pub(super) locals: Vec<LocalDecl<'tcx>>,
+    local_map: Map<UniqVar<'tcx>, LocalId>,
 
-    pub(super) blocks: Vec<BasicBlock>,
+    pub(super) blocks: Vec<BasicBlock<'tcx>>,
     next_temp: usize,
+
+    types: CommonTypes<'tcx>,
 }
 
-impl FnCx {
-    pub(super) fn new(name: FunRef, range: Range, ret_type: Ty) -> Self {
+impl<'tcx> FnCx<'tcx> {
+    pub(super) fn new(
+        name: FunRef<'tcx>,
+        range: Range,
+        ret_type: Ty<'tcx>,
+        types: CommonTypes<'tcx>,
+    ) -> Self {
         Self {
             name,
             range,
@@ -37,12 +46,13 @@ impl FnCx {
             local_map: Map::new(),
             blocks: Vec::new(),
             next_temp: 0,
+            types,
         }
     }
 
     pub(super) fn new_block(
         &mut self,
-        statements: Vec<Statement>,
+        statements: Vec<Statement<'tcx>>,
         terminator: Terminator,
     ) -> BlockId {
         let id = BlockId(self.blocks.len());
@@ -67,7 +77,7 @@ impl FnCx {
     pub(super) fn set_block(
         &mut self,
         id: BlockId,
-        statements: Vec<Statement>,
+        statements: Vec<Statement<'tcx>>,
         terminator: Terminator,
     ) {
         self.blocks[id.0] = BasicBlock {
@@ -77,7 +87,12 @@ impl FnCx {
         };
     }
 
-    pub(super) fn get_or_create_local(&mut self, name: UniqVar, ty: Ty, range: Range) -> LocalId {
+    pub(super) fn get_or_create_local(
+        &mut self,
+        name: UniqVar<'tcx>,
+        ty: Ty<'tcx>,
+        range: Range,
+    ) -> LocalId {
         if let Some(id) = self.local_map.get(&name) {
             return *id;
         }
@@ -93,7 +108,7 @@ impl FnCx {
         id
     }
 
-    pub(super) fn fresh_temp(&mut self, hint: &'static str, ty: Ty, range: Range) -> LocalId {
+    pub(super) fn fresh_temp(&mut self, hint: &'static str, ty: Ty<'tcx>, range: Range) -> LocalId {
         let id = LocalId(self.locals.len());
         let name = LocalName::Temp(self.next_temp, hint);
         self.next_temp += 1;
@@ -108,10 +123,10 @@ impl FnCx {
     }
 
     pub(super) fn place(local: LocalId) -> Place {
-        Place { local }
+        Place::local(local)
     }
 
-    pub(super) fn const_operand(expr: &th::Expr) -> Option<Operand> {
+    pub(super) fn const_operand(expr: &th::Expr<'_>) -> Option<Operand> {
         match &expr.expr {
             th::Expression::Int(i) => Some(Operand::Const(Constant::Int(*i))),
             th::Expression::Bool(b) => Some(Operand::Const(Constant::Bool(*b))),
@@ -122,7 +137,7 @@ impl FnCx {
         }
     }
 
-    pub(super) fn var_operand(&self, name: &UniqVar) -> Operand {
+    pub(super) fn var_operand(&self, name: &UniqVar<'tcx>) -> Operand {
         let local = *self
             .local_map
             .get(name)
@@ -130,7 +145,7 @@ impl FnCx {
         Operand::Copy(Self::place(local))
     }
 
-    pub(super) fn simple_operand(&self, expr: &th::Expr) -> Option<Operand> {
+    pub(super) fn simple_operand(&self, expr: &th::Expr<'tcx>) -> Option<Operand> {
         if let Some(c) = Self::const_operand(expr) {
             return Some(c);
         }
@@ -141,7 +156,12 @@ impl FnCx {
         }
     }
 
-    pub(super) fn assign_stmt(&self, dst: LocalId, value: RValue, range: Range) -> Statement {
+    pub(super) fn assign_stmt(
+        &self,
+        dst: LocalId,
+        value: RValue<'tcx>,
+        range: Range,
+    ) -> Statement<'tcx> {
         Statement::Assign {
             dst: Self::place(dst),
             value,
@@ -151,6 +171,36 @@ impl FnCx {
 
     pub(super) fn goto_block(&mut self, target: BlockId) -> BlockId {
         self.new_block(Vec::new(), Terminator::Goto { target })
+    }
+
+    /// Lower a block's scope-exit `drops` (Step B) to MIR `Statement::Drop`s,
+    /// one per variable, in the order given (already reverse-declaration
+    /// order).
+    fn drop_stmts(&self, drops: &[UniqVar<'tcx>], range: Range) -> Vec<Statement<'tcx>> {
+        drops
+            .iter()
+            .map(|v| {
+                let local = *self
+                    .local_map
+                    .get(v)
+                    .unwrap_or_else(|| internal_bug!("missing local for dropped variable {v:?}"));
+                Statement::Drop {
+                    place: Place::local(local),
+                    range,
+                }
+            })
+            .collect()
+    }
+
+    /// A continuation that runs `drops` then jumps to `cont` — used to drop a
+    /// block's bindings *after* its value flows to `cont`. Returns `cont`
+    /// unchanged when there is nothing to drop.
+    fn drop_cont(&mut self, drops: &[UniqVar<'tcx>], range: Range, cont: BlockId) -> BlockId {
+        if drops.is_empty() {
+            return cont;
+        }
+        let stmts = self.drop_stmts(drops, range);
+        self.new_block(stmts, Terminator::Goto { target: cont })
     }
 
     pub(super) fn unit_assign_then_goto(
@@ -180,10 +230,10 @@ impl FnCx {
     /// why that's necessary.
     pub(super) fn lower_pattern_bindings(
         &mut self,
-        pattern: &th::MatchPattern,
+        pattern: &th::MatchPattern<'tcx>,
         source: Operand,
         range: Range,
-        statements: &mut Vec<Statement>,
+        statements: &mut Vec<Statement<'tcx>>,
     ) {
         match pattern {
             th::MatchPattern::Wildcard
@@ -231,11 +281,11 @@ impl FnCx {
     /// the checks passed).
     pub(super) fn lower_projected_pattern(
         &mut self,
-        pattern: &th::MatchPattern,
+        pattern: &th::MatchPattern<'tcx>,
         base: Operand,
         index: usize,
         range: Range,
-        statements: &mut Vec<Statement>,
+        statements: &mut Vec<Statement<'tcx>>,
     ) {
         let field = RValue::Field { base, index };
         match pattern {
@@ -324,7 +374,7 @@ impl FnCx {
     /// ```
     fn build_arm_check_chain(
         &mut self,
-        pattern: &th::MatchPattern,
+        pattern: &th::MatchPattern<'tcx>,
         value_tmp: LocalId,
         arm_bb: BlockId,
         fallthrough_bb: BlockId,
@@ -337,7 +387,7 @@ impl FnCx {
             | th::MatchPattern::Tuple { .. } => arm_bb,
 
             th::MatchPattern::IntLit(n) => {
-                let cmp_tmp = self.fresh_temp("match_int_cmp", Ty::BOOL, range);
+                let cmp_tmp = self.fresh_temp("match_int_cmp", self.types.bool, range);
                 self.new_block(
                     vec![self.assign_stmt(
                         cmp_tmp,
@@ -357,7 +407,7 @@ impl FnCx {
             }
 
             th::MatchPattern::BoolLit(b) => {
-                let cmp_tmp = self.fresh_temp("match_bool_cmp", Ty::BOOL, range);
+                let cmp_tmp = self.fresh_temp("match_bool_cmp", self.types.bool, range);
                 self.new_block(
                     vec![self.assign_stmt(
                         cmp_tmp,
@@ -417,8 +467,8 @@ impl FnCx {
                 };
 
                 // Build the outer discriminant check.
-                let disc_tmp = self.fresh_temp("match_disc", Ty::INT, range);
-                let cmp_tmp = self.fresh_temp("match_cmp", Ty::BOOL, range);
+                let disc_tmp = self.fresh_temp("match_disc", self.types.int, range);
+                let cmp_tmp = self.fresh_temp("match_cmp", self.types.bool, range);
                 self.new_block(
                     vec![
                         self.assign_stmt(
@@ -449,7 +499,13 @@ impl FnCx {
         }
     }
 
-    pub(super) fn lower_tail(&mut self, expr: &th::Expr) -> BlockId {
+    pub(super) fn lower_tail(&mut self, expr: &th::Expr<'tcx>) -> BlockId {
+        // A diverging expression never returns: lower it for its effects and
+        // terminate the path as unreachable (no value is produced).
+        if expr.kind == Kind::Never {
+            let unreachable = self.new_block(Vec::new(), Terminator::Unreachable);
+            return self.lower_effect(expr, unreachable);
+        }
         match &expr.expr {
             th::Expression::If { cond, t, f } => {
                 let then_bb = self.lower_tail(t);
@@ -457,8 +513,12 @@ impl FnCx {
                 self.lower_pred(cond, then_bb, else_bb)
             }
 
-            th::Expression::Block { statements, expr } => {
-                let cont = if let Some(e) = expr {
+            th::Expression::Block {
+                statements,
+                expr: inner,
+                drops,
+            } if drops.is_empty() => {
+                let cont = if let Some(e) = inner {
                     self.lower_tail(e)
                 } else {
                     self.new_block(Vec::new(), Terminator::Return { value: None })
@@ -466,7 +526,35 @@ impl FnCx {
                 self.lower_statements(statements, cont)
             }
 
-            _ if expr.ty == Ty::UNIT => {
+            // A block with scope-exit drops: the value must be computed *before*
+            // the drops run, and the drops *before* the `Return`. Route the value
+            // through a temp (non-unit) or as an effect (unit), then drop, then
+            // return — so the drops land between value and `Return`.
+            th::Expression::Block {
+                statements,
+                expr: inner,
+                drops,
+            } => {
+                let drop_then_return = |cx: &mut Self, value: Option<Operand>| {
+                    let stmts = cx.drop_stmts(drops, expr.range);
+                    cx.new_block(stmts, Terminator::Return { value })
+                };
+                let cont = match inner {
+                    Some(e) if expr.ty != self.types.unit => {
+                        let tmp = self.fresh_temp("tail_block_tmp", e.ty, e.range);
+                        let ret = drop_then_return(self, Some(Operand::Copy(Self::place(tmp))));
+                        self.lower_assign(e, tmp, ret)
+                    }
+                    Some(e) => {
+                        let ret = drop_then_return(self, None);
+                        self.lower_effect(e, ret)
+                    }
+                    None => drop_then_return(self, None),
+                };
+                self.lower_statements(statements, cont)
+            }
+
+            _ if expr.ty == self.types.unit => {
                 let ret = self.new_block(Vec::new(), Terminator::Return { value: None });
                 self.lower_effect(expr, ret)
             }
@@ -486,7 +574,7 @@ impl FnCx {
 
     pub(super) fn lower_statements(
         &mut self,
-        statements: &[th::Statement],
+        statements: &[th::Statement<'tcx>],
         cont: BlockId,
     ) -> BlockId {
         statements
@@ -495,7 +583,7 @@ impl FnCx {
             .fold(cont, |k, stmt| self.lower_statement(stmt, k))
     }
 
-    pub(super) fn lower_statement(&mut self, stmt: &th::Statement, cont: BlockId) -> BlockId {
+    pub(super) fn lower_statement(&mut self, stmt: &th::Statement<'tcx>, cont: BlockId) -> BlockId {
         match stmt {
             th::Statement::Declaration {
                 name,
@@ -510,6 +598,35 @@ impl FnCx {
             th::Statement::Assignment { name, range, val } => {
                 let dst = self.get_or_create_local(*name, val.ty, *range);
                 self.lower_assign(val, dst, cont)
+            }
+
+            // `*reference = value`: evaluate `value` into a temp, then store it
+            // *through* the reference — `Assign { dst: Place::deref(ref), .. }`.
+            th::Statement::DerefAssign {
+                reference,
+                value,
+                range,
+            } => {
+                let value_tmp = self.fresh_temp("deref_assign_val", value.ty, *range);
+                let ref_is_var = matches!(reference.expr, th::Expression::Var(_));
+                let ref_local = match &reference.expr {
+                    th::Expression::Var(v) => {
+                        self.get_or_create_local(*v, reference.ty, reference.range)
+                    }
+                    _ => self.fresh_temp("deref_assign_ref", reference.ty, reference.range),
+                };
+                let store = Statement::Assign {
+                    dst: Place::deref(ref_local),
+                    value: RValue::Use(Operand::Copy(Self::place(value_tmp))),
+                    range: *range,
+                };
+                let store_bb = self.new_block(vec![store], Terminator::Goto { target: cont });
+                let after_val = self.lower_assign(value, value_tmp, store_bb);
+                if ref_is_var {
+                    after_val
+                } else {
+                    self.lower_assign(reference, ref_local, after_val)
+                }
             }
 
             th::Statement::LetTuple { elems, range, val } => {
@@ -592,8 +709,8 @@ impl FnCx {
                 let else_bb = self.lower_assign(else_branch, fallback_tmp, after_extract_bb);
 
                 // ── discriminant check: disc == variant_idx ──────────────────────────────
-                let disc_tmp = self.fresh_temp("let_pattern_disc", Ty::INT, *range);
-                let cmp_tmp = self.fresh_temp("let_pattern_cmp", Ty::BOOL, *range);
+                let disc_tmp = self.fresh_temp("let_pattern_disc", self.types.int, *range);
+                let cmp_tmp = self.fresh_temp("let_pattern_cmp", self.types.bool, *range);
                 let check_bb = self.new_block(
                     vec![
                         self.assign_stmt(
@@ -629,8 +746,57 @@ impl FnCx {
         }
     }
 
-    pub(super) fn lower_assign(&mut self, expr: &th::Expr, dst: LocalId, cont: BlockId) -> BlockId {
+    pub(super) fn lower_assign(
+        &mut self,
+        expr: &th::Expr<'tcx>,
+        dst: LocalId,
+        cont: BlockId,
+    ) -> BlockId {
+        // A diverging expression never produces a value to assign: lower it for
+        // effects and leave the destination/continuation unreachable.
+        if expr.kind == Kind::Never {
+            let unreachable = self.new_block(Vec::new(), Terminator::Unreachable);
+            return self.lower_effect(expr, unreachable);
+        }
         match &expr.expr {
+            // `&inner` (Calculus §3.2): a real pointer (R2) to the referent's
+            // storage. A borrow of a *variable* points at that variable's local;
+            // a borrow of a *temporary* materialises it into a fresh local first,
+            // then points at that. The inverse of a `*` (`[Deref]`) projection.
+            th::Expression::Borrow(inner, _) => {
+                if let th::Expression::Var(v) = &inner.expr {
+                    let local = self.get_or_create_local(*v, inner.ty, inner.range);
+                    let stmt = self.assign_stmt(dst, RValue::Ref(Self::place(local)), expr.range);
+                    self.new_block(vec![stmt], Terminator::Goto { target: cont })
+                } else {
+                    let tmp = self.fresh_temp("borrow_operand", inner.ty, inner.range);
+                    let stmt = self.assign_stmt(dst, RValue::Ref(Self::place(tmp)), expr.range);
+                    let assign = self.new_block(vec![stmt], Terminator::Goto { target: cont });
+                    self.lower_assign(inner, tmp, assign)
+                }
+            }
+            // `*inner` (Calculus §3.2): a load through the reference — a `[Deref]`
+            // place reads the value the reference points at.
+            th::Expression::Deref(inner) => {
+                if let th::Expression::Var(v) = &inner.expr {
+                    let local = self.get_or_create_local(*v, inner.ty, inner.range);
+                    let stmt = self.assign_stmt(
+                        dst,
+                        RValue::Use(Operand::Copy(Place::deref(local))),
+                        expr.range,
+                    );
+                    self.new_block(vec![stmt], Terminator::Goto { target: cont })
+                } else {
+                    let tmp = self.fresh_temp("deref_operand", inner.ty, inner.range);
+                    let stmt = self.assign_stmt(
+                        dst,
+                        RValue::Use(Operand::Copy(Place::deref(tmp))),
+                        expr.range,
+                    );
+                    let assign = self.new_block(vec![stmt], Terminator::Goto { target: cont });
+                    self.lower_assign(inner, tmp, assign)
+                }
+            }
             th::Expression::If { cond, t, f } => {
                 let then_bb = self.lower_assign(t, dst, cont);
                 let else_bb = self.lower_assign(f, dst, cont);
@@ -645,11 +811,14 @@ impl FnCx {
             th::Expression::Block {
                 statements,
                 expr: inner_expr,
+                drops,
             } => {
+                // drops run after the block's value is assigned, before `cont`.
+                let after = self.drop_cont(drops, expr.range, cont);
                 let k = if let Some(e) = inner_expr {
-                    self.lower_assign(e, dst, cont)
+                    self.lower_assign(e, dst, after)
                 } else {
-                    self.unit_assign_then_goto(dst, expr.range, cont)
+                    self.unit_assign_then_goto(dst, expr.range, after)
                 };
                 self.lower_statements(statements, k)
             }
@@ -792,7 +961,18 @@ impl FnCx {
                     .fold(final_bb, |k, (arg, tmp)| self.lower_assign(arg, tmp, k))
             }
 
-            th::Expression::IntrinsicCall { fn_name, args } => {
+            th::Expression::IntrinsicCall {
+                fn_name,
+                args,
+                type_args,
+            } if fn_name.is_type_arg_intrinsic() => {
+                // `size_of::<T>()` — no value args; assign the size directly
+                // (the concrete type is carried on `RValue::SizeOf`).
+                let stmt = self.assign_stmt(dst, RValue::SizeOf(type_args[0]), expr.range);
+                self.new_block(vec![stmt], Terminator::Goto { target: cont })
+            }
+
+            th::Expression::IntrinsicCall { fn_name, args, .. } => {
                 let arg_temps = args
                     .iter()
                     .map(|a| self.fresh_temp("assign_intrinsic_call_argument", a.ty, a.range))
@@ -819,6 +999,13 @@ impl FnCx {
                     .zip(arg_temps)
                     .rev()
                     .fold(final_bb, |k, (arg, tmp)| self.lower_assign(arg, tmp, k))
+            }
+
+            // Typeclass method calls are resolved to concrete `Call`s by the type
+            // checker (concrete) or monomorphisation (generic), so none survive
+            // into explication.
+            th::Expression::MethodCall { .. } => {
+                internal_bug!("typeclass method call survived monomorphisation")
             }
 
             th::Expression::Match { scrutinee, arms } => {
@@ -888,7 +1075,7 @@ impl FnCx {
         }
     }
 
-    pub(super) fn lower_effect(&mut self, expr: &th::Expr, cont: BlockId) -> BlockId {
+    pub(super) fn lower_effect(&mut self, expr: &th::Expr<'tcx>, cont: BlockId) -> BlockId {
         match &expr.expr {
             th::Expression::If { cond, t, f } => {
                 let then_bb = self.lower_effect(t, cont);
@@ -912,11 +1099,16 @@ impl FnCx {
                 loop_head
             }
 
-            th::Expression::Block { statements, expr } => {
-                let k = if let Some(e) = expr {
-                    self.lower_effect(e, cont)
+            th::Expression::Block {
+                statements,
+                expr: inner,
+                drops,
+            } => {
+                let after = self.drop_cont(drops, expr.range, cont);
+                let k = if let Some(e) = inner {
+                    self.lower_effect(e, after)
                 } else {
-                    cont
+                    after
                 };
                 self.lower_statements(statements, k)
             }
@@ -947,7 +1139,13 @@ impl FnCx {
                     .fold(final_bb, |k, (arg, tmp)| self.lower_assign(arg, tmp, k))
             }
 
-            th::Expression::IntrinsicCall { fn_name, args } => {
+            // `size_of::<T>()` is pure; in effect position its value is
+            // discarded, so it lowers to nothing.
+            th::Expression::IntrinsicCall { fn_name, .. } if fn_name.is_type_arg_intrinsic() => {
+                cont
+            }
+
+            th::Expression::IntrinsicCall { fn_name, args, .. } => {
                 let arg_temps = args
                     .iter()
                     .map(|a| self.fresh_temp("effect_intrinsic_call_argument", a.ty, a.range))
@@ -982,7 +1180,7 @@ impl FnCx {
 
     pub(super) fn lower_pred(
         &mut self,
-        expr: &th::Expr,
+        expr: &th::Expr<'tcx>,
         then_bb: BlockId,
         else_bb: BlockId,
     ) -> BlockId {
@@ -996,11 +1194,32 @@ impl FnCx {
                 self.lower_pred(cond, t_bb, f_bb)
             }
 
-            th::Expression::Block { statements, expr } => {
-                let last = expr.as_ref().map(|e| &**e).unwrap_or_else(|| {
+            th::Expression::Block {
+                statements,
+                expr: inner,
+                drops,
+            } => {
+                let last = inner.as_ref().map(|e| &**e).unwrap_or_else(|| {
                     internal_bug!("block in predicate position should have a final expression")
                 });
-                let k = self.lower_pred(last, then_bb, else_bb);
+                let k = if drops.is_empty() {
+                    self.lower_pred(last, then_bb, else_bb)
+                } else {
+                    // Compute the predicate into a temp, run the block's drops,
+                    // then branch — so drops land after the value, before the
+                    // branch on it.
+                    let tmp = self.fresh_temp("pred_block_tmp", last.ty, last.range);
+                    let stmts = self.drop_stmts(drops, expr.range);
+                    let br = self.new_block(
+                        stmts,
+                        Terminator::Branch {
+                            cond: Operand::Copy(Self::place(tmp)),
+                            then_bb,
+                            else_bb,
+                        },
+                    );
+                    self.lower_assign(last, tmp, br)
+                };
                 self.lower_statements(statements, k)
             }
 
@@ -1017,7 +1236,7 @@ impl FnCx {
                 let l_tmp = self.fresh_temp("pred_binop_left", left.ty, left.range);
                 let r_tmp = self.fresh_temp("pred_binop_right", right.ty, right.range);
 
-                let cmp_tmp = self.fresh_temp("pred_binop_comp", Ty::BOOL, expr.range);
+                let cmp_tmp = self.fresh_temp("pred_binop_comp", self.types.bool, expr.range);
 
                 let branch_bb = self.new_block(
                     Vec::new(),

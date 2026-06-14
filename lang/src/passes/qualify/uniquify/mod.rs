@@ -18,7 +18,7 @@ struct UniqCtx<'uniq, 'run> {
     /// Each scope is represented as a Map from original names to renamed
     /// names and are stored in a stack-like vector, where the last element
     /// is the current scope.
-    var_scopes: Vec<Map<String, UniqVar>>,
+    var_scopes: Vec<Map<String, UniqVar<'run>>>,
 
     compile_ctx: &'uniq mut CompileCtx<'run>,
 }
@@ -53,7 +53,7 @@ impl<'uniq, 'run> UniqCtx<'uniq, 'run> {
     /// * 'name' - The original identifier to bind.
     /// # Returns
     /// The newly generated unique identifier
-    fn bind_var(&mut self, name: &HirVar) -> UniqVar {
+    fn bind_var(&mut self, name: &HirVar<'run>) -> UniqVar<'run> {
         let ovref = match name {
             HirVar::Decl(ovref) => *ovref,
             x => internal_bug!("uniquify binding a non-declaration {x:?}"),
@@ -73,7 +73,7 @@ impl<'uniq, 'run> UniqCtx<'uniq, 'run> {
     /// # Returns
     /// The currently active unique name for that identifier, or None if not
     /// bound.
-    pub fn lookup_var_opt(&self, name: &HirVar) -> Option<UniqVar> {
+    pub fn lookup_var_opt(&self, name: &HirVar<'run>) -> Option<UniqVar<'run>> {
         let HirVar::Unqualified(str_name) = name else {
             internal_bug!("uniquify tried resolving {name:?}");
         };
@@ -85,7 +85,7 @@ impl<'uniq, 'run> UniqCtx<'uniq, 'run> {
         None
     }
 
-    pub fn display_hir_var(&self, hv: &HirVar) -> String {
+    pub fn display_hir_var(&self, hv: &HirVar<'run>) -> String {
         match hv {
             HirVar::Decl(ovref) => self.compile_ctx.original_var_name(ovref),
             HirVar::Uniq(uv) => self.compile_ctx.uniq_variable_name(uv),
@@ -95,13 +95,13 @@ impl<'uniq, 'run> UniqCtx<'uniq, 'run> {
 }
 
 /// Offers the uniquify pass publicly via Program::uniquify
-impl ProgramModule {
+impl<'tcx> ProgramModule<'tcx> {
     /// Produces a version of the program where all variable and function names
     /// are unique.
     /// # Returns
     /// A new Program AST with all its names uniquified but with the same
     /// functionality.
-    pub fn uniquify<'run>(&self, ctx: &mut CompileCtx<'run>) -> Result<Self, UniquifyError> {
+    pub fn uniquify(&self, ctx: &mut CompileCtx<'tcx>) -> Result<Self, UniquifyError> {
         let mut u = UniqCtx::new(ctx);
 
         let mut functions = Vec::new();
@@ -124,7 +124,10 @@ impl ProgramModule {
 /// * 'u' - The entire current Context.
 /// # Returns
 /// A new Function`AST with all identifiers uniquely renamed.
-fn uniquify_function(f: &Function, u: &mut UniqCtx) -> Result<Function, UniquifyError> {
+fn uniquify_function<'tcx>(
+    f: &Function<'tcx>,
+    u: &mut UniqCtx<'_, 'tcx>,
+) -> Result<Function<'tcx>, UniquifyError> {
     u.enter_scope();
 
     let span = tracing::trace_span!(
@@ -134,7 +137,7 @@ fn uniquify_function(f: &Function, u: &mut UniqCtx) -> Result<Function, Uniquify
     let _enter = span.enter();
 
     let mut seen = Map::new();
-    let mut parameters: Vec<Parameter> = Vec::new();
+    let mut parameters: Vec<Parameter<'tcx>> = Vec::new();
     for p in &f.parameters {
         tracing::trace!("parameter {p:?}");
         if let HirVar::Decl(x) = &p.name {
@@ -167,6 +170,10 @@ fn uniquify_function(f: &Function, u: &mut UniqCtx) -> Result<Function, Uniquify
     Ok(Function {
         name: f.name,
         range: f.range,
+        type_params: f.type_params.clone(),
+        region_params: f.region_params.clone(),
+        where_constraints: f.where_constraints.clone(),
+        type_constraints: f.type_constraints.clone(),
         parameters,
         ret_type: f.ret_type,
         body,
@@ -179,7 +186,10 @@ fn uniquify_function(f: &Function, u: &mut UniqCtx) -> Result<Function, Uniquify
 /// * 'u' - The entire current Context.
 /// # Returns
 /// A new 'Expr' with all identifiers renamed according to scope rules.
-fn uniquify_expr(e: &Expr, u: &mut UniqCtx) -> Result<Expr, UniquifyError> {
+fn uniquify_expr<'tcx>(
+    e: &Expr<'tcx>,
+    u: &mut UniqCtx<'_, 'tcx>,
+) -> Result<Expr<'tcx>, UniquifyError> {
     match &e.expr {
         // `Var` is a leaf that nonetheless needs rewriting: look up its
         // current unique binding in the scope stack (or fail if unbound).
@@ -275,11 +285,11 @@ fn uniquify_expr(e: &Expr, u: &mut UniqCtx) -> Result<Expr, UniquifyError> {
 /// `UniquifyError::DuplicateBindingInPattern`. All other nodes are recursed
 /// into structurally and otherwise passed through unchanged (their
 /// `type_name`/`variant` string fields are resolved later, in `qualify`).
-fn uniquify_pattern(
-    pattern: &HirPattern,
-    u: &mut UniqCtx,
+fn uniquify_pattern<'tcx>(
+    pattern: &HirPattern<'tcx>,
+    u: &mut UniqCtx<'_, 'tcx>,
     seen: &mut Map<String, crate::compiler::structure::Range>,
-) -> Result<HirPattern, UniquifyError> {
+) -> Result<HirPattern<'tcx>, UniquifyError> {
     match pattern {
         HirPattern::Constructor {
             type_name,
@@ -337,7 +347,10 @@ fn uniquify_pattern(
 /// * 'u' - The entire current Context.
 /// # Returns
 /// A new Statement with variable names uniquely renamed
-fn uniquify_stmt(stmt: &Statement, u: &mut UniqCtx) -> Result<Statement, UniquifyError> {
+fn uniquify_stmt<'tcx>(
+    stmt: &Statement<'tcx>,
+    u: &mut UniqCtx<'_, 'tcx>,
+) -> Result<Statement<'tcx>, UniquifyError> {
     match stmt {
         Statement::Declaration {
             name,
@@ -374,6 +387,16 @@ fn uniquify_stmt(stmt: &Statement, u: &mut UniqCtx) -> Result<Statement, Uniquif
                 val,
             })
         }
+
+        Statement::DerefAssign {
+            reference,
+            value,
+            range,
+        } => Ok(Statement::DerefAssign {
+            reference: uniquify_expr(reference, u)?,
+            value: uniquify_expr(value, u)?,
+            range: *range,
+        }),
 
         Statement::LetTuple {
             elems,

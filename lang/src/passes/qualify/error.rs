@@ -7,30 +7,30 @@ use crate::compiler::structure::Range;
 use crate::passes::qualify::uniquify::error::UniquifyError;
 
 #[derive(Debug, Error)]
-pub enum QualifyError {
+pub enum QualifyError<'tcx> {
     #[error("found two modules with the same name: {0}")]
-    DuplicateModule(ModuleInfo),
+    DuplicateModule(ModuleInfo<'tcx>),
 
     #[error(
         "found two functions with the same name: {name} at {first_instance} and {second_instance} in module {module}"
     )]
     DuplicateFunction {
         name: String,
-        module: ModuleInfo,
+        module: ModuleInfo<'tcx>,
         first_instance: Range,
         second_instance: Range,
     },
 
     #[error("error uniquifying module {module}: {source}")]
     UniquifyError {
-        module: ModuleInfo,
+        module: ModuleInfo<'tcx>,
         source: UniquifyError,
     },
 
     #[error("module {module} was not found")]
     ModuleNotFound {
         module: String,
-        source_module: ModuleInfo,
+        source_module: ModuleInfo<'tcx>,
         range: Range,
     },
 
@@ -38,7 +38,7 @@ pub enum QualifyError {
     FunctionQualFailedModuleNotFound {
         func: String,
         module: String,
-        source_module: ModuleInfo,
+        source_module: ModuleInfo<'tcx>,
         range: Range,
     },
 
@@ -46,8 +46,8 @@ pub enum QualifyError {
     #[error("could not find function {func} in module {module}")]
     FunctionQualFailedFunctionNotFound {
         func: String,
-        module: ModuleInfo,
-        source_module: ModuleInfo,
+        module: ModuleInfo<'tcx>,
+        source_module: ModuleInfo<'tcx>,
         range: Range,
     },
 
@@ -55,15 +55,15 @@ pub enum QualifyError {
     DuplicateMain {
         first: Range,
         second: Range,
-        first_module: ModuleInfo,
-        second_module: ModuleInfo,
+        first_module: ModuleInfo<'tcx>,
+        second_module: ModuleInfo<'tcx>,
     },
 
     #[error("unknown enum type '{name}' used in constructor expression at {range}")]
     UnknownConstructorType {
         name: String,
         range: Range,
-        source_module: ModuleInfo,
+        source_module: ModuleInfo<'tcx>,
     },
 
     #[error("unknown variant '{variant}' on enum type '{type_name}' at {range}")]
@@ -71,19 +71,28 @@ pub enum QualifyError {
         type_name: String,
         variant: String,
         range: Range,
-        source_module: ModuleInfo,
+        source_module: ModuleInfo<'tcx>,
     },
 
     #[error("unknown enum type '{name}' used in match pattern at {range}")]
     UnknownPatternType {
         name: String,
         range: Range,
-        source_module: ModuleInfo,
+        source_module: ModuleInfo<'tcx>,
+    },
+
+    #[error(
+        "explicit type arguments (`::<…>`) on '{func}' at {range} are not supported yet (only on `size_of`)"
+    )]
+    TurbofishUnsupported {
+        func: String,
+        range: Range,
+        source_module: ModuleInfo<'tcx>,
     },
 }
 
-impl QualifyError {
-    pub fn source_module(&self) -> &ModuleInfo {
+impl<'tcx> QualifyError<'tcx> {
+    pub fn source_module(&self) -> &ModuleInfo<'tcx> {
         match self {
             QualifyError::DuplicateModule(module) => module,
             QualifyError::DuplicateFunction { module, .. } => module,
@@ -95,6 +104,7 @@ impl QualifyError {
             QualifyError::UnknownConstructorType { source_module, .. } => source_module,
             QualifyError::UnknownVariant { source_module, .. } => source_module,
             QualifyError::UnknownPatternType { source_module, .. } => source_module,
+            QualifyError::TurbofishUnsupported { source_module, .. } => source_module,
         }
     }
 }

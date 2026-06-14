@@ -18,10 +18,10 @@ macro_rules! push {
     };
 }
 
-impl TypedProgram {
+impl<'tcx> TypedProgram<'tcx> {
     /// print the original program from the AST,
     /// consistenly formatted and syntactically valid
-    pub fn format(&self, ctx: &CompileCtx) -> Map<FileRef, String> {
+    pub fn format(&self, ctx: &CompileCtx<'tcx>) -> Map<FileRef, String> {
         let mut formatted = Map::new();
 
         // group the functions by module and module by file.
@@ -67,12 +67,12 @@ impl TypedProgram {
 
 // writer functions
 
-fn format_module(
+fn format_module<'tcx>(
     f: &mut String,
-    prog: &TypedProgram,
-    ctx: &CompileCtx,
-    mr: ModuleRef,
-    funs: &[FunRef],
+    prog: &TypedProgram<'tcx>,
+    ctx: &CompileCtx<'tcx>,
+    mr: ModuleRef<'tcx>,
+    funs: &[FunRef<'tcx>],
 ) {
     // print module heading
     push!(f, "module {};\n\n", ctx.module_info(&mr).name);
@@ -84,7 +84,12 @@ fn format_module(
 }
 
 /// both the parameter list and the body can wrap if they don't fit on one line
-fn format_function(f: &mut String, prog: &TypedProgram, ctx: &CompileCtx, fr: &FunRef) {
+fn format_function<'tcx>(
+    f: &mut String,
+    prog: &TypedProgram<'tcx>,
+    ctx: &CompileCtx<'tcx>,
+    fr: &FunRef<'tcx>,
+) {
     let fun = &prog.functions[fr];
 
     let args: Vec<String> = fun
@@ -140,8 +145,8 @@ fn format_function(f: &mut String, prog: &TypedProgram, ctx: &CompileCtx, fr: &F
                     f.push_str(&pad);
                     line_len = pad.len();
                 } /*else {
-                    f.push(' ');
-                    line_len += 1;
+                f.push(' ');
+                line_len += 1;
                 }*/
             }
             FormatOpt::Nothing => {}
@@ -155,7 +160,7 @@ fn format_function(f: &mut String, prog: &TypedProgram, ctx: &CompileCtx, fr: &F
     f.push('\n');
 }
 
-fn format_parameter(ctx: &CompileCtx, param: &Parameter) -> String {
+fn format_parameter<'tcx>(ctx: &CompileCtx<'tcx>, param: &Parameter<'tcx>) -> String {
     format!(
         "{}: {}",
         ctx.uniq_variable_name(&param.name),

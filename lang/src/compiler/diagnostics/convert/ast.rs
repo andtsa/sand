@@ -170,6 +170,167 @@ pub fn ast_error_to_diagnostics(
                 },
             );
         }
+        AstError::UnknownRegion { name, range } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    file: Some(file),
+                    severity: DiagnosticSeverity::Error,
+                    message: format!(
+                        "unknown lifetime '{name}': declare it as a region parameter, e.g. `<'{name}>`"
+                    ),
+                    range: *range,
+                    ..Default::default()
+                },
+            );
+        }
+        AstError::TypeArgArityMismatch {
+            name,
+            expected,
+            found,
+            range,
+        } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    file: Some(file),
+                    severity: DiagnosticSeverity::Error,
+                    message: format!(
+                        "generic type '{name}' expects {expected} type argument(s) but {found} were given"
+                    ),
+                    range: *range,
+                    ..Default::default()
+                },
+            );
+        }
+        AstError::RegionArgArityMismatch {
+            name,
+            expected,
+            found,
+            range,
+        } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    file: Some(file),
+                    severity: DiagnosticSeverity::Error,
+                    message: format!(
+                        "type '{name}' expects {expected} lifetime argument(s) but {found} were given"
+                    ),
+                    range: *range,
+                    ..Default::default()
+                },
+            );
+        }
+        AstError::MalformedUse { range } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    file: Some(file),
+                    severity: DiagnosticSeverity::Error,
+                    message: "malformed `use`: expected `use module::name;` or `use module::*;`"
+                        .to_string(),
+                    range: *range,
+                    ..Default::default()
+                },
+            );
+        }
+        AstError::RegionArgsNotFirst { name, range } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    file: Some(file),
+                    severity: DiagnosticSeverity::Error,
+                    message: format!(
+                        "lifetime arguments must come before type arguments (write `{name}<'a, T>`)"
+                    ),
+                    range: *range,
+                    ..Default::default()
+                },
+            );
+        }
+        AstError::PayloadBorrowNeedsLifetime { name, range } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    file: Some(file),
+                    severity: DiagnosticSeverity::Error,
+                    message: format!(
+                        "a reference in a payload of '{name}' must use a declared lifetime parameter (e.g. `type {name}<'a> = …(&'a T)`) or `'static`"
+                    ),
+                    range: *range,
+                    ..Default::default()
+                },
+            );
+        }
+        // Typeclass declaration errors (Step 10): the `#[error]` Display already
+        // carries a full message; surface it with the variant's range.
+        err @ (AstError::UnknownTypeclass { range, .. }
+        | AstError::TypeclassParamArity { range, .. }
+        | AstError::MethodGenericsUnsupported { range }
+        | AstError::UnknownSuperclass { range, .. }
+        | AstError::DuplicateMethodName { range, .. }
+        | AstError::NonInstanceableType { range }
+        | AstError::UnknownMethod { range, .. }
+        | AstError::MissingMethod { range, .. }
+        | AstError::DuplicateInstance { range, .. }
+        | AstError::OrphanInstance { range, .. }
+        | AstError::MissingSuperclass { range, .. }
+        | AstError::CopyPayloadNotCopy { range }
+        | AstError::CopyOnGenericType { range }
+        | AstError::NonFfiSafeType { range, .. }
+        | AstError::NotDerivable { range, .. }
+        | AstError::DuplicateDerive { range, .. }
+        | AstError::RecursiveTypeNeedsHeaped { range, .. }) => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    file: Some(file),
+                    severity: DiagnosticSeverity::Error,
+                    message: err.to_string(),
+                    range: *range,
+                    ..Default::default()
+                },
+            );
+        }
+        AstError::KindArgMismatch {
+            type_name,
+            param,
+            expected,
+            found,
+            range,
+        } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    file: Some(file),
+                    severity: DiagnosticSeverity::Error,
+                    message: format!(
+                        "type argument for parameter '{param}' of '{type_name}' has kind {found:?}, but kind {expected:?} is required"
+                    ),
+                    range: *range,
+                    ..Default::default()
+                },
+            );
+        }
+        AstError::UnsoundVariance {
+            type_name,
+            param,
+            range,
+        } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    file: Some(file),
+                    severity: DiagnosticSeverity::Error,
+                    message: format!(
+                        "parameter '{param}' of '{type_name}' is declared contravariant but appears in a covariant (producer) position"
+                    ),
+                    range: *range,
+                    ..Default::default()
+                },
+            );
+        }
     }
     diagnostics
 }

@@ -9,20 +9,15 @@ use tokio::sync::RwLock;
 use tower_lsp::Client;
 use tower_lsp::lsp_types::*;
 
+pub struct ProjectSlot {
+    pub project: Project,
+    pub last_result: Option<CheckResult>,
+}
+
 pub struct Backend {
     pub client: Client,
     pub root: RwLock<Option<PathBuf>>,
-    /// None until initialize() completes
-    pub project: RwLock<Option<Project>>,
-    pub last_result: RwLock<Option<CheckResult>>,
-    pub last_published_uris: RwLock<Vec<Url>>,
-}
-
-/// an instance of the lsp project,
-/// tracking its state & diagnostics
-pub struct Instance {
-    pub project: RwLock<Option<Project>>,
-    pub last_result: RwLock<Option<CheckResult>>,
+    pub slots: RwLock<Vec<ProjectSlot>>,
     pub last_published_uris: RwLock<Vec<Url>>,
 }
 
@@ -31,8 +26,7 @@ impl Backend {
         Self {
             client,
             root: RwLock::new(None),
-            project: RwLock::new(None),
-            last_result: RwLock::new(None),
+            slots: RwLock::new(vec![]),
             last_published_uris: RwLock::new(vec![]),
         }
     }

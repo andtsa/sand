@@ -10,15 +10,18 @@ use lang::compiler::structure::Map;
 use lang::ir_types::mir::MirProgram;
 use lang::ir_types::mir::Terminator;
 
-fn lower(src: &str) -> (MirProgram, CompileCtx<'static>) {
+fn lower(src: &str) -> (MirProgram<'static>, CompileCtx<'static>) {
     let mut ctx = CompileCtx::initial();
     let fr = ctx.stub_file();
     let code = Map::from([(fr, src)]);
     let ast = compile_hir(code, &mut ctx).unwrap_or_else(|e| panic!("compile failed:\n  {e}"));
-    (MirProgram::from_typed_program(&ast), ctx)
+    (MirProgram::from_typed_program(&ast, &ctx), ctx)
 }
 
-fn find_main<'a>(mir: &'a MirProgram, ctx: &CompileCtx) -> &'a lang::ir_types::mir::MirFunction {
+fn find_main<'a>(
+    mir: &'a MirProgram<'static>,
+    ctx: &CompileCtx<'static>,
+) -> &'a lang::ir_types::mir::MirFunction<'static> {
     mir.functions
         .values()
         .find(|f| ctx.original_fun_name(f.name) == "main")
@@ -27,9 +30,11 @@ fn find_main<'a>(mir: &'a MirProgram, ctx: &CompileCtx) -> &'a lang::ir_types::m
 
 #[test]
 fn function_count_matches_source() {
-    // core library contributes 9 functions:
-    // abs, min, max, clamp, is_odd, is_even, pow, read_int, exit.
-    const CORE_FN_COUNT: usize = 9;
+    // core library contributes 12 functions: abs, min, max, clamp, is_odd,
+    // is_even, pow, read_int, exit, plus the `Clone` impl methods for the three
+    // primitives (`clone` for Int / Bool / Unit). The `Copy` impls are markers
+    // with no methods, so they add no functions.
+    const CORE_FN_COUNT: usize = 12;
 
     let (mir, _ctx) = lower("def main(): Int := 42");
     assert_eq!(mir.functions.len(), 1 + CORE_FN_COUNT);

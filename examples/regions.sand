@@ -1,0 +1,22 @@
+//@TEST:{42}[]
+// Region (lifetime) parameters `<'r>`, `T @ 'r` ascription, and `where 'a >= 'b`
+// outlives constraints thread through signatures. Regions carry no
+// runtime data, so every one of these helpers monomorphises to plain integer
+// code.
+//
+// `keep` returns a *reference parameter*: its region `'r` is supplied by the
+// caller and outlives the call, so the escape check accepts it. Returning a
+// borrow of a *by-value parameter* or a *local* is a `RegionEscape` error (the
+// frame boundary, Calculus §6.3). These region-typed helpers are define-only
+// here; `main` exits with a plain integer.
+
+// `'r` ascription flows in and back out unchanged.
+def at<'r>(x: Int @ 'r): Int @ 'r := x
+
+// two lifetimes related by an outlives constraint; returns the longer-lived one.
+def longest<'a, 'b>(x: &'a Int, y: &'b Int): &'a Int where 'a >= 'b := x
+
+// returning a reference parameter is sound: the borrow's region is the caller's.
+def keep<'r>(r: &'r Int): &'r Int := r
+
+def main(): Int := 42

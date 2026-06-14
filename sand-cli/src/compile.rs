@@ -71,6 +71,10 @@ pub fn compile(args: CompileArgs, dry_run: bool) -> Result<(), CompileCliError> 
         }
     });
 
+    if !args.emit_llvm && output_file.ends_with(".ll") {
+        eprintln!("If you want to emit LLVM IR, use the --emit-llvm flag");
+    }
+
     tracing::debug!(
         "outfile_name: {outfile_name}, output_file: {}",
         output_file.display()
@@ -138,7 +142,7 @@ pub fn compile(args: CompileArgs, dry_run: bool) -> Result<(), CompileCliError> 
     }
 
     // Emit code
-    let mir = MirProgram::from_typed_program(&ast);
+    let mir = MirProgram::from_typed_program(&ast, &ctx);
     let llvm_ctx = inkwell::context::Context::create();
     let codegen = LlvmCodegen::new(&llvm_ctx, "sand_module");
     codegen.emit_program(&mir, &ctx)?;

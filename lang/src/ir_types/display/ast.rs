@@ -6,8 +6,8 @@ use crate::compiler::context::CompileCtx;
 use crate::ir_types::display::INDENT;
 use crate::ir_types::typed_hir::*;
 
-impl TypedProgram {
-    pub fn dump(&self, ctx: &CompileCtx) -> String {
+impl<'tcx> TypedProgram<'tcx> {
+    pub fn dump(&self, ctx: &CompileCtx<'tcx>) -> String {
         let mut out = String::new();
         for func in self.functions.values() {
             if ctx.is_core_module(ctx.file_of_module(func.src_module)) {
@@ -21,8 +21,8 @@ impl TypedProgram {
     }
 }
 
-impl TypedFunction {
-    pub fn dump(&self, ctx: &CompileCtx) -> String {
+impl<'tcx> TypedFunction<'tcx> {
+    pub fn dump(&self, ctx: &CompileCtx<'tcx>) -> String {
         let mut out = String::new();
 
         let params: Vec<String> = self
@@ -57,11 +57,19 @@ fn indent(out: &mut String, level: usize) {
     }
 }
 
-fn dump_expr(out: &mut String, expr: &Expr, ctx: &CompileCtx, level: usize) {
+fn dump_expr<'tcx>(out: &mut String, expr: &Expr<'tcx>, ctx: &CompileCtx<'tcx>, level: usize) {
     indent(out, level);
     let _ = write!(out, "[{}] ", ctx.display_ty(expr.ty));
 
     match &expr.expr {
+        Expression::Borrow(inner, mutable) => {
+            let _ = writeln!(out, "{}", if *mutable { "borrow_mut" } else { "borrow" });
+            dump_expr(out, inner, ctx, level + 1);
+        }
+        Expression::Deref(inner) => {
+            let _ = writeln!(out, "deref");
+            dump_expr(out, inner, ctx, level + 1);
+        }
         Expression::If { cond, t, f } => {
             let _ = writeln!(out, "if");
             dump_expr(out, cond, ctx, level + 1);
@@ -94,8 +102,14 @@ fn dump_expr(out: &mut String, expr: &Expr, ctx: &CompileCtx, level: usize) {
                 dump_expr(out, arg, ctx, level + 1);
             }
         }
-        Expression::IntrinsicCall { fn_name, args } => {
+        Expression::IntrinsicCall { fn_name, args, .. } => {
             let _ = writeln!(out, "intrinsic {}", fn_name);
+            for arg in args {
+                dump_expr(out, arg, ctx, level + 1);
+            }
+        }
+        Expression::MethodCall { method, args, .. } => {
+            let _ = writeln!(out, "method {method}");
             for arg in args {
                 dump_expr(out, arg, ctx, level + 1);
             }
@@ -112,7 +126,9 @@ fn dump_expr(out: &mut String, expr: &Expr, ctx: &CompileCtx, level: usize) {
         Expression::Unit => {
             let _ = writeln!(out, "unit");
         }
-        Expression::Block { statements, expr } => {
+        Expression::Block {
+            statements, expr, ..
+        } => {
             let _ = writeln!(out, "block");
             for stmt in statements {
                 dump_statement(out, stmt, ctx, level + 1);
@@ -152,7 +168,7 @@ fn dump_expr(out: &mut String, expr: &Expr, ctx: &CompileCtx, level: usize) {
 
 /// recursively render a `MatchPattern` as source-like syntax, e.g.
 /// `Shape#Circle(r)`, `(a, b)`, `Wrap((x, y))`, `_`.
-fn dump_match_pattern(pattern: &MatchPattern, ctx: &CompileCtx) -> String {
+fn dump_match_pattern<'tcx>(pattern: &MatchPattern<'tcx>, ctx: &CompileCtx<'tcx>) -> String {
     match pattern {
         MatchPattern::Variant {
             enum_ref,
@@ -181,7 +197,12 @@ fn dump_match_pattern(pattern: &MatchPattern, ctx: &CompileCtx) -> String {
     }
 }
 
-fn dump_statement(out: &mut String, stmt: &Statement, ctx: &CompileCtx, level: usize) {
+fn dump_statement<'tcx>(
+    out: &mut String,
+    stmt: &Statement<'tcx>,
+    ctx: &CompileCtx<'tcx>,
+    level: usize,
+) {
     match stmt {
         Statement::Declaration { name, ty, val, .. } => {
             indent(out, level);
@@ -217,6 +238,14 @@ fn dump_statement(out: &mut String, stmt: &Statement, ctx: &CompileCtx, level: u
             indent(out, level);
             let _ = writeln!(out, "{} =", ctx.uniq_variable_name(name));
             dump_expr(out, val, ctx, level + 1);
+        }
+        Statement::DerefAssign {
+            reference, value, ..
+        } => {
+            indent(out, level);
+            let _ = writeln!(out, "* (deref-assign) =");
+            dump_expr(out, reference, ctx, level + 1);
+            dump_expr(out, value, ctx, level + 1);
         }
         Statement::Expr(e) => {
             dump_expr(out, e, ctx, level);

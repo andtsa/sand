@@ -1,7 +1,6 @@
 # Core Calculus
 
-A formal description of the kind, type, region, and term systems,
-grounded in the existing grammar.
+a formal description of the kind, type, region, and term systems for the sand language.
 
 ---
 
@@ -37,22 +36,30 @@ Region        'r  ::=  'r              -- region variable
                     |  'static         -- permanent region (outlives everything)
 
 Region context
-               R  ::=  ε              -- empty
-                    |  R, 'r          -- introduce region variable
-                    |  R, 'r ≥ 's     -- outlives constraint ('r outlives 's)
+               R  ::=  ε               -- empty
+                    |  R, 'r           -- introduce region variable
+                    |  R, 'r ≥ 's      -- outlives constraint ('r outlives 's)
 
 Kind           k  ::=  Owned
-                    |  Borrowed 'r
-                    |  BorrowedMut 'r
+                    |  Borrowed
+                    |  BorrowedMut
                     |  InteriorMut
                     |  Never
 ```
 
+**Kinds are region-free.** A kind records only *capability* — owned, shared
+borrow, exclusive borrow, interior-mutable, or uninhabited. A borrow's **region**
+is part of its **type** (`&'r T`, `&'r mut T`; §2.3), not its kind: regions belong
+to the type system, and region safety (escape) is checked on the type's free
+regions (§6.3), not on the kind. So `&'r T : Borrowed` and `&'r mut T :
+BorrowedMut` — the `'r` lives on the type, the kind is just `Borrowed` /
+`BorrowedMut`.
+
 ### 1.2 Subkinding
 
 The relation `k₁ <: k₂` reads "`k₁` is usable where `k₂` is expected."
-`Owned` is at the top — it carries the most capability. The three borrow
-modes are mutually incomparable. `Never` is the bottom — a subkind of
+`Owned` is at the top, since it carries the most capability; the three borrow
+modes are mutually incomparable; `Never` is at the bottom, a subkind of
 everything, corresponding to the uninhabited type.
 
 ```
@@ -61,11 +68,11 @@ k <: k
 
 
 ────────────────────────  (SK-OwnedBorrowed)
-Owned <: Borrowed 'r
+Owned <: Borrowed
 
 
 ──────────────────────────  (SK-OwnedBorrowedMut)
-Owned <: BorrowedMut 'r
+Owned <: BorrowedMut
 
 
 ────────────────────────  (SK-OwnedInteriorMut)
@@ -77,7 +84,7 @@ Never <: k
 ```
 
 There is intentionally no rule relating `Borrowed`, `BorrowedMut`, and
-`InteriorMut` to each other — they are incomparable branches of the lattice.
+`InteriorMut` to each other, indicating they are incomparable branches of the lattice.
 
 ### 1.3 Kind Lattice
 
@@ -102,9 +109,9 @@ inference to resolve kind variables when two branches must agree.
 
 ```
 k ∨ k = k                               (join-refl)
-Borrowed 'r ∨ BorrowedMut 'r = Owned   (join-borrow-modes)
-Borrowed 'r ∨ InteriorMut   = Owned
-BorrowedMut 'r ∨ InteriorMut = Owned
+Borrowed ∨ BorrowedMut = Owned   (join-borrow-modes)
+Borrowed ∨ InteriorMut   = Owned
+BorrowedMut ∨ InteriorMut = Owned
 Never ∨ k = k                           (join-never)
 k ∨ Never = k
 ```
@@ -131,14 +138,14 @@ the positions in which it appears in the type constructor body:
 Owned,       producer position only  →  +  (covariant)
 Owned,       consumer position only  →  -  (contravariant)
 Owned,       both positions          →  ∅  (invariant)
-Borrowed 'r, any position            →  +  (read-only, always covariant)
+Borrowed, any position            →  +  (read-only, always covariant)
 BorrowedMut, any position            →  ∅  (read-write, always invariant)
 InteriorMut, any position            →  ∅  (hidden mutation, always invariant)
 ```
 
 Declaration-site annotations (`+`, `-`, `∅`) override these defaults.
 The kind checker verifies that the declared variance is sound for the
-given kind — for example, declaring `+a : BorrowedMut` is a kind error.
+given kind. For example, declaring `+a : BorrowedMut` is a kind error.
 
 ### 2.2 Type Constructor Parameters
 
@@ -172,9 +179,9 @@ Type   T  ::=  a                        -- type variable (kind given by context)
             |  Bool                     -- primitive boolean        (Owned)
             |  Unit                     -- unit type                (Owned)
             |  T @ 'r                   -- T in region 'r           (Owned)
-            |  &'r T                    -- shared borrow            (Borrowed 'r)
+            |  &'r T                    -- shared borrow            (Borrowed)
             |                           --   sugar for Ref<T> @ 'r
-            |  &'r mut T                -- mutable borrow           (BorrowedMut 'r)
+            |  &'r mut T                -- mutable borrow           (BorrowedMut)
             |  T₁ →[k] T₂              -- function type            (Owned)
             |  F<T̄>                     -- type constructor application
             |  (T₁, ..., Tₙ)           -- tuple  (n ≥ 2)           (Owned)
@@ -182,28 +189,30 @@ Type   T  ::=  a                        -- type variable (kind given by context)
             |  mod::F                   -- qualified type constructor
             |  ∀(a : k). T             -- kind-polymorphic type
             |  ∀'r. T                  -- region-polymorphic type
+            |  Slot<L>                  -- reuse token / husk        (Owned)
+                                        --   layout-indexed; see §6.10, §7.5
 ```
 
 The function arrow `→[k]` carries the *ownership mode of the function*:
 
 ```
 T₁ →[Owned] T₂        -- consuming function: argument is moved in, single-use
-T₁ →[Borrowed 'r] T₂  -- borrowing function: argument is borrowed, reusable
+T₁ →[Borrowed] T₂  -- borrowing function: argument is borrowed, reusable
 ```
 
-This is how the owned and borrowed variants of `fmap` differ at the
-type level — the arrow kind, not just the argument kind:
+The owned and borrowed variants of `fmap` differ at the
+type level, via the arrow kind, not by the argument kind:
 
 ```
 -- owned map: consumes the container
 fmap     : (a →[Owned] b)       →[Owned]       F<a> →[Owned] F<b>
 
 -- borrowing map: borrows the container, produces a new one
-fmap_ref : (a →[Borrowed 'r] b) →[Borrowed 'r] &'r F<a> →[Owned] F<b>
+fmap_ref : (a →[Borrowed] b) →[Borrowed] &'r F<a> →[Owned] F<b>
 ```
 
 Region ascription `T @ 'r` is a type-level construct only. There is no
-term-level `@` operator — regions are tracked through the type system,
+term-level `@` operator, meaning regions are tracked through the type system,
 not annotated on expressions directly.
 
 ---
@@ -318,10 +327,10 @@ Context   Γ  ::=
 
 The subscript on `:ₖ` is the ownership mode of the binding:
 
-- `x :_Owned T`          — x is consumed on use; removed from Γ afterward
-- `x :_(Borrowed 'r) T`  — x may be used multiple times within 'r; stays in Γ
-- `x :_(BorrowedMut 'r) T` — same, but exclusive write access within 'r
-- `x :_InteriorMut T`    — x may be used multiple times; mutation is internal
+- `x :_Owned T`            - x is consumed on use; removed from Γ afterward
+- `x :_(Borrowed) T`    - x may be used multiple times within 'r; stays in Γ
+- `x :_(BorrowedMut) T` - same, but exclusive write access within 'r
+- `x :_InteriorMut T`      - x may be used multiple times; mutation is internal
 
 ---
 
@@ -351,12 +360,12 @@ These run as a pre-pass over type expressions before type inference.
 
 Γ ⊢ T : Owned    'r ∈ Γ
 ─────────────────────────  (K-Borrow)
-Γ ⊢ &'r T : Borrowed 'r
+Γ ⊢ &'r T : Borrowed
 
 
 Γ ⊢ T : Owned    'r ∈ Γ
 ──────────────────────────  (K-BorrowMut)
-Γ ⊢ &'r mut T : BorrowedMut 'r
+Γ ⊢ &'r mut T : BorrowedMut
 
 
 Γ ⊢ T₁ : k₁    Γ ⊢ T₂ : k₂
@@ -383,6 +392,18 @@ F declared with parameter kinds k̄, result kind kF    Γ ⊢ T̄ : k̄
 Γ, 'r ⊢ T : k
 ─────────────────────  (K-ForallRegion)
 Γ ⊢ ∀'r. T : k
+
+
+F (mutually) recursive    Heaped impl exists for F
+──────────────────────────────────────────────────────  (K-HeapedRec)
+Γ ⊢ F<T̄> : Owned
+-- a recursive type constructor is well-kinded only with a `Heaped` impl;
+-- its values are an Owned pointer handle (§7.5)
+
+
+L a layout class
+─────────────────────  (K-Slot)
+Γ ⊢ Slot<L> : Owned
 ```
 
 ---
@@ -426,7 +447,7 @@ an `Owned` value where `Borrowed` is expected).
 ### 6.3 Blocks
 
 Each block introduces a fresh implicit region `'r`. The final expression
-is the block's result. The result type must not mention `'r` — this is
+is the block's result. *The result type must not mention `'r`* is
 the formal statement of lifetime safety: values cannot outlive their region.
 
 ```
@@ -444,13 +465,13 @@ the formal statement of lifetime safety: values cannot outlive their region.
 
 
 Γ ⊢ e₁ ⇒ T : Owned
-'r fresh    Γ, x :_(Borrowed 'r) T ⊢ e₂ ⇒ U : k    'r ∉ freeRegions(U)
+'r fresh    Γ, x :_(Borrowed) T ⊢ e₂ ⇒ U : k    'r ∉ freeRegions(U)
 ────────────────────────────────────────────────────────────────────────  (Let-Borrow)
 Γ ⊢ (let &x : T = e₁; e₂) ⇒ U : k
 
 
 Γ ⊢ e₁ ⇒ T : Owned
-'r fresh    Γ, x :_(BorrowedMut 'r) T ⊢ e₂ ⇒ U : k    'r ∉ freeRegions(U)
+'r fresh    Γ, x :_(BorrowedMut) T ⊢ e₂ ⇒ U : k    'r ∉ freeRegions(U)
 ──────────────────────────────────────────────────────────────────────────────  (Let-BorrowMut)
 Γ ⊢ (let &mut x : T = e₁; e₂) ⇒ U : k
 ```
@@ -467,9 +488,9 @@ cannot escape the scope in which they are introduced.
 
 
 'r fresh
-Γ, x :_(Borrowed 'r) T ⊢ e ⇒ U : k    'r ∉ freeRegions(U)
+Γ, x :_(Borrowed) T ⊢ e ⇒ U : k    'r ∉ freeRegions(U)
 ──────────────────────────────────────────────────────────────  (Lam-Borrow)
-Γ ⊢ fn &(x : T) -> e  ⇒  T →[Borrowed 'r] U : Owned
+Γ ⊢ fn &(x : T) -> e  ⇒  T →[Borrowed] U : Owned
 
 
 Γ ⊢ e₁ ⇒ T →[Owned] U : Owned    Γ ⊢ e₂ ⇐ T : Owned
@@ -477,7 +498,7 @@ cannot escape the scope in which they are introduced.
 Γ ⊢ e₁(e₂) ⇒ U : Owned
 
 
-Γ ⊢ e₁ ⇒ T →[Borrowed 'r] U : Owned    Γ ⊢ e₂ ⇐ T : Borrowed 'r
+Γ ⊢ e₁ ⇒ T →[Borrowed] U : Owned    Γ ⊢ e₂ ⇐ T : Borrowed
 ────────────────────────────────────────────────────────────────────  (App-Borrow)
 Γ ⊢ e₁(e₂) ⇒ U : Owned
 ```
@@ -485,7 +506,8 @@ cannot escape the scope in which they are introduced.
 ### 6.6 Heap Allocation
 
 `box` is the single allocation intrinsic. It moves a value into the
-heap region, which is `'static` — it outlives every other region.
+heap region, which is referred to as the `'static` region, which 
+outlives every other region.
 
 ```
 Γ ⊢ e ⇒ T : Owned
@@ -529,6 +551,32 @@ all arms agree on U and k
 Γ ⊢ match e { arm* } ⇒ U : k
 ```
 
+When the scrutinee `e` is a *consumed* `Heaped` value, the constructor pattern
+*drains* it: the bindings are *owned* (moved out via `take`, §7.5) and the arm
+may additionally bind a reuse token `cell : Slot<L>` (the husk). When `e` is only
+*borrowed*, the bindings are borrows (`borrow`, §7.5) and no `Slot` is produced.
+
+### 6.10 In-Place Reuse
+
+A reuse token (husk) drained from a `Heaped` node may be rebuilt into, with no
+allocation, provided the new constructor's layout matches.
+
+```
+Γ ⊢ cell ⇒ Slot<L> : Owned    layout(#C) = L    Γ ⊢ ēᵢ ⇐ fieldᵢ(#C)
+─────────────────────────────────────────────────────────────────────  (Reuse)
+Γ ⊢ (reuse cell as #C(ē)) ⇒ T_{#C} : Owned
+-- consumes the token and the arguments; allocates nothing. An unused `Slot`
+-- is dropped (frees the husk) like any other Owned value.
+```
+
+### 6.11 Drop Elaboration (conditional moves)
+
+`drop` insertion is implicit (RAII): an Owned binding is dropped at the end of
+the innermost block where it is still owned, in reverse declaration order. When a
+value is moved on some branches of an `if`/`match` but not others, a *completing*
+`drop` is inserted on the branches where it is still owned, so it is uniformly
+consumed at the merge — no runtime drop flags, no leak.
+
 ---
 
 ## 7. Standard Typeclasses
@@ -548,7 +596,7 @@ typeclass OwnedFunctor<F : Owned → Owned> {
 -- Borrows the container without consuming it.
 typeclass BorrowedFunctor<F : Owned → Owned> {
   fmap_ref : ∀(a b : Owned)('r).
-             (a →[Borrowed 'r] b) →[Borrowed 'r] &'r F<a> →[Owned] F<b>
+             (a →[Borrowed] b) →[Borrowed] &'r F<a> →[Owned] F<b>
 }
 ```
 
@@ -595,7 +643,8 @@ the chain with no hidden allocation.
 
 `Monad` is only well-kinded at `Owned → Owned` type constructors.
 Attempting to instantiate it at a `Borrowed` constructor is a kind
-error — the lattice enforces this structurally rather than by convention.
+error, and the lattice is able to enforce this structurally, rather
+than by convention.
 
 `fmap` and `ap` can both be derived from `pure` and `bind`, so a
 `Monad` instance needs only provide those two. The `Functor` and
@@ -607,7 +656,7 @@ error — the lattice enforces this structurally rather than by convention.
 
 ```
 typeclass Clone<T : Owned> {
-  clone : &'r T →[Borrowed 'r] T
+  clone : &'r T →[Borrowed] T
   -- borrows, produces a new owned copy; implementation decides the cost
 }
 
@@ -618,7 +667,45 @@ typeclass Copy<T : Owned> requires Clone<T> {}
 ```
 
 Primitive types (`Int`, `Bool`, `Unit`) implement `Copy` automatically.
-Heap-allocated types (`Box<T>`) do not — they require explicit `.clone()`.
+Heap-allocated types (`Box<T>`) do not, and require explicit `clone()`.
+
+### 7.5 Heaped — Allocation Strategies
+
+`Heaped` is the lang-item typeclass that gives a type a heap representation. A
+(mutually) recursive `type` is well-formed only if it implements `Heaped`; the
+impl supplies the finite-size handle and the allocation/reclamation strategy,
+declared once at the type: `type List<+a> : Heaped(Unique)`. The compiler knows
+the typeclass by name (to emit calls) but nothing about allocation policy —
+`Box`/`Rc`/arenas are library strategies. The hierarchy encodes the
+reuse-vs-share tradeoff structurally:
+
+```
+typeclass Heaped<T> {
+  type Handle                      -- the pointer-sized runtime representation
+  alloc   : Node          → T      -- construct: store a node, return the handle
+  borrow  : &T            → &Node  -- deref: read/match (borrow into the root)
+  release : T             → Unit   -- drop: Unique frees; Shared decs (free at 0)
+}
+
+typeclass HeapedUnique<T> requires Heaped<T> {
+  borrow_mut : &mut T → &mut Node       -- exclusive (Unique-only) mutation
+  take       : T      → (Node, Slot<L>) -- owning drain → fields + reuse husk
+  reuse      : (Slot<L>, Node) → T      -- rebuild into a husk, no allocation
+}
+
+typeclass HeapedShared<T> requires Heaped<T> {
+  share : &T → T                        -- duplicate the handle (refcount ++)
+}
+```
+
+`take`/`reuse`/`borrow_mut` are `HeapedUnique`-only: moving out of, or mutating,
+shared storage would need a runtime uniqueness check, excluded by design. So **a
+Unique type can `reuse`, a Shared type can `share`, never both — enforced by the
+hierarchy.** The user writes `#C(ē)`, `match`, `reuse`, `.share()` and lets values
+drop; the compiler lowers these to the methods above; the core library writes the
+bodies (over `Ptr`, raw alloc/free, `drop_in_place`, and interior mutation for
+the Shared counter). The single non-affine note: a Shared handle stays affine;
+`.share()` returns a fresh handle (so the compiler inserts no implicit dups).
 
 ---
 
@@ -638,8 +725,8 @@ KEYWORD = {
 }
 ```
 
-`move`, `copy`, and `drop` are not keywords — they are library
-identifiers. `clone` is a method name.
+`move`, `copy`, and `drop` are library identifiers, not keywords.
+`clone` is a method name.
 
 ### 8.2 Lifetime / Region Syntax
 
@@ -717,6 +804,25 @@ borrow_expr = { "&" ~ "mut"? ~ expression }
 
 Add `borrow_expr` to `primary`. Produces a `Borrowed` or `BorrowedMut`
 reference to the sub-expression.
+
+### 8.7b Heaped Types, Reuse, and Husk Patterns
+
+```
+-- a recursive type declares its allocation strategy once, at the type
+heaped_ann  = { ":" ~ "Heaped" ~ "(" ~ identifier ~ ")" }   -- e.g.  : Heaped(Unique)
+-- attach `heaped_ann?` to `type_alias` (after `type_params?`)
+
+-- in-place reuse: rebuild a drained husk with no allocation
+reuse_expr  = { "reuse" ~ expression ~ "as" ~ constructor }
+-- add `reuse_expr` to `primary`
+
+-- husk-capturing as-pattern: bind the reuse token of a drained node
+--   (legal only in a consuming match)
+as_pattern  = { identifier ~ "@" ~ pattern }   -- e.g.  cell @ #cons(x, rest)
+```
+
+`.share()` is an ordinary method call (no new grammar). New keywords: `reuse`,
+`as`; `Heaped` appears in the type-annotation position.
 
 ### 8.8 Typeclass Declaration
 
@@ -892,4 +998,7 @@ KEYWORD = {
   | "typeclass" | "impl"       -- typeclass system
   | "requires" | "for"         -- typeclass relations
   | "where"                    -- constraints
+  | "reuse" | "as"             -- in-place reuse
 }
+
+```

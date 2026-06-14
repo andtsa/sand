@@ -19,26 +19,26 @@ use crate::ir_types::typed_hir::Expr;
 use crate::ir_types::typed_hir::TypedProgram;
 
 #[derive(Debug, Clone, Default)]
-pub struct ProgramAnnotations {
+pub struct ProgramAnnotations<'tcx> {
     /// Map from each expression to all its occurrences in the source code
-    pub expr_occurrences: HashMap<Expr, HashSet<(ModuleRef, Range)>>,
+    pub expr_occurrences: HashMap<Expr<'tcx>, HashSet<(ModuleRef<'tcx>, Range)>>,
 
     /// Available-expressions set at each CFG node
-    pub available_at: HashMap<NodeIndex, HashSet<Expr>>,
+    pub available_at: HashMap<NodeIndex, HashSet<Expr<'tcx>>>,
 }
 
 #[derive(Debug, Clone)]
-pub struct AnnotatedExpression {
-    pub expr: Expr,
+pub struct AnnotatedExpression<'tcx> {
+    pub expr: Expr<'tcx>,
     /// which variables does this expression depend on
-    pub depends_on: HashSet<UniqVar>,
+    pub depends_on: HashSet<UniqVar<'tcx>>,
     /// which variables does this expression mutate
-    pub mutates: HashSet<UniqVar>,
+    pub mutates: HashSet<UniqVar<'tcx>>,
     /// which module does this expression belong to
-    pub module: ModuleRef,
+    pub module: ModuleRef<'tcx>,
 }
 
-pub fn analyse(ctx: &CompileCtx, ast: &TypedProgram) -> ProgramAnnotations {
+pub fn analyse<'tcx>(ctx: &CompileCtx<'tcx>, ast: &TypedProgram<'tcx>) -> ProgramAnnotations<'tcx> {
     // create the "control flow graph" - the order in which expressions are
     // evaluated. for example:
     // ```
@@ -66,12 +66,12 @@ pub fn analyse(ctx: &CompileCtx, ast: &TypedProgram) -> ProgramAnnotations {
     // and for every expression we count how many times it appeared,
     // keeping track of whether the variables it depends on are in the
     // same state as the other instances of the expression.
-    let annotations: ProgramAnnotations = find_interactions(cfg);
+    let annotations: ProgramAnnotations<'tcx> = find_interactions(cfg);
 
     annotations
 }
 
-pub fn visualise_cfg(ctx: &CompileCtx, program: &TypedProgram) -> String {
+pub fn visualise_cfg<'tcx>(ctx: &CompileCtx<'tcx>, program: &TypedProgram<'tcx>) -> String {
     // construct the CFG
     let cfg = cfg::construct_cfg(ctx, program);
 
@@ -81,21 +81,21 @@ pub fn visualise_cfg(ctx: &CompileCtx, program: &TypedProgram) -> String {
     format!("{dot:?}")
 }
 
-impl PartialEq for AnnotatedExpression {
+impl PartialEq for AnnotatedExpression<'_> {
     fn eq(&self, other: &Self) -> bool {
         self.expr == other.expr
     }
 }
 
-impl Eq for AnnotatedExpression {}
+impl Eq for AnnotatedExpression<'_> {}
 
-impl Hash for AnnotatedExpression {
+impl Hash for AnnotatedExpression<'_> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.expr.hash(state);
     }
 }
 
-impl std::fmt::Display for AnnotatedExpression {
+impl std::fmt::Display for AnnotatedExpression<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}", self.expr)?;
 
@@ -136,14 +136,17 @@ impl std::fmt::Display for AnnotatedExpression {
     }
 }
 
-pub fn flipped_occurence_map(
-    map: &HashMap<Expr, HashSet<(ModuleRef, Range)>>,
-) -> HashMap<ModuleRef, HashMap<&Expr, HashSet<Range>>> {
+// `Expr` keys reach an enum payload `Cell` through arena references, but hash
+// by structural/pointer identity that never reads it. see `find_interactions`.
+#[allow(clippy::mutable_key_type)]
+pub fn flipped_occurence_map<'a, 'tcx>(
+    map: &'a HashMap<Expr<'tcx>, HashSet<(ModuleRef<'tcx>, Range)>>,
+) -> HashMap<ModuleRef<'tcx>, HashMap<&'a Expr<'tcx>, HashSet<Range>>> {
     let mut r = HashMap::new();
     for (e, occ) in map {
         for (mr, range) in occ {
             r.entry(*mr)
-                .and_modify(|hm: &mut HashMap<&Expr, HashSet<Range>>| {
+                .and_modify(|hm: &mut HashMap<&Expr<'tcx>, HashSet<Range>>| {
                     hm.entry(e)
                         .and_modify(|s: &mut HashSet<Range>| {
                             s.insert(*range);

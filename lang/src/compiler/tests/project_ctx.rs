@@ -42,7 +42,7 @@ fn compile_hir_file_ref_consistent_with_project_ctx() {
 /// CompileCtx instances (as the LSP does on each key-stroke), the
 /// FileRefs from ProjectCtx carry over into both CompileCtx instances.
 /// If module names collide (both default to "mAin"), the qualify pass
-/// should detect a DuplicateModule — but because create_dummy_module's
+/// should detect a DuplicateModule, but because create_dummy_module's
 /// guard is broken, it currently does not.
 #[test]
 fn second_compilation_with_same_file_ref_does_not_duplicate_modules() {

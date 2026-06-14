@@ -42,9 +42,9 @@ def deeply_nested_ifs(a: Int, b: Int, c: Int, d: Int): Int :=
         0
 
 def deeply_nested_while(n: Int): Int := {
-    let i: Int = 0;
-    let j: Int = 0;
-    let result: Int = 0;
+    let mut i: Int = 0;
+    let mut j: Int = 0;
+    let mut result: Int = 0;
 
     while i < n do {
         while j < n do {
@@ -68,7 +68,7 @@ def deeply_nested_while(n: Int): Int := {
     result
 }
 
-def mixed_deep(x: Int, flag: Bool): Int := {
+def mixed_deep(mut x: Int, flag: Bool): Int := {
     let a: Int = {
         if flag then {
             let b: Int = {

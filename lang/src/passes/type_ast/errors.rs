@@ -7,13 +7,13 @@ use crate::compiler::structure::Range;
 use crate::lang::types::Ty;
 
 #[derive(Debug)]
-pub struct TypeError {
-    pub error: AstTypeError,
-    pub module: ModuleRef,
+pub struct TypeError<'tcx> {
+    pub error: AstTypeError<'tcx>,
+    pub module: ModuleRef<'tcx>,
 }
 
 #[derive(Debug, Error)]
-pub enum AstTypeError {
+pub enum AstTypeError<'tcx> {
     #[error("unbound variable '{name}' at {range}")]
     UnboundVariable { name: String, range: Range },
     #[error("cannot assign to immutable variable '{name}' at {range}")]
@@ -23,8 +23,8 @@ pub enum AstTypeError {
     #[error("type error at {range}: {message} (expected {expected}, found {found})")]
     TypeError {
         message: String,
-        expected: Ty,
-        found: Ty,
+        expected: Ty<'tcx>,
+        found: Ty<'tcx>,
         range: Range,
     },
     #[error(
@@ -32,8 +32,8 @@ pub enum AstTypeError {
     )]
     FunctionCallTypeError {
         message: String,
-        expected: Vec<Ty>,
-        found: Vec<Ty>,
+        expected: Vec<Ty<'tcx>>,
+        found: Vec<Ty<'tcx>>,
         range: Range,
     },
     #[error("bare tag '#{variant}' used without an expected type context at {range}")]
@@ -53,7 +53,7 @@ pub enum AstTypeError {
     #[error(
         "match scrutinee has type {ty} but match requires an enum, tuple, Int, or Bool type at {range}"
     )]
-    MatchNonAggregateScrutinee { ty: Ty, range: Range },
+    MatchNonAggregateScrutinee { ty: Ty<'tcx>, range: Range },
     #[error(
         "match on enum '{enum_name}' is not exhaustive at {range}; uncovered variants: {uncovered:?}"
     )]
@@ -75,7 +75,7 @@ pub enum AstTypeError {
         range: Range,
     },
     #[error(
-        "constructor '{enum_name}#{variant}' at {range}: payload mismatch — variant {} a payload, but the call {}",
+        "constructor '{enum_name}#{variant}' at {range}: payload mismatch, variant {} a payload, but the call {}",
         if *expected_payload { "expects" } else { "does not expect" },
         if *expected_payload { "has none" } else { "supplies one" }
     )]
@@ -89,7 +89,11 @@ pub enum AstTypeError {
         range: Range,
     },
     #[error(
-        "pattern '{enum_name}#{variant}' at {range}: payload mismatch — variant {} a payload, but the pattern {}",
+        "cannot infer the type arguments of generic enum '{enum_name}' at {range}; add a type annotation (e.g. `{enum_name}<...>`)"
+    )]
+    CannotInferTypeArguments { enum_name: String, range: Range },
+    #[error(
+        "pattern '{enum_name}#{variant}' at {range}: payload mismatch, variant {} a payload, but the pattern {}",
         if *expected_payload { "carries" } else { "does not carry" },
         if *expected_payload { "doesn't destructure it" } else { "tries to destructure one" }
     )]
@@ -97,7 +101,7 @@ pub enum AstTypeError {
         enum_name: String,
         variant: String,
         /// `true` if the variant is declared with a payload (so the pattern
-        /// should — but doesn't — destructure it); `false` if the variant is
+        /// should, but doesn't, destructure it); `false` if the variant is
         /// nullary (so the pattern's sub-pattern is unexpected).
         expected_payload: bool,
         range: Range,
@@ -113,7 +117,7 @@ pub enum AstTypeError {
     #[error("pattern type error at {range}: {message}")]
     PatternTypeMismatch { message: String, range: Range },
     #[error(
-        "literal pattern '{enum_name}::{variant}' at {range} cannot appear in a nested (payload/tuple) position — enum variant patterns, bindings, wildcards, and tuple-destructuring are all supported in nested position, but integer and boolean literals are not"
+        "literal pattern '{enum_name}::{variant}' at {range} cannot appear in a nested (payload/tuple) position. enum variant patterns, bindings, wildcards, and tuple-destructuring are all supported in nested position, but integer and boolean literals are not"
     )]
     RefutableNestedPattern {
         enum_name: String,
@@ -136,4 +140,48 @@ pub enum AstTypeError {
         "`let E#V(…) = … else fallback` at {range}: the else expression must be a constructor of the same variant as the LHS pattern so that destructuring the fallback always succeeds"
     )]
     LetPatternElseNotIrrefutable { range: Range },
+
+    #[error(
+        "borrow at {range} would escape its scope: the value it refers to does not live long enough (Calculus §6.3)"
+    )]
+    RegionEscape { range: Range },
+
+    #[error(
+        "call at {range} does not satisfy the callee's lifetime constraint `'{longer} >= '{shorter}`: the argument lifetimes do not guarantee it (Calculus §1.1, §8.10)"
+    )]
+    RegionConstraintUnsatisfied {
+        longer: String,
+        shorter: String,
+        range: Range,
+    },
+
+    #[error("no instance of typeclass '{class}' for type {ty} at {range}")]
+    TypeclassNoInstance {
+        class: String,
+        ty: Ty<'tcx>,
+        range: Range,
+    },
+
+    #[error(
+        "cannot determine the receiver type for method '{method}' at {range} from its arguments"
+    )]
+    TypeclassCannotResolve { method: String, range: Range },
+
+    #[error(
+        "method '{method}' at {range} is called on a type parameter that is not constrained by a `where` clause"
+    )]
+    TypeclassNeedsConstraint { method: String, range: Range },
+
+    #[error(
+        "cannot mutably borrow immutable variable '{name}' at {range}: declare it `let mut {name}` (or a `mut` parameter)"
+    )]
+    MutBorrowOfImmutable { name: String, range: Range },
+
+    #[error(
+        "cannot dereference value of type {ty} at {range}: `*` requires a reference (`&T` or `&mut T`)"
+    )]
+    DerefOfNonReference { ty: Ty<'tcx>, range: Range },
+
+    #[error("invalid raw-pointer operation at {range}: {message}")]
+    PtrOpError { message: String, range: Range },
 }

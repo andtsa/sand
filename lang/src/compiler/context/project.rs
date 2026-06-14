@@ -46,7 +46,6 @@ impl ProjectCtx {
                 uri: uri.clone(),
                 name: FileName::try_from_uri(&uri)?,
                 index: fr,
-                default_module: None,
             };
             self.code_files.push(cf);
             self.files.insert(uri, fr);
@@ -74,7 +73,6 @@ impl ProjectCtx {
             uri: Url::parse(&format!("virtual:///tmp/internal/{name}.sand")).unwrap(),
             name: FileName::virt(name),
             index: fr,
-            default_module: None,
         };
         self.code_files.push(cf);
         self.dummy_file = Some(fr);
@@ -91,7 +89,6 @@ impl ProjectCtx {
                 uri: Url::parse("dummy:///tmp/internal/sand_dummy_file.sand").unwrap(),
                 name: FileName::dummy(),
                 index: fr,
-                default_module: None,
             };
             self.code_files.push(cf);
             self.dummy_file = Some(fr);

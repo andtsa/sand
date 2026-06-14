@@ -7,13 +7,16 @@ use crate::ir_types::typed_hir::MatchPattern;
 use crate::ir_types::typed_hir::Statement;
 
 /// Collect all variable names bound by a `LetPattern`'s match pattern.
-pub fn collect_let_pattern_bindings(pattern: &MatchPattern) -> HashSet<UniqVar> {
+pub fn collect_let_pattern_bindings<'tcx>(pattern: &MatchPattern<'tcx>) -> HashSet<UniqVar<'tcx>> {
     let mut set = HashSet::new();
     collect_match_pattern_bindings(pattern, &mut set);
     set
 }
 
-fn collect_match_pattern_bindings(pattern: &MatchPattern, set: &mut HashSet<UniqVar>) {
+fn collect_match_pattern_bindings<'tcx>(
+    pattern: &MatchPattern<'tcx>,
+    set: &mut HashSet<UniqVar<'tcx>>,
+) {
     match pattern {
         MatchPattern::Binding { var, .. } => {
             set.insert(*var);
@@ -32,17 +35,22 @@ fn collect_match_pattern_bindings(pattern: &MatchPattern, set: &mut HashSet<Uniq
     }
 }
 
-pub fn get_dependencies(expr: &Expr) -> HashSet<UniqVar> {
+pub fn get_dependencies<'tcx>(expr: &Expr<'tcx>) -> HashSet<UniqVar<'tcx>> {
     let mut dependencies = HashSet::new();
     collect_dependencies(&expr.expr, &mut dependencies);
     dependencies
 }
 
-pub fn collect_dependencies(expr: &Expression, dependencies: &mut HashSet<UniqVar>) {
+pub fn collect_dependencies<'tcx>(
+    expr: &Expression<'tcx>,
+    dependencies: &mut HashSet<UniqVar<'tcx>>,
+) {
     match expr {
         Expression::Var(name) => {
             dependencies.insert(*name);
         }
+        Expression::Borrow(inner, _) => collect_dependencies(&inner.expr, dependencies),
+        Expression::Deref(inner) => collect_dependencies(&inner.expr, dependencies),
         Expression::BinOp { left, right, .. } => {
             collect_dependencies(&left.expr, dependencies);
             collect_dependencies(&right.expr, dependencies);
@@ -59,12 +67,16 @@ pub fn collect_dependencies(expr: &Expression, dependencies: &mut HashSet<UniqVa
             collect_dependencies(&cond.expr, dependencies);
             collect_dependencies(&body.expr, dependencies);
         }
-        Expression::Call { args, .. } | Expression::IntrinsicCall { args, .. } => {
+        Expression::Call { args, .. }
+        | Expression::IntrinsicCall { args, .. }
+        | Expression::MethodCall { args, .. } => {
             for arg in args {
                 collect_dependencies(&arg.expr, dependencies);
             }
         }
-        Expression::Block { statements, expr } => {
+        Expression::Block {
+            statements, expr, ..
+        } => {
             for stmt in statements {
                 match stmt {
                     Statement::Declaration { val, .. } => {
@@ -72,6 +84,12 @@ pub fn collect_dependencies(expr: &Expression, dependencies: &mut HashSet<UniqVa
                     }
                     Statement::Assignment { val, .. } => {
                         collect_dependencies(&val.expr, dependencies);
+                    }
+                    Statement::DerefAssign {
+                        reference, value, ..
+                    } => {
+                        collect_dependencies(&reference.expr, dependencies);
+                        collect_dependencies(&value.expr, dependencies);
                     }
                     Statement::LetTuple { val, .. } | Statement::LetPattern { val, .. } => {
                         collect_dependencies(&val.expr, dependencies);
@@ -105,25 +123,29 @@ pub fn collect_dependencies(expr: &Expression, dependencies: &mut HashSet<UniqVa
     }
 }
 
-pub fn get_mutations_stmt(stmt: &Statement) -> HashSet<UniqVar> {
+pub fn get_mutations_stmt<'tcx>(stmt: &Statement<'tcx>) -> HashSet<UniqVar<'tcx>> {
     match stmt {
         Statement::Declaration { name, .. } => HashSet::from([*name]),
         Statement::Assignment { name, .. } => HashSet::from([*name]),
+        // write-through mutates through a reference, not a named local.
+        Statement::DerefAssign { .. } => HashSet::new(),
         Statement::LetTuple { elems, .. } => elems.iter().map(|(n, ..)| *n).collect(),
         Statement::LetPattern { pattern, .. } => collect_let_pattern_bindings(pattern),
         Statement::Expr(_) => HashSet::new(),
     }
 }
 
-pub fn get_mutations_expr(expr: &Expr) -> HashSet<UniqVar> {
+pub fn get_mutations_expr<'tcx>(expr: &Expr<'tcx>) -> HashSet<UniqVar<'tcx>> {
     let mut mutations = HashSet::new();
     collect_mutations(&expr.expr, &mut mutations);
     mutations
 }
 
-fn collect_mutations(expr: &Expression, mutations: &mut HashSet<UniqVar>) {
+fn collect_mutations<'tcx>(expr: &Expression<'tcx>, mutations: &mut HashSet<UniqVar<'tcx>>) {
     match expr {
-        Expression::Block { statements, expr } => {
+        Expression::Block {
+            statements, expr, ..
+        } => {
             for stmt in statements {
                 match stmt {
                     Statement::Declaration { name, .. } => {
@@ -132,6 +154,7 @@ fn collect_mutations(expr: &Expression, mutations: &mut HashSet<UniqVar>) {
                     Statement::Assignment { name, .. } => {
                         mutations.insert(*name);
                     }
+                    Statement::DerefAssign { .. } => {}
                     Statement::LetTuple { elems, .. } => {
                         for (name, ..) in elems {
                             mutations.insert(*name);

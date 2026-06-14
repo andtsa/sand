@@ -1,5 +1,6 @@
 //! operators
 
+use crate::lang::types::CommonTypes;
 use crate::lang::types::Ty;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -9,6 +10,9 @@ pub enum Bop {
     Mult,
     Div,
     Pow,
+    /// bitwise AND on `Int`, written `&&`.
+    BitAnd,
+    /// logical AND on `Bool`, written `and`.
     And,
     Or,
     Xor,
@@ -31,69 +35,82 @@ pub enum Uop {
     Not,
 }
 
-// specify what binary operations are allowed in this language.
 impl Bop {
-    /// returns the resulting type if the given types are accepted by this
-    /// operator, and `Err(Ty)` with the expected type otherwise
-    pub fn accepts_types(&self, left: Ty, right: Ty) -> Result<Ty, Ty> {
+    /// Returns the result type if the given operand types are accepted by this
+    /// operator, or `Err(expected_ty)` otherwise.
+    pub fn accepts_types<'tcx>(
+        &self,
+        types: &CommonTypes<'tcx>,
+        left: Ty<'tcx>,
+        right: Ty<'tcx>,
+    ) -> Result<Ty<'tcx>, Ty<'tcx>> {
         use Bop::*;
         match self {
-            Plus | Minus | Mult | Div | Pow => {
-                if left == Ty::INT && right == Ty::INT {
-                    Ok(Ty::INT)
+            Plus | Minus | Mult | Div | Pow | BitAnd => {
+                if left == types.int && right == types.int {
+                    Ok(types.int)
                 } else {
-                    Err(Ty::INT)
+                    Err(types.int)
                 }
             }
-            And | Or | Xor => {
+            And => {
+                if left == types.bool && right == types.bool {
+                    Ok(types.bool)
+                } else {
+                    Err(types.bool)
+                }
+            }
+            Or | Xor => {
                 if left == right {
-                    Ok(left) // both types are the same, so we can return either one
+                    Ok(left)
                 } else {
-                    Err(left) // could be either type, diagnostic is based on the first operand
+                    Err(left)
                 }
             }
-            Comp(op) => {
-                match op {
-                    CompOp::Ge | CompOp::Le | CompOp::Gt | CompOp::Lt => {
-                        if left == Ty::INT && right == Ty::INT {
-                            Ok(Ty::BOOL)
-                        } else {
-                            Err(Ty::INT)
-                        }
-                    }
-                    CompOp::Eq | CompOp::Ne => {
-                        if left == right {
-                            Ok(Ty::BOOL)
-                        } else {
-                            Err(left) // could be either type, diagnostic is based on the first operand
-                        }
+            Comp(op) => match op {
+                CompOp::Ge | CompOp::Le | CompOp::Gt | CompOp::Lt => {
+                    if left == types.int && right == types.int {
+                        Ok(types.bool)
+                    } else {
+                        Err(types.int)
                     }
                 }
-            }
+                CompOp::Eq | CompOp::Ne => {
+                    if left == right {
+                        Ok(types.bool)
+                    } else {
+                        Err(left)
+                    }
+                }
+            },
         }
     }
 }
 
 impl Uop {
-    /// returns `Ok(Ty)` with the resulting type if the given type is accepted
-    /// by this operator, and `Err(Ty)` with the expected type otherwise
-    pub fn accepts_type(&self, right: Ty) -> Result<Ty, Ty> {
+    /// Returns `Ok(result_ty)` if the given operand type is accepted by this
+    /// operator, or `Err(expected_ty)` otherwise.
+    pub fn accepts_type<'tcx>(
+        &self,
+        types: &CommonTypes<'tcx>,
+        right: Ty<'tcx>,
+    ) -> Result<Ty<'tcx>, Ty<'tcx>> {
         use Uop::*;
         match self {
             Neg => {
-                if right == Ty::INT {
-                    Ok(Ty::INT)
+                if right == types.int {
+                    Ok(types.int)
                 } else {
-                    Err(Ty::INT)
+                    Err(types.int)
                 }
             }
             Not => {
-                if right == Ty::BOOL {
-                    Ok(Ty::BOOL)
-                } else if right == Ty::INT {
-                    Ok(Ty::INT)
+                if right == types.bool {
+                    Ok(types.bool)
+                } else if right == types.int {
+                    Ok(types.int)
                 } else {
-                    Err(Ty::BOOL)
+                    Err(types.bool)
                 }
             }
         }

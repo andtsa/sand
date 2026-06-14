@@ -7,7 +7,6 @@ use url::Url;
 
 use crate::compiler::structure::FileRef;
 use crate::compiler::structure::Map;
-use crate::compiler::structure::ModuleInfo;
 use crate::compiler::structure::Range;
 
 // todo: unimplement clone
@@ -75,7 +74,8 @@ pub struct SandDiagnostic {
     pub range: Range,
     pub file: Option<FileRef>,
     pub url: Option<Url>,
-    pub module: Option<ModuleInfo>,
+    // todo: replace with ModuleRef
+    pub module: Option<String>,
 
     pub related: Vec<SdRelatedInfo>,
 }

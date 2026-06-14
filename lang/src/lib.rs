@@ -24,39 +24,55 @@ pub mod util;
 pub use util::bugs::*;
 
 #[derive(Debug, Error)]
-#[error("compilation error: {source}")]
-pub struct SandLangError {
-    pub context: SandLangErrorContext,
-    pub source: SandLangErrorSource,
+#[error("compilation error: {kind}")]
+pub struct SandLangError<'tcx> {
+    pub context: SandLangErrorContext<'tcx>,
+    pub kind: SandLangErrorSource<'tcx>,
 }
 
 #[derive(Debug, Default)]
-pub struct SandLangErrorContext {
-    pub module: Option<ModuleRef>,
+pub struct SandLangErrorContext<'tcx> {
+    pub module: Option<ModuleRef<'tcx>>,
     pub file: Option<FileRef>,
 }
 
 #[derive(Debug, Error)]
-pub enum SandLangErrorSource {
+pub enum SandLangErrorSource<'tcx> {
     #[error("parse error: {0}")]
     AstParseError(#[from] passes::build_ast::AstError),
 
+    // Note: no `#[from]` — QualifyError<'tcx> is non-'static so it cannot be
+    // an error "source". Use the manual From impl below instead.
     #[error("qualify error: {0}")]
-    QualifyError(#[from] passes::qualify::error::QualifyError),
+    QualifyError(passes::qualify::error::QualifyError<'tcx>),
 
+    // Note: no `#[from]` — AstTypeError<'tcx> is non-'static so it cannot be
+    // an error "source". Use the manual From impl below instead.
     #[error("type error: {0}")]
-    TypeError(#[from] passes::type_ast::AstTypeError),
+    TypeError(passes::type_ast::AstTypeError<'tcx>),
 
     #[error("ownership error: {0}")]
     OwnershipError(#[from] passes::ownership::errors::OwnershipError),
 }
 
+impl<'tcx> From<passes::type_ast::AstTypeError<'tcx>> for SandLangErrorSource<'tcx> {
+    fn from(e: passes::type_ast::AstTypeError<'tcx>) -> Self {
+        SandLangErrorSource::TypeError(e)
+    }
+}
+
+impl<'tcx> From<passes::qualify::error::QualifyError<'tcx>> for SandLangErrorSource<'tcx> {
+    fn from(e: passes::qualify::error::QualifyError<'tcx>) -> Self {
+        SandLangErrorSource::QualifyError(e)
+    }
+}
+
 const CORE_SRC: &str = include_str!("core.sand");
 
-pub fn compile_hir<'run, 'proj>(
+pub fn compile_hir<'proj>(
     code: Map<FileRef, &'_ str>,
-    ctx: &'run mut CompileCtx<'proj>,
-) -> Result<TypedProgram, SandLangError> {
+    ctx: &mut CompileCtx<'proj>,
+) -> Result<TypedProgram<'proj>, SandLangError<'proj>> {
     let span = tracing::warn_span!("compile_hir");
     let _enter = span.enter();
 
@@ -100,24 +116,34 @@ pub fn compile_hir<'run, 'proj>(
         SandLangErrorContext::with_module(e.module).wrap_err(e.error)
     })?;
 
+    // Heap lowering (Memory Step C.5): rewrite every `deriving Heaped` enum into
+    // a `Unique<Node>` handle over the core-lib allocator *before* ownership, so
+    // drops are inserted uniformly on the resulting handles, and before mono, so
+    // the injected `unique_*` calls and node types are instantiated normally.
+    let typed_program = passes::heap_lower::lower(ctx, typed_program);
+
     let typed_program = passes::ownership::check(ctx, typed_program)
         .map_err(|e| SandLangErrorContext::with_module(e.module).wrap_err(e.error))?;
+
+    // Monomorphisation erases all type parameters, so every later pass (MIR
+    // lowering, codegen) only sees concrete types.
+    let typed_program = passes::mono::monomorphise(ctx, &typed_program);
 
     Ok(typed_program)
 }
 
-impl SandLangErrorContext {
-    pub fn with_module(module: ModuleRef) -> Self {
+impl<'tcx> SandLangErrorContext<'tcx> {
+    pub fn with_module(module: ModuleRef<'tcx>) -> Self {
         Self {
             module: Some(module),
             file: None,
         }
     }
 
-    pub fn wrap_err<E: Into<SandLangErrorSource>>(self, err: E) -> SandLangError {
+    pub fn wrap_err<E: Into<SandLangErrorSource<'tcx>>>(self, err: E) -> SandLangError<'tcx> {
         SandLangError {
             context: self,
-            source: err.into(),
+            kind: err.into(),
         }
     }
 }

@@ -13,10 +13,29 @@ tag_type = { "#" ~ identifier ~ ("|" ~ "#" ~ identifier)* }
 // Tuple type: `(Int, Bool)`, arity >= 2 (one element is just grouping, handled by build_type)
 tuple_type = { "(" ~ type_ ~ ("," ~ type_)+ ~ ")" }
 
-type_ = {
-    "Int"
-  | "Bool"
-  | "Unit" // equivalent to rust (), python None
+// Generic enum instantiation at a use site: `Option<Int>`, `Either<Int, Bool>`,
+// `Holder<'a>`, `Both<'a, Int>`. Region (lifetime) arguments come first, then
+// type arguments (the lifetimes-first convention; enforced in `build_type`).
+type_application = { identifier ~ "<" ~ type_app_arg ~ ("," ~ type_app_arg)* ~ ">" }
+type_app_arg = { lifetime | type_ }
+
+// a lifetime / region: `'r`, `'heap`, `'static`. atomic so no internal
+// whitespace is consumed between the tick and the name.
+lifetime = @{ "'" ~ identifier }
+
+// primitive type keywords. atomic (`@`) with a trailing word-boundary
+// predicate so a name with a leading keyword prefix (`IntList`, `Boolean`,
+// `Unite`) lexes as an identifier rather than the keyword + a stray suffix.
+// the atomicity also prevents implicit whitespace from being folded into the
+// matched span (which would otherwise capture `Int ` instead of `Int`).
+prim_int  = @{ "Int" ~ !(ASCII_ALPHANUMERIC | "_") }
+prim_bool = @{ "Bool" ~ !(ASCII_ALPHANUMERIC | "_") }
+prim_unit = @{ "Unit" ~ !(ASCII_ALPHANUMERIC | "_") } // equivalent to rust (), python None
+
+core_type = {
+    prim_int
+  | prim_bool
+  | prim_unit
 
   | qualified_type // cross-module enum type: mod::TypeName
 
@@ -24,11 +43,25 @@ type_ = {
 
   | tuple_type // product type: (A, B, ...)
 
+  | type_application // generic instantiation: Option<Int>
+
+  | borrow_type // shared reference: &T, &'r T
+
   | identifier // named enum type
 }
 
+// reference type `&'r T` (shared) or `&'r mut T` (exclusive) (Calculus §2.3).
+// the lifetime is optional; an absent one is assigned a fresh region. the
+// `mut` keyword marks an exclusive (mutable) borrow (Step 9).
+borrow_type = { "&" ~ lifetime? ~ mut_kw? ~ core_type }
+
+// a type, optionally ascribed to a region: `Int`, `Int @ 'r` (Calculus §2.3).
+// the `@ 'r` suffix is parsed here (rather than a left-recursive `region_type`)
+// so the grammar stays a valid PEG.
+type_ = { core_type ~ ("@" ~ lifetime)? }
+
 // keywords (prevent them from being identifiers)
-KEYWORD = { "if" | "then" | "else" | "let" | "def" | "true" | "false" | "Unit" | "Int" | "Bool" | "while" | "do" | "module" | "mut" | "type" | "match" }
+KEYWORD = { "if" | "then" | "else" | "let" | "def" | "true" | "false" | "Unit" | "Int" | "Bool" | "while" | "do" | "module" | "mut" | "type" | "match" | "and" | "where" | "use" | "typeclass" | "impl" | "requires" | "for" | "extern" | "deriving" }
 
 identifier       = @{ !(KEYWORD ~ !(ASCII_ALPHANUMERIC | "_")) ~ "_"* ~ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
 empty_identifier = @{ "_" }
@@ -45,7 +78,10 @@ multiply = { "*" }
 divide   = { "/" }
 pow      = { "^" }
 negate   = { "!" }
-and      = { "&" }
+// `&&` is bitwise AND (on Int); `and` is logical AND (on Bool). single `&` is
+// reserved for borrow syntax (Step 7).
+bitand   = { "&&" }
+logand   = @{ "and" ~ !(ASCII_ALPHANUMERIC | "_") }
 or       = { "|" }
 xor      = { "⊕" | "¡" }
 gt       = { ">" }
@@ -55,10 +91,30 @@ eq       = { "==" }
 ge       = { ">=" | "≥" }
 le       = { "<=" | "≤" }
 
+// type parameters on a generic declaration: `<T>`, `<+a : Owned, -b>`.
+// each parameter carries an optional variance annotation (`+`/`-`; absent =
+// default) and an optional kind annotation (`: Owned`/`: Never`; absent =
+// `Owned`). only appears in declaration position (right after the def/type
+// name); uses of a type parameter inside a type are bare identifiers.
+variance_ann = { "+" | "-" }
+kind_ann     = { "Owned" | "Never" }
+type_param   = { variance_ann? ~ identifier ~ (":" ~ kind_ann)? }
+// a region (lifetime) parameter `'r` declared on a generic item (Calculus §8.4).
+region_param = { lifetime }
+type_params  = { "<" ~ (region_param | type_param) ~ ("," ~ (region_param | type_param))* ~ ">" }
+
+// outlives constraints on a function signature: `where 'r >= 's` (Calculus
+// §8.10). typeclass constraints (`where T : Clone`) arrive in Step 15.
+where_constraint = { (lifetime ~ ">=" ~ lifetime) | (identifier ~ ":" ~ identifier) }
+where_clause     = { "where" ~ where_constraint ~ ("," ~ where_constraint)* }
+
 // enum type declarations
 // a variant is a bare tag (`Red`, nullary) or a tag with a payload type (`Ok(Int)`)
 enum_variant = { identifier ~ ("(" ~ type_ ~ ")")? }
-type_alias   = { "type" ~ identifier ~ "=" ~ enum_variant ~ ("|" ~ enum_variant)* ~ ";"? }
+// `deriving C1, C2, ...` — request compiler-derived instances (Memory Step C).
+// A general mechanism; in Step C only `HeapedUnique` is a registered derivable.
+deriving_clause = { "deriving" ~ identifier ~ ("," ~ identifier)* }
+type_alias   = { "type" ~ identifier ~ type_params? ~ "=" ~ enum_variant ~ ("|" ~ enum_variant)* ~ deriving_clause? ~ ";"? }
 
 // enum constructors: Light#Red (local), mod::Light#Red (cross-module), or #Red (bare tag, needs check mode)
 // an optional parenthesised argument supplies the variant's payload: `Result#Ok(5)`
@@ -94,7 +150,10 @@ whileloop = {
     "while" ~ expression ~ "do" ~ expression
 }
 
-function_call          = { identifier ~ "(" ~ (expression ~ ("," ~ expression)*)? ~ ")" }
+// `f::<T, ...>(args)` — explicit type arguments (turbofish, Memory Step C). The
+// `<` after `::` disambiguates from a `mod::fn` qualified call.
+turbofish              = { "::" ~ "<" ~ type_ ~ ("," ~ type_)* ~ ">" }
+function_call          = { identifier ~ turbofish? ~ "(" ~ (expression ~ ("," ~ expression)*)? ~ ")" }
 external_function_call = { identifier ~ "::" ~ identifier ~ "(" ~ (expression ~ ("," ~ expression)*)? ~ ")" }
 
 // tuple literal: `(a, b, ...)`
@@ -103,8 +162,19 @@ tuple_expr = { "(" ~ expression ~ ("," ~ expression)+ ~ ")" }
 // todo: anonymous functions (lambdas) & first class functions
 
 // precedence chaining
+// borrow expression `&e` (shared) or `&mut e` (exclusive) (Calculus §3.2 /
+// §8.7). binds tightly (to a primary), so `&x + 1` is `(&x) + 1`.
+borrow_expr = { "&" ~ mut_kw? ~ primary }
+// dereference expression `*e`: read through a reference (`&T`/`&mut T` -> T).
+// like `borrow_expr` it binds to a primary, so `*x + 1` is `(*x) + 1`. the
+// prefix `*` is unambiguous with the infix multiply, which only appears
+// between operands.
+deref_expr = { "*" ~ primary }
+
 primary = {
-    tuple_expr
+    borrow_expr
+  | deref_expr
+  | tuple_expr
   | ("(" ~ expression ~ ")")
   | ifstatement
   | whileloop
@@ -126,7 +196,7 @@ mul_div    = { power ~ ((multiply | divide) ~ power)* }
 add_sub    = { mul_div ~ ((add | subtract) ~ mul_div)* }
 comparison = { add_sub ~ ((ge | le | gt | lt) ~ add_sub)* }
 equality   = { comparison ~ ((eq | ne) ~ comparison)* }
-logic_and  = { equality ~ (and ~ equality)* }
+logic_and  = { equality ~ ((logand | bitand) ~ equality)* }
 logic_xor  = { logic_and ~ (xor ~ logic_and)* }
 logic_or   = { logic_xor ~ (or ~ logic_xor)* }
 expression = { logic_or }
@@ -145,13 +215,20 @@ let_binding_tuple = { "(" ~ let_binding_elem ~ ("," ~ let_binding_elem)+ ~ ")" }
 let_destructure   = { let_constructor | let_binding_tuple | let_binding_elem }
 let_constructor   = { identifier ~ "#" ~ identifier ~ ("(" ~ let_destructure ~ ")")? }
 
+// borrow binding `let &x = e` (shared) or `let &mut x = e` (exclusive)
+// (Calculus §3.2 / §6.4): `x` borrows `e`, so it stays usable and `e` is not
+// consumed.
+borrow_binding = { "&" ~ mut_kw? ~ (identifier | empty_identifier) }
+
 // variables, either a single binding, a flat tuple-pattern, a constructor-pattern, or bare binding
 // The `else` clause is required when the LHS is a refutable (constructor) pattern.
 declaration = {
-    "let" ~ (let_constructor | let_tuple | mut_kw? ~ (identifier | empty_identifier)) ~ (":" ~ type_)? ~ "=" ~ expression ~ ("else" ~ expression)?
+    "let" ~ (let_constructor | let_tuple | borrow_binding | mut_kw? ~ (identifier | empty_identifier)) ~ (":" ~ type_)? ~ "=" ~ expression ~ ("else" ~ expression)?
 }
 
-assignment = { identifier ~ "=" ~ expression }
+// `x = e` (reseat / variable write) or `*r = e` (write-through a `&mut`). The
+// `=` disambiguates from a bare `*r` expression statement.
+assignment = { (deref_expr | identifier) ~ "=" ~ expression }
 
 // statements are the imperative elements of the language
 statement = {
@@ -162,8 +239,32 @@ statement = {
 parameter  = { mut_kw? ~ (identifier | empty_identifier) ~ ":" ~ type_ }
 parameters = { parameter ~ ("," ~ parameter)* ~ ","? }
 
-function = { "def" ~ identifier ~ "(" ~ parameters? ~ ")" ~ ":" ~ type_ ~ ":=" ~ expression }
+function = { "def" ~ identifier ~ type_params? ~ "(" ~ parameters? ~ ")" ~ ":" ~ type_ ~ where_clause? ~ ":=" ~ expression }
+
+// External (FFI) function declaration (Memory Step A): a bodyless `def` bound
+// to a C symbol of the same name. C ABI, non-variadic; parameter/return types
+// must be FFI-safe (Int, Ptr<T>, Unit). No generics, no `where`-clause.
+extern_decl = { "extern" ~ "def" ~ identifier ~ "(" ~ parameters? ~ ")" ~ ":" ~ type_ ~ ";" }
+
+// Typeclass declaration (Calculus §8.8). A single type parameter for now
+// (`typeclass Eq<T> { … }`); `requires` lists superclasses. A method is a `def`
+// header (sand has no arrow types yet, so a signature reuses the function-header
+// form) with an optional default body (`:= expression`).
+typeclass_method = { "def" ~ identifier ~ type_params? ~ "(" ~ parameters? ~ ")" ~ ":" ~ type_ ~ where_clause? ~ (":=" ~ expression)? }
+requires_clause  = { "requires" ~ identifier ~ ("," ~ identifier)* }
+typeclass_decl   = { "typeclass" ~ identifier ~ type_params ~ requires_clause? ~ "{" ~ typeclass_method* ~ "}" }
+
+// Typeclass implementation (Calculus §8.9): `impl Eq for Int { def eq(…) := … }`.
+impl_decl = { "impl" ~ identifier ~ "for" ~ type_ ~ "{" ~ function* ~ "}" }
 
 module = { "module" ~ identifier ~ ";"? }
 
-program = { SOI ~ (function | type_alias | module)* ~ EOI }
+// import a name (or all names) from another module into unqualified scope.
+// `use math::gcd;` brings one item; `use geometry::*;` is a glob. The path is
+// parsed as a general multi-segment path (room for nested modules later);
+// resolution currently handles the flat `module::item` / `module::*` case.
+use_glob = { "*" }
+use_path = { identifier ~ ("::" ~ identifier)* ~ ("::" ~ use_glob)? }
+use_decl = { "use" ~ use_path ~ ";" }
+
+program = { SOI ~ (function | extern_decl | type_alias | typeclass_decl | impl_decl | module | use_decl)* ~ EOI }

@@ -10,10 +10,24 @@ use thiserror::Error;
 
 use crate::compiler::context::CompileCtx;
 use crate::compiler::context::ContextError;
+use crate::compiler::structure::Derivable;
 use crate::compiler::structure::FileRef;
+use crate::compiler::structure::FunRef;
+use crate::compiler::structure::FunSig;
+use crate::compiler::structure::HeapedStrategy;
+use crate::compiler::structure::ImplDef;
 use crate::compiler::structure::Map;
+use crate::compiler::structure::MethodDef;
 use crate::compiler::structure::ModuleRef;
 use crate::compiler::structure::Range;
+use crate::compiler::structure::RegionParamSpec;
+use crate::compiler::structure::TypeConstraint;
+use crate::compiler::structure::TypeHead;
+use crate::compiler::structure::TypeParam;
+use crate::compiler::structure::TypeParamSpec;
+use crate::compiler::structure::TypeclassDef;
+use crate::compiler::structure::TypeclassRef;
+use crate::compiler::structure::UniqVar;
 use crate::compiler::structure::UriError;
 use crate::internal_bug;
 use crate::ir_types::hhir::*;
@@ -62,6 +76,135 @@ pub enum AstError {
 
     #[error("unknown module '{module}' at {range}")]
     UnknownModule { module: String, range: Range },
+
+    #[error(
+        "unknown lifetime '{name}' at {range}: declare it as a region parameter, e.g. `<'{name}>`"
+    )]
+    UnknownRegion { name: String, range: Range },
+
+    #[error(
+        "generic type '{name}' expects {expected} type argument(s) but {found} were given at {range}"
+    )]
+    TypeArgArityMismatch {
+        name: String,
+        expected: usize,
+        found: usize,
+        range: Range,
+    },
+
+    #[error(
+        "type '{name}' expects {expected} lifetime argument(s) but {found} were given at {range}"
+    )]
+    RegionArgArityMismatch {
+        name: String,
+        expected: usize,
+        found: usize,
+        range: Range,
+    },
+
+    #[error(
+        "lifetime arguments must come before type arguments at {range} (write `{name}<'a, T>`, not `{name}<T, 'a>`)"
+    )]
+    RegionArgsNotFirst { name: String, range: Range },
+
+    #[error(
+        "a reference in a payload of type '{name}' at {range} must use a declared lifetime parameter (e.g. `type {name}<'a> = ...(&'a T)`) or `'static`; an elided `&` cannot be tracked"
+    )]
+    PayloadBorrowNeedsLifetime { name: String, range: Range },
+
+    #[error(
+        "type '{ty}' at {range} is not FFI-safe; an `extern def` may only use `Int`, `Unit`, or `Ptr<T>` across the C boundary"
+    )]
+    NonFfiSafeType { ty: String, range: Range },
+
+    #[error("'{name}' at {range} is not a derivable property")]
+    NotDerivable { name: String, range: Range },
+
+    #[error("'{name}' is derived more than once at {range}")]
+    DuplicateDerive { name: String, range: Range },
+
+    #[error(
+        "recursive type '{name}' at {range} must be heap-allocated (add `deriving Heaped`); without it its values would be infinite-sized and would leak"
+    )]
+    RecursiveTypeNeedsHeaped { name: String, range: Range },
+
+    #[error("unknown typeclass '{name}' at {range}")]
+    UnknownTypeclass { name: String, range: Range },
+
+    #[error("typeclass '{name}' at {range} must declare exactly one type parameter")]
+    TypeclassParamArity { name: String, range: Range },
+
+    #[error("typeclass method at {range} may not declare its own generics yet")]
+    MethodGenericsUnsupported { range: Range },
+
+    #[error("unknown superclass '{name}' at {range}")]
+    UnknownSuperclass { name: String, range: Range },
+
+    #[error("method name '{name}' at {range} already names another typeclass method")]
+    DuplicateMethodName { name: String, range: Range },
+
+    #[error("cannot implement a typeclass for this type at {range}")]
+    NonInstanceableType { range: Range },
+
+    #[error("'{method}' at {range} is not a method of typeclass '{class}'")]
+    UnknownMethod {
+        class: String,
+        method: String,
+        range: Range,
+    },
+
+    #[error("instance of '{class}' at {range} is missing method '{method}'")]
+    MissingMethod {
+        class: String,
+        method: String,
+        range: Range,
+    },
+
+    #[error("duplicate instance of '{class}' for this type at {range}")]
+    DuplicateInstance { class: String, range: Range },
+
+    #[error(
+        "orphan instance at {range}: implementing '{class}' requires the class or the type to be defined locally"
+    )]
+    OrphanInstance { class: String, range: Range },
+
+    #[error(
+        "instance of '{class}' at {range} requires an instance of its superclass '{superclass}' for the same type"
+    )]
+    MissingSuperclass {
+        class: String,
+        superclass: String,
+        range: Range,
+    },
+
+    #[error("`Copy` at {range} requires every field to be `Copy`")]
+    CopyPayloadNotCopy { range: Range },
+
+    #[error("`Copy` for a generic type at {range} is not supported")]
+    CopyOnGenericType { range: Range },
+
+    #[error("malformed `use` at {range}: expected `use module::name;` or `use module::*;`")]
+    MalformedUse { range: Range },
+
+    #[error(
+        "type argument for parameter '{param}' of '{type_name}' has kind {found:?}, but kind {expected:?} is required at {range}"
+    )]
+    KindArgMismatch {
+        type_name: String,
+        param: String,
+        expected: Kind,
+        found: Kind,
+        range: Range,
+    },
+
+    #[error(
+        "parameter '{param}' of '{type_name}' is declared contravariant but appears in a covariant (producer) position at {range}"
+    )]
+    UnsoundVariance {
+        type_name: String,
+        param: String,
+        range: Range,
+    },
 }
 
 trait AstExt<T> {
@@ -87,12 +230,12 @@ impl<T> AstExt<T> for Option<T> {
     }
 }
 
-impl ProgramModule {
-    pub fn parse_source_file<'run>(
+impl<'run> ProgramModule<'run> {
+    pub fn parse_source_file(
         ctx: &mut CompileCtx<'run>,
         src: &str,
         file: FileRef,
-    ) -> Result<Vec<Self>, AstError> {
+    ) -> Result<Vec<ProgramModule<'run>>, AstError> {
         let mut pairs = LangParser::parse(Rule::program, src).map_err(Box::new)?;
 
         let program_pair = match pairs.next() {
@@ -117,7 +260,7 @@ impl ProgramModule {
             .collect::<Vec<_>>())
     }
 
-    pub fn parse_stub<'run>(ctx: &mut CompileCtx<'run>, src: &str) -> Result<Self, AstError> {
+    pub fn parse_stub(ctx: &mut CompileCtx<'run>, src: &str) -> Result<Self, AstError> {
         let fr = ctx.stub_file();
         let modules = Self::parse_source_file(ctx, src, fr)?;
         if modules.len() == 1 {
@@ -134,88 +277,743 @@ impl ProgramModule {
 
 // ============== top level ==============
 
-pub fn build_program<'run>(
+pub fn build_program<'i, 'run>(
     ctx: &mut CompileCtx<'run>,
-    pair: Pair<Rule>,
+    pair: Pair<'i, Rule>,
     src: &str,
-    default_module: ModuleRef,
+    default_module: ModuleRef<'run>,
     file: FileRef,
-) -> Result<Map<ModuleRef, Vec<Function>>, AstError> {
+) -> Result<Map<ModuleRef<'run>, Vec<Function<'run>>>, AstError> {
     assert_eq!(pair.as_rule(), Rule::program);
+    let children: Vec<Pair<'i, Rule>> = pair.into_inner().collect();
 
-    // Collect all top-level children so we can do two passes.
-    let children: Vec<Pair<Rule>> = pair.into_inner().collect();
-
-    // first pass: register enum type declarations (phase 1 — names only).
-    // we also track the current module as module declarations are encountered,
-    // so that enum defs are attributed to the correct module.
+    // The front end runs as a collect-then-resolve sequence:
     //
-    // phase 1 deliberately allocates every `EnumRef` and variant name (with
-    // `payload: None`) before any payload type annotation is resolved: a
-    // payload may reference another enum — including forward or recursive
-    // references (`type Tree = Leaf | Node((Tree, Tree))`) — so every
-    // `EnumRef` must exist before `build_type` runs on any payload. We stash
-    // the raw payload `type_` pairs (cloned — they borrow from `src`) here
-    // and resolve them in phase 1.5 below, once every enum skeleton exists.
-    let mut pending_payloads: Vec<(EnumRef, usize, Pair<Rule>)> = Vec::new();
-    {
-        let mut cur_mod = default_module;
-        for child in &children {
-            match child.as_rule() {
-                Rule::module => {
-                    let child_span = child.as_span();
-                    let modname_pair = child
-                        .clone()
-                        .into_inner()
-                        .next()
-                        .missing("module name", Range::from(child_span))?;
-                    cur_mod = ctx
-                        .get_mod_by_name(modname_pair.as_str())
-                        .unwrap_or_else(|| ctx.register_module(modname_pair.as_str(), file));
-                }
-                Rule::type_alias => {
-                    let range = Range::from(child);
-                    let mut inner = child.clone().into_inner();
-                    let name_pair = inner.next().missing("enum name", range)?;
-                    let enum_name = name_pair.as_str().to_string();
+    //   1 a collect declarations, register enum *skeletons* + `use` imports;
+    //     b resolve enum payloads, now that every skeleton exists, so forward /
+    //       recursive payload types (`type Tree = Node((Tree, Tree))`) resolve;
+    //     c variance soundness, declared variance vs. payload positions;
+    //
+    //   2   build function bodies, names resolve against the collected decls.
+    let collected = collect_declarations(ctx, &children, default_module, file)?;
+    resolve_enum_payloads(ctx, collected.pending_payloads)?;
+    // Heap-strategy legality (Memory Step C, K-HeapedRec): a (mutually) recursive
+    // type must derive a heap strategy; a non-recursive one must not. Runs after
+    // payloads resolve (recursion is visible only once payload types exist).
+    check_heaped_legality(ctx)?;
+    for er in collected.generic_enums {
+        check_variance(ctx, er)?;
+    }
+    // Typeclass method signatures resolve after every enum + class skeleton
+    // exists, so a method type may reference any enum or the class parameter.
+    let defaults = resolve_typeclass_sigs(ctx, collected.pending_classes)?;
+    // Build defaulted methods (as generic functions) *before* impls, so an impl
+    // that omits a defaulted method can point its instance entry at the default.
+    let default_fns = build_default_methods(ctx, defaults, src)?;
+    let mut mods = build_functions(ctx, children, src, default_module, file)?;
+    for (module, f) in default_fns {
+        mods.entry(module).or_default().push(f);
+    }
+    // Instance-set checks need every instance registered (build_functions did
+    // that): a subclass instance requires its superclass instances for the same
+    // head type (Calculus §8.9).
+    check_superclass_instances(ctx)?;
+    check_copy_instances(ctx)?;
+    Ok(mods)
+}
 
-                    // enum_variant = { identifier ~ ("(" ~ type_ ~ ")")? }
-                    let mut variant_names = Vec::new();
-                    let mut variant_payloads = Vec::new();
-                    for variant_pair in inner {
-                        assert_eq!(variant_pair.as_rule(), Rule::enum_variant);
-                        let v_range = Range::from(&variant_pair);
-                        let mut v_inner = variant_pair.into_inner();
-                        let v_name = v_inner
-                            .next()
-                            .missing("variant name", v_range)?
-                            .as_str()
-                            .to_string();
-                        let payload_pair = v_inner.next();
-                        variant_names.push(v_name);
-                        variant_payloads.push(payload_pair);
-                    }
+/// The declarations gathered in phase 1, to be resolved in later phases.
+struct Collected<'i, 'run> {
+    /// `(enum, variant index, raw payload `type_` pair)` — resolved in phase
+    /// 1.5 once every enum skeleton exists. Pairs borrow from the parse
+    /// (`'i`).
+    pending_payloads: Vec<(EnumRef<'run>, usize, Pair<'i, Rule>)>,
+    /// Generic enums, for the phase-1.6 variance check.
+    generic_enums: Vec<EnumRef<'run>>,
+    /// Typeclass skeletons whose method signatures + superclasses resolve in a
+    /// later phase (once all classes/enums exist). Pairs borrow from the parse.
+    pending_classes: Vec<PendingClass<'i>>,
+}
 
-                    let er = ctx.register_enum(&enum_name, variant_names, range, cur_mod)?;
-                    for (idx, payload_pair) in variant_payloads.into_iter().enumerate() {
-                        if let Some(p) = payload_pair {
-                            pending_payloads.push((er, idx, p));
-                        }
-                    }
-                }
-                _ => {}
+/// A registered typeclass skeleton awaiting method-signature + superclass
+/// resolution (see [`resolve_typeclass_sigs`]).
+struct PendingClass<'i> {
+    tref: TypeclassRef,
+    /// the class's type parameter(s) — exactly one — to re-enter while building
+    /// method signatures (so `T` resolves in them).
+    class_params: Vec<TypeParam>,
+    method_pairs: Vec<Pair<'i, Rule>>,
+    superclass_names: Vec<(String, Range)>,
+}
+
+/// phase 1, walk the top level and register each enum *skeleton* (name +
+/// variant names, payloads deferred) and each `use` import, tracking the
+/// current module. No payload types are resolved yet (a payload may
+/// forward-reference another enum), so every `EnumRef` exists before any
+/// `build_type` runs.
+fn collect_declarations<'i, 'run>(
+    ctx: &mut CompileCtx<'run>,
+    children: &[Pair<'i, Rule>],
+    default_module: ModuleRef<'run>,
+    file: FileRef,
+) -> Result<Collected<'i, 'run>, AstError> {
+    let mut pending_payloads: Vec<(EnumRef<'run>, usize, Pair<'i, Rule>)> = Vec::new();
+    let mut generic_enums: Vec<EnumRef<'run>> = Vec::new();
+    let mut pending_classes: Vec<PendingClass<'i>> = Vec::new();
+    let mut cur_mod = default_module;
+    for child in children {
+        match child.as_rule() {
+            Rule::typeclass_decl => {
+                pending_classes.push(collect_typeclass(ctx, child, cur_mod)?);
+            }
+            Rule::module => {
+                let child_span = child.as_span();
+                let modname_pair = child
+                    .clone()
+                    .into_inner()
+                    .next()
+                    .missing("module name", Range::from(child_span))?;
+                cur_mod = ctx
+                    .get_mod_by_name(modname_pair.as_str())
+                    .unwrap_or_else(|| ctx.register_module(modname_pair.as_str(), file));
+            }
+            Rule::type_alias => collect_enum_skeleton(
+                ctx,
+                child,
+                cur_mod,
+                &mut pending_payloads,
+                &mut generic_enums,
+            )?,
+            Rule::use_decl => collect_use(ctx, child, cur_mod)?,
+            _ => {}
+        }
+    }
+    Ok(Collected {
+        pending_payloads,
+        generic_enums,
+        pending_classes,
+    })
+}
+
+/// Register one `type` declaration's skeleton (name, type/region params,
+/// variant names) and stash its raw payload pairs for phase 1b.
+fn collect_enum_skeleton<'i, 'run>(
+    ctx: &mut CompileCtx<'run>,
+    child: &Pair<'i, Rule>,
+    cur_mod: ModuleRef<'run>,
+    pending_payloads: &mut Vec<(EnumRef<'run>, usize, Pair<'i, Rule>)>,
+    generic_enums: &mut Vec<EnumRef<'run>>,
+) -> Result<(), AstError> {
+    let range = Range::from(child);
+    let mut inner = child.clone().into_inner();
+    let enum_name = inner
+        .next()
+        .missing("enum name", range)?
+        .as_str()
+        .to_string();
+
+    // optional type/region parameters: `type Ref<'r, T> = ...`. Allocate them
+    // now so phase 1b can resolve `T` and `'r` in payloads.
+    let (type_params, region_params) =
+        if inner.peek().map(|p| p.as_rule()) == Some(Rule::type_params) {
+            let tp_pair = inner.next().missing("type parameters", range)?;
+            let type_params = ctx.begin_type_params(&collect_type_params(tp_pair.clone()));
+            let region_params = ctx.begin_region_params(&collect_region_params(tp_pair));
+            (type_params, region_params)
+        } else {
+            (Vec::new(), Vec::new())
+        };
+
+    // enum_variant = { identifier ~ ("(" ~ type_ ~ ")")? }, optionally followed
+    // by a `deriving C1, C2, ...` clause.
+    let mut variant_names = Vec::new();
+    let mut variant_payloads = Vec::new();
+    let mut derives: Vec<Derivable> = Vec::new();
+    for pair in inner {
+        match pair.as_rule() {
+            Rule::enum_variant => {
+                let v_range = Range::from(&pair);
+                let mut v_inner = pair.into_inner();
+                let v_name = v_inner
+                    .next()
+                    .missing("variant name", v_range)?
+                    .as_str()
+                    .to_string();
+                variant_names.push(v_name);
+                variant_payloads.push(v_inner.next());
+            }
+            Rule::deriving_clause => derives = parse_deriving_clause(&pair)?,
+            other => {
+                return Err(AstError::UnexpectedRule {
+                    expected: "enum variant or deriving clause",
+                    got: other,
+                    range: Range::from(&pair),
+                });
             }
         }
     }
 
-    // phase 1.5: resolve every variant's payload type annotation now that all
-    // `EnumRef`s exist (so forward/recursive payload types resolve correctly).
+    let is_generic = !type_params.is_empty();
+    let er = ctx.register_enum(
+        &enum_name,
+        variant_names,
+        type_params,
+        region_params,
+        range,
+        cur_mod,
+        derives,
+    )?;
+    if is_generic {
+        generic_enums.push(er);
+    }
+    for (idx, payload_pair) in variant_payloads.into_iter().enumerate() {
+        if let Some(p) = payload_pair {
+            pending_payloads.push((er, idx, p));
+        }
+    }
+    Ok(())
+}
+
+/// Dispatch a `deriving C1, C2, …` clause (Memory Step C). A general
+/// mechanism: each derivable name maps to an action. Step C registers only
+/// `HeapedUnique` (sets the type's heap strategy); future derivables
+/// (`HeapedShared`, `Eq`, `Clone`, …) add arms here. An unknown name is a
+/// `NotDerivable` error. Returns the derived heap strategy, if any.
+fn parse_deriving_clause(pair: &Pair<Rule>) -> Result<Vec<Derivable>, AstError> {
+    assert_eq!(pair.as_rule(), Rule::deriving_clause);
+    let mut derives: Vec<Derivable> = Vec::new();
+    for ident in pair.clone().into_inner() {
+        let range = Range::from(&ident);
+        let derivable = match ident.as_str() {
+            // `Heaped` = the base heap capability (alloc/borrow/release), backed
+            // by the default unique strategy. `HeapedShared` (the refcount
+            // strategy) joins here in Step E.
+            "Heaped" => Derivable::Heaped(HeapedStrategy::Unique),
+            other => {
+                return Err(AstError::NotDerivable {
+                    name: other.to_string(),
+                    range,
+                });
+            }
+        };
+        if derives.contains(&derivable) {
+            return Err(AstError::DuplicateDerive {
+                name: ident.as_str().to_string(),
+                range,
+            });
+        }
+        derives.push(derivable);
+    }
+    Ok(derives)
+}
+
+/// Record one `use src::name;` / `use src::*;` import into `cur_mod`'s scope.
+/// (`use_decl = { "use" ~ use_path ~ ";" }`;
+/// `use_path = { identifier ~ ("::" ~ identifier)* ~ ("::" ~ "*")? }`.)
+fn collect_use<'run>(
+    ctx: &mut CompileCtx<'run>,
+    child: &Pair<Rule>,
+    cur_mod: ModuleRef<'run>,
+) -> Result<(), AstError> {
+    let upath = child
+        .clone()
+        .into_inner()
+        .next()
+        .missing("use path", Range::from(child))?;
+    let mut segs: Vec<String> = Vec::new();
+    let mut glob = false;
+    for seg in upath.into_inner() {
+        match seg.as_rule() {
+            Rule::identifier => segs.push(seg.as_str().to_string()),
+            Rule::use_glob => glob = true,
+            _ => {}
+        }
+    }
+    if glob {
+        ctx.add_import(cur_mod, segs.join("::"), None);
+    } else if segs.len() >= 2 {
+        let item = segs.pop().expect("checked len >= 2");
+        ctx.add_import(cur_mod, segs.join("::"), Some(item));
+    } else {
+        return Err(AstError::MalformedUse {
+            range: Range::from(child),
+        });
+    }
+    Ok(())
+}
+
+/// phase 1b, resolve each stashed variant payload type, now that every enum
+/// skeleton exists. Each payload resolves with its enum's type/region
+/// parameters in scope and its bare type names in the enum's own module; a
+/// borrow in a payload must name a declared region parameter (or `'static`).
+fn resolve_enum_payloads<'i, 'run>(
+    ctx: &mut CompileCtx<'run>,
+    pending_payloads: Vec<(EnumRef<'run>, usize, Pair<'i, Rule>)>,
+) -> Result<(), AstError> {
     for (er, idx, payload_pair) in pending_payloads {
+        let params = ctx.get_enum(er).type_params.clone();
+        let region_params = ctx.get_enum(er).region_params.clone();
+        ctx.set_build_module(ctx.get_enum(er).src_module);
+        ctx.enter_type_param_scope(&params);
+        ctx.enter_region_param_scope(&region_params);
+        let payload_range = Range::from(&payload_pair);
         let payload_ty = build_type(ctx, payload_pair)?;
+        let mut payload_regions = Vec::new();
+        payload_ty.free_regions(&mut payload_regions);
+        for r in payload_regions {
+            let ok = match r {
+                Region::Static => true,
+                Region::Var(rv) => region_params.iter().any(|p| p.region == rv),
+            };
+            if !ok {
+                return Err(AstError::PayloadBorrowNeedsLifetime {
+                    name: ctx.get_enum(er).name.clone(),
+                    range: payload_range,
+                });
+            }
+        }
         ctx.set_variant_payload(er, idx, payload_ty);
     }
+    ctx.end_type_params();
+    Ok(())
+}
 
-    // second pass: build functions
+/// phase 2, build every function body, grouped by the module it is declared in
+/// (`module ...;` switches the current module). Enum / `use` declarations were
+/// already handled in phase 1.
+/// A display string for an instance head, used to mangle impl-method names.
+fn head_name<'a>(ctx: &CompileCtx<'a>, head: TypeHead<'a>) -> String {
+    match head {
+        TypeHead::Int => "Int".to_string(),
+        TypeHead::Bool => "Bool".to_string(),
+        TypeHead::Unit => "Unit".to_string(),
+        TypeHead::Enum(er) => ctx.get_enum(er).name.clone(),
+    }
+}
+
+/// Phase 1: register a `typeclass` skeleton (name, type parameter, method
+/// names, superclass names). Method *signatures* and superclass *refs* resolve
+/// later in [`resolve_typeclass_sigs`], once every class + enum skeleton
+/// exists.
+fn collect_typeclass<'i, 'run>(
+    ctx: &mut CompileCtx<'run>,
+    child: &Pair<'i, Rule>,
+    cur_mod: ModuleRef<'run>,
+) -> Result<PendingClass<'i>, AstError> {
+    let range = Range::from(child);
+    let mut inner = child.clone().into_inner();
+    let name = inner
+        .next()
+        .missing("typeclass name", range)?
+        .as_str()
+        .to_string();
+
+    // grammar requires `type_params`; a class carries exactly one type parameter
+    // and no region parameters (Step 10).
+    let tp_pair = inner.next().missing("typeclass type parameter", range)?;
+    let type_param_specs = collect_type_params(tp_pair.clone());
+    let region_param_specs = collect_region_params(tp_pair);
+    if type_param_specs.len() != 1 || !region_param_specs.is_empty() {
+        return Err(AstError::TypeclassParamArity { name, range });
+    }
+    let class_params = ctx.begin_type_params(&type_param_specs);
+    let class_param_id = class_params[0].id;
+    ctx.end_type_params();
+
+    let mut superclass_names: Vec<(String, Range)> = Vec::new();
+    let mut method_pairs: Vec<Pair<'i, Rule>> = Vec::new();
+    let mut method_order: Vec<String> = Vec::new();
+    for item in inner {
+        match item.as_rule() {
+            Rule::requires_clause => {
+                for id in item.into_inner() {
+                    superclass_names.push((id.as_str().to_string(), Range::from(&id)));
+                }
+            }
+            Rule::typeclass_method => {
+                let mrange = Range::from(&item);
+                let mname = item
+                    .clone()
+                    .into_inner()
+                    .next()
+                    .missing("method name", mrange)?
+                    .as_str()
+                    .to_string();
+                // one class per method name (across all classes, and within one).
+                if ctx.method_class(&mname).is_some() || method_order.contains(&mname) {
+                    return Err(AstError::DuplicateMethodName {
+                        name: mname,
+                        range: mrange,
+                    });
+                }
+                method_order.push(mname);
+                method_pairs.push(item);
+            }
+            _ => {}
+        }
+    }
+
+    let def = TypeclassDef {
+        name,
+        param: class_param_id,
+        superclasses: Vec::new(),
+        methods: Map::new(),
+        method_order,
+        src_module: cur_mod,
+        range,
+    };
+    let tref = ctx.register_typeclass(def);
+    Ok(PendingClass {
+        tref,
+        class_params,
+        method_pairs,
+        superclass_names,
+    })
+}
+
+/// Phase 2b: build each class's method signatures (with its type parameter in
+/// scope) and resolve its superclass names to refs.
+fn resolve_typeclass_sigs<'i>(
+    ctx: &mut CompileCtx<'_>,
+    pending: Vec<PendingClass<'i>>,
+) -> Result<Vec<PendingDefault<'i>>, AstError> {
+    let mut defaults = Vec::new();
+    for pc in pending {
+        ctx.enter_type_param_scope(&pc.class_params);
+        ctx.begin_region_params(&[]);
+        let mut methods = Map::new();
+        for mp in &pc.method_pairs {
+            let (mname, mdef) = build_method_def(ctx, mp)?;
+            if mdef.has_default {
+                defaults.push(PendingDefault {
+                    class: pc.tref,
+                    class_params: pc.class_params.clone(),
+                    method: mname.clone(),
+                    method_pair: mp.clone(),
+                });
+            }
+            methods.insert(mname, mdef);
+        }
+        ctx.end_type_params();
+
+        let mut supers = Vec::new();
+        for (sname, srange) in &pc.superclass_names {
+            let sref = ctx
+                .lookup_typeclass(sname)
+                .ok_or_else(|| AstError::UnknownSuperclass {
+                    name: sname.clone(),
+                    range: *srange,
+                })?;
+            supers.push(sref);
+        }
+        ctx.set_typeclass_methods(pc.tref, methods, supers);
+    }
+    Ok(defaults)
+}
+
+/// A typeclass method with a default body, to be built once as a generic
+/// function `<T> where T : C` (see [`build_default_methods`]).
+struct PendingDefault<'i> {
+    class: TypeclassRef,
+    class_params: Vec<TypeParam>,
+    method: String,
+    method_pair: Pair<'i, Rule>,
+}
+
+/// Build each defaulted typeclass method as a generic function over the class
+/// parameter (with a `where T : C` constraint so its sibling-method calls
+/// type-check), register it, and record it on the method so impls that omit the
+/// method dispatch to it. Returns the `(module, function)` pairs to add to the
+/// program.
+fn build_default_methods<'run>(
+    ctx: &mut CompileCtx<'run>,
+    defaults: Vec<PendingDefault<'_>>,
+    src: &str,
+) -> Result<Vec<(ModuleRef<'run>, Function<'run>)>, AstError> {
+    let mut out = Vec::new();
+    for d in defaults {
+        let module = ctx.get_typeclass(d.class).src_module;
+        let class_name = ctx.get_typeclass(d.class).name.clone();
+        ctx.set_build_module(module);
+        ctx.enter_type_param_scope(&d.class_params);
+        ctx.begin_region_params(&[]);
+
+        // parse the method header + default body.
+        let range = Range::from(&d.method_pair);
+        let mut inner = d.method_pair.clone().into_inner();
+        let _name = inner.next().missing("method name", range)?;
+        let mut parameters = Vec::new();
+        if inner.peek().map(|p| p.as_rule()) == Some(Rule::parameters) {
+            let ps = inner.next().missing("parameters", range)?;
+            for pp in ps.into_inner() {
+                parameters.push(build_parameter(ctx, pp)?);
+            }
+        }
+        let ty_pair = inner.next().missing("method return type", range)?;
+        let ret_type = build_type(ctx, ty_pair)?;
+        // skip an optional method-level where clause, then the body expression.
+        let mut body_pair = None;
+        for rest in inner {
+            if rest.as_rule() == Rule::expression {
+                body_pair = Some(rest);
+            }
+        }
+        let body = build_expr(ctx, body_pair.missing("default body", range)?, src)?;
+
+        let mangled = format!("{class_name}$default${}", d.method);
+        let fref = ctx.register_mono_function(mangled, module, range);
+        ctx.end_type_params();
+        ctx.set_method_default_fn(d.class, &d.method, fref);
+
+        out.push((
+            module,
+            Function {
+                name: fref,
+                range,
+                // generic over the class parameter, constrained to the class so
+                // sibling method calls on `T` resolve.
+                type_params: d.class_params.clone(),
+                region_params: Vec::new(),
+                where_constraints: Vec::new(),
+                type_constraints: vec![TypeConstraint {
+                    param: d.class_params[0].id,
+                    class: d.class,
+                }],
+                parameters,
+                ret_type,
+                body,
+            },
+        ));
+    }
+    Ok(out)
+}
+
+/// Build one typeclass method's signature (over the class parameter, which must
+/// already be in scope). The default body, if present, is not built here
+/// (Step 10b synthesises it per instance); only its presence is recorded.
+fn build_method_def<'run>(
+    ctx: &mut CompileCtx<'run>,
+    mpair: &Pair<Rule>,
+) -> Result<(String, MethodDef<'run>), AstError> {
+    let range = Range::from(mpair);
+    let mut inner = mpair.clone().into_inner();
+    let name = inner
+        .next()
+        .missing("method name", range)?
+        .as_str()
+        .to_string();
+    if inner.peek().map(|p| p.as_rule()) == Some(Rule::type_params) {
+        return Err(AstError::MethodGenericsUnsupported { range });
+    }
+
+    let mut param_tys = Vec::new();
+    if inner.peek().map(|p| p.as_rule()) == Some(Rule::parameters) {
+        let params = inner.next().missing("parameters", range)?;
+        for pp in params.into_inner() {
+            param_tys.push(param_type(ctx, pp)?);
+        }
+    }
+
+    let ty_pair = inner.next().missing("method return type", range)?;
+    let ret_ty = build_type(ctx, ty_pair)?;
+
+    let mut has_default = false;
+    for rest in inner {
+        if rest.as_rule() == Rule::expression {
+            has_default = true;
+        }
+    }
+
+    Ok((
+        name.clone(),
+        MethodDef {
+            name,
+            type_params: Vec::new(),
+            param_tys,
+            ret_ty,
+            has_default,
+            default_fn: None,
+            range,
+        },
+    ))
+}
+
+/// Extract a parameter's declared type without registering a variable (used for
+/// typeclass method signatures, which have no bodies).
+fn param_type<'run>(ctx: &mut CompileCtx<'run>, p: Pair<Rule>) -> Result<Ty<'run>, AstError> {
+    let range = Range::from(&p);
+    let ty_pair = p
+        .into_inner()
+        .find(|c| c.as_rule() == Rule::type_)
+        .missing("parameter type", range)?;
+    build_type(ctx, ty_pair)
+}
+
+/// Phase 3 (in `build_functions`): build an `impl C for T { … }`. Each method
+/// is built as an ordinary function under a mangled name and recorded as the
+/// instance's implementation; the instance is registered (coherence-checked)
+/// and orphan + completeness rules are enforced here.
+fn build_impl<'run>(
+    ctx: &mut CompileCtx<'run>,
+    child: Pair<Rule>,
+    src: &str,
+    cur_module: &ModuleRef<'run>,
+    funcs: &mut Vec<Function<'run>>,
+) -> Result<(), AstError> {
+    ctx.set_build_module(*cur_module);
+    let range = Range::from(&child);
+    let mut inner = child.into_inner();
+    let class_name = inner
+        .next()
+        .missing("typeclass name", range)?
+        .as_str()
+        .to_string();
+    let tref = ctx
+        .lookup_typeclass(&class_name)
+        .ok_or_else(|| AstError::UnknownTypeclass {
+            name: class_name.clone(),
+            range,
+        })?;
+    let ty_pair = inner.next().missing("impl target type", range)?;
+    let for_ty = build_type(ctx, ty_pair)?;
+    let head = ctx
+        .type_head(for_ty)
+        .ok_or(AstError::NonInstanceableType { range })?;
+
+    // orphan rule: the impl is legal only if the class or the implemented type is
+    // *at home* — declared in the impl's own module. (This is the whole-program
+    // analogue of Rust's crate-orphan rule; it lets `core.sand` implement its own
+    // `Copy`/`Clone` for primitives while still rejecting a user module that
+    // implements a foreign class for a foreign type.)
+    let class_at_home = ctx.get_typeclass(tref).src_module == *cur_module;
+    let type_at_home = match head {
+        TypeHead::Enum(er) => ctx.get_enum(er).src_module == *cur_module,
+        _ => false, // primitives belong to no module
+    };
+    if !class_at_home && !type_at_home {
+        return Err(AstError::OrphanInstance {
+            class: class_name,
+            range,
+        });
+    }
+
+    let head_str = head_name(ctx, head);
+    let mut methods: Map<String, FunRef> = Map::new();
+    for fpair in inner {
+        if fpair.as_rule() != Rule::function {
+            continue;
+        }
+        let mrange = Range::from(&fpair);
+        let mname = fpair
+            .clone()
+            .into_inner()
+            .next()
+            .missing("method name", mrange)?
+            .as_str()
+            .to_string();
+        if !ctx.get_typeclass(tref).methods.contains_key(&mname) {
+            return Err(AstError::UnknownMethod {
+                class: class_name,
+                method: mname,
+                range: mrange,
+            });
+        }
+        let mangled = format!("{class_name}${head_str}${mname}");
+        let f = build_function(ctx, fpair, src, cur_module, Some(mangled))?;
+        methods.insert(mname, f.name);
+        funcs.push(f);
+    }
+
+    // completeness: every method must end up implemented — by the impl, or by
+    // the class's default (a generic function built in `build_default_methods`).
+    let order = ctx.get_typeclass(tref).method_order.clone();
+    for mname in &order {
+        if methods.contains_key(mname) {
+            continue;
+        }
+        match ctx.get_typeclass(tref).methods[mname].default_fn {
+            Some(default_fr) => {
+                methods.insert(mname.clone(), default_fr);
+            }
+            None => {
+                return Err(AstError::MissingMethod {
+                    class: class_name,
+                    method: mname.clone(),
+                    range,
+                });
+            }
+        }
+    }
+
+    let impl_def = ImplDef {
+        class: tref,
+        for_ty,
+        head,
+        methods,
+        src_module: *cur_module,
+        range,
+    };
+    ctx.register_instance(impl_def)
+        .map_err(|_existing| AstError::DuplicateInstance {
+            class: class_name,
+            range,
+        })?;
+    Ok(())
+}
+
+/// Final check: a `Copy` instance is sound only if every field/payload of the
+/// type is itself `Copy`, and the type is not generic (Step 14; no conditional
+/// or blanket `Copy` impls).
+fn check_copy_instances(ctx: &CompileCtx<'_>) -> Result<(), AstError> {
+    let Some(copy) = ctx.copy_class() else {
+        return Ok(());
+    };
+    for (class, head, range) in ctx.instance_keys() {
+        if class != copy {
+            continue;
+        }
+        if let TypeHead::Enum(er) = head {
+            let def = ctx.get_enum(er);
+            if !def.type_params.is_empty() {
+                return Err(AstError::CopyOnGenericType { range });
+            }
+            for v in &def.variants {
+                if let Some(payload) = v.payload.get()
+                    && !ctx.is_copy(payload)
+                {
+                    return Err(AstError::CopyPayloadNotCopy { range });
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Final check: a subclass instance requires its superclass instances for the
+/// same head type (Calculus §8.9 `requires`).
+fn check_superclass_instances(ctx: &CompileCtx<'_>) -> Result<(), AstError> {
+    for (class, head, range) in ctx.instance_keys() {
+        let supers = ctx.get_typeclass(class).superclasses.clone();
+        for s in supers {
+            if ctx.lookup_instance(s, head).is_none() {
+                return Err(AstError::MissingSuperclass {
+                    class: ctx.get_typeclass(class).name.clone(),
+                    superclass: ctx.get_typeclass(s).name.clone(),
+                    range,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn build_functions<'i, 'run>(
+    ctx: &mut CompileCtx<'run>,
+    children: Vec<Pair<'i, Rule>>,
+    src: &str,
+    default_module: ModuleRef<'run>,
+    file: FileRef,
+) -> Result<Map<ModuleRef<'run>, Vec<Function<'run>>>, AstError> {
     let mut mods: Map<ModuleRef, Vec<Function>> = Map::new();
     let mut funcs = Vec::new();
     let mut current_module = default_module;
@@ -244,11 +1042,17 @@ pub fn build_program<'run>(
                     .unwrap_or_else(|| ctx.register_module(mod_span.as_str(), file));
             }
             Rule::function => {
-                funcs.push(build_function(ctx, child, src, &current_module)?);
+                funcs.push(build_function(ctx, child, src, &current_module, None)?);
             }
-            // type_alias declarations were handled in the first pass
-            Rule::type_alias => {}
-            // ignore start/end markers
+            Rule::extern_decl => {
+                collect_extern(ctx, child, &current_module)?;
+            }
+            Rule::impl_decl => {
+                build_impl(ctx, child, src, &current_module, &mut funcs)?;
+            }
+            // enum / `use` / typeclass declarations were handled in phase 1
+            // (typeclass method *bodies* — defaults — arrive in Step 10b).
+            Rule::type_alias | Rule::use_decl | Rule::typeclass_decl => {}
             Rule::EOI => continue,
             other => {
                 let range = Range::from(child);
@@ -261,11 +1065,9 @@ pub fn build_program<'run>(
             }
         }
     }
-
     if !funcs.is_empty() {
         mods.entry(current_module).or_default().append(&mut funcs);
     }
-
     Ok(mods)
 }
 
@@ -273,8 +1075,9 @@ fn build_function<'run>(
     ctx: &mut CompileCtx<'run>,
     pair: Pair<Rule>,
     src: &str,
-    cur_module: &ModuleRef,
-) -> Result<Function, AstError> {
+    cur_module: &ModuleRef<'run>,
+    name_override: Option<String>,
+) -> Result<Function<'run>, AstError> {
     // keep the build-module hint up to date so that anonymous tag-union types
     // declared in `build_type` are attributed to the right module.
     ctx.set_build_module(*cur_module);
@@ -309,6 +1112,19 @@ fn build_function<'run>(
             range: name_range,
         });
     }
+
+    // optional type and region parameters: `def f<'r, T, U>(...)`. Scoping them
+    // here means `build_type` resolves `T`/`U` to `Ty::Param` and `'r` to its
+    // region for the rest of this function's signature and body.
+    let (type_params, region_params) =
+        if inner.peek().map(|p| p.as_rule()) == Some(Rule::type_params) {
+            let tp_pair = inner.next().missing("type parameters", range)?;
+            let type_params = ctx.begin_type_params(&collect_type_params(tp_pair.clone()));
+            let region_params = ctx.begin_region_params(&collect_region_params(tp_pair));
+            (type_params, region_params)
+        } else {
+            (ctx.begin_type_params(&[]), ctx.begin_region_params(&[]))
+        };
 
     // collect optional parameters (parameter or parameters)
     let mut parameters = Vec::new();
@@ -353,25 +1169,373 @@ fn build_function<'run>(
     };
     let ret_type = build_type(ctx, ty_pair)?;
 
+    // optional `where 'r >= 's` outlives constraints (resolved while the
+    // function's region parameters are still in scope).
+    let (where_constraints, type_constraints) =
+        if inner.peek().map(|p| p.as_rule()) == Some(Rule::where_clause) {
+            let wc_pair = inner.next().missing("where clause", range)?;
+            build_where_clause(ctx, wc_pair)?
+        } else {
+            (Vec::new(), Vec::new())
+        };
+
     // final child is the function body expression
     let body_pair = inner.next().missing("function body expression", range)?;
     let body = build_expr(ctx, body_pair, src)?;
 
-    let ofref = ctx.register_function(&name_pair, cur_module)?;
+    // An impl method is registered under a mangled, collision-free name (so two
+    // `impl … { def eq }` blocks don't clash); a top-level function keeps its
+    // source name.
+    let ofref = match name_override {
+        Some(n) => ctx.register_mono_function(n, *cur_module, Range::from(&name_pair)),
+        None => ctx.register_function(&name_pair, cur_module)?,
+    };
+    ctx.end_type_params();
 
     Ok(Function {
         name: ofref,
         range: Range::from(name_pair),
+        type_params,
+        region_params,
+        where_constraints,
+        type_constraints,
         parameters,
         ret_type,
         body,
     })
 }
 
+/// Collect one `extern def` (Memory Step A): register a bodyless external
+/// (FFI) function with a real `FunRef` + `FunSig` so calls resolve through the
+/// normal path, and record its C symbol in the extern registry. Parameter and
+/// return types must be FFI-safe (`Int`, `Unit`, `Ptr<T>`). No generics.
+fn collect_extern<'run>(
+    ctx: &mut CompileCtx<'run>,
+    pair: Pair<Rule>,
+    cur_module: &ModuleRef<'run>,
+) -> Result<(), AstError> {
+    assert_eq!(pair.as_rule(), Rule::extern_decl);
+    ctx.set_build_module(*cur_module);
+    let range = Range::from(&pair);
+
+    // An extern declares no generics; give `build_type` empty param scopes.
+    let _tp = ctx.begin_type_params(&[]);
+    let _rp = ctx.begin_region_params(&[]);
+
+    let mut inner = pair.into_inner();
+    let name_pair = inner.next().missing("extern function name", range)?;
+    let name_range = Range::from(&name_pair);
+    if name_pair.as_rule() != Rule::identifier {
+        return Err(AstError::UnexpectedRule {
+            expected: "identifier",
+            got: name_pair.as_rule(),
+            range: name_range,
+        });
+    }
+    let name = name_pair.as_str().to_string();
+    if !intrinsics::fn_name_allowed(&name) {
+        return Err(AstError::InvalidName {
+            got: name,
+            range: name_range,
+        });
+    }
+
+    // collect parameters (optional), enforcing FFI-safe types
+    let mut args: Vec<(UniqVar<'run>, Ty<'run>)> = Vec::new();
+    let ret_type;
+    loop {
+        let peek = inner.peek().map(|p| p.as_rule());
+        match peek {
+            Some(Rule::parameter) | Some(Rule::parameters) => {
+                let p = inner.next().missing("parameter", range)?;
+                let param_pairs: Vec<Pair<Rule>> = if p.as_rule() == Rule::parameters {
+                    p.into_inner().collect()
+                } else {
+                    vec![p]
+                };
+                for pp in param_pairs {
+                    let prange = Range::from(&pp);
+                    let param = build_parameter(ctx, pp)?;
+                    require_ffi_safe(ctx, param.ty, prange)?;
+                    let HirVar::Decl(ovref) = param.name else {
+                        internal_bug!("build_parameter produced a non-declaration var");
+                    };
+                    let uv = ctx.uniquify_original_variable(ovref);
+                    args.push((uv, param.ty));
+                }
+            }
+            _ => {
+                // next token is the return type_
+                let ty_pair = inner.next().missing("extern return type", range)?;
+                let trange = Range::from(&ty_pair);
+                let ty = build_type(ctx, ty_pair)?;
+                require_ffi_safe(ctx, ty, trange)?;
+                ret_type = ty;
+                break;
+            }
+        }
+    }
+
+    let fref = ctx.register_function(&name_pair, cur_module)?;
+    ctx.set_fun_sig(
+        fref,
+        FunSig {
+            args,
+            ret_ty: ret_type,
+            region_params: Vec::new(),
+            where_constraints: Vec::new(),
+            type_constraints: Vec::new(),
+        },
+    );
+    // C symbol = the sand identifier (explicit rename is deferred).
+    ctx.register_extern(fref, *cur_module, name);
+
+    ctx.end_type_params();
+    Ok(())
+}
+
+/// Heap-strategy legality (Memory Step C, K-HeapedRec): a (mutually) recursive
+/// `type` *must* derive a heap strategy (`deriving HeapedUnique`) — without it
+/// its values would be infinite-sized and leak. A non-recursive type *may*
+/// derive one (to opt a large value onto the heap) but need not.
+fn check_heaped_legality(ctx: &CompileCtx<'_>) -> Result<(), AstError> {
+    for er in ctx.all_enums().collect::<Vec<_>>() {
+        let def = ctx.get_enum(er);
+        if def.is_anonymous {
+            continue;
+        }
+        if is_recursive_enum(ctx, er) && def.heaped_strategy().is_none() {
+            return Err(AstError::RecursiveTypeNeedsHeaped {
+                name: def.name.clone(),
+                range: def.range,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// The enums directly referenced in `er`'s variant payloads.
+fn enum_successors<'tcx>(ctx: &CompileCtx<'tcx>, er: EnumRef<'tcx>) -> Vec<EnumRef<'tcx>> {
+    let mut out = Vec::new();
+    for v in &ctx.get_enum(er).variants {
+        if let Some(ty) = v.payload.get() {
+            collect_referenced_enums(ty, &mut out);
+        }
+    }
+    out
+}
+
+/// Push every enum mentioned in `ty` (directly or nested) into `out`.
+fn collect_referenced_enums<'tcx>(ty: Ty<'tcx>, out: &mut Vec<EnumRef<'tcx>>) {
+    match ty.kind() {
+        TyKind::Enum(er) => out.push(*er),
+        TyKind::App(er, args, _) => {
+            out.push(*er);
+            for a in args.iter() {
+                collect_referenced_enums(*a, out);
+            }
+        }
+        TyKind::Tuple(elems) => {
+            for e in elems.iter() {
+                collect_referenced_enums(*e, out);
+            }
+        }
+        TyKind::Region(t, _) | TyKind::Ref(_, t) | TyKind::RefMut(_, t) | TyKind::Ptr(t) => {
+            collect_referenced_enums(*t, out);
+        }
+        _ => {}
+    }
+}
+
+/// Whether `start` can reach itself through payload references — i.e. it is
+/// (directly or mutually) recursive.
+// `EnumRef` reaches an enum payload `Cell` (interior mutability), but the set
+// keys hash/compare by arena-pointer identity that never reads the `Cell`, so
+// the keys are stable — mirroring the suppression on `CompileCtx`'s maps.
+#[allow(clippy::mutable_key_type)]
+fn is_recursive_enum<'tcx>(ctx: &CompileCtx<'tcx>, start: EnumRef<'tcx>) -> bool {
+    let mut stack = enum_successors(ctx, start);
+    let mut visited: std::collections::BTreeSet<EnumRef<'tcx>> = std::collections::BTreeSet::new();
+    while let Some(n) = stack.pop() {
+        if n == start {
+            return true;
+        }
+        if visited.insert(n) {
+            stack.extend(enum_successors(ctx, n));
+        }
+    }
+    false
+}
+
+/// An FFI boundary type must be `Int`, `Unit`, or `Ptr<T>` (Memory Step A).
+fn require_ffi_safe<'tcx>(
+    ctx: &CompileCtx<'tcx>,
+    ty: Ty<'tcx>,
+    range: Range,
+) -> Result<(), AstError> {
+    let ok = matches!(ty.kind(), TyKind::Int | TyKind::Unit | TyKind::Ptr(_));
+    if ok {
+        Ok(())
+    } else {
+        Err(AstError::NonFfiSafeType {
+            ty: ctx.display_ty(ty).to_string(),
+            range,
+        })
+    }
+}
+
+/// Build the outlives constraints from a `where 'r >= 's, ...` clause. Both
+/// lifetimes must already be in scope (declared region parameters or
+/// `'static`).
+#[allow(clippy::type_complexity)]
+fn build_where_clause(
+    ctx: &CompileCtx<'_>,
+    pair: Pair<Rule>,
+) -> Result<(Vec<RegionConstraint>, Vec<TypeConstraint>), AstError> {
+    assert_eq!(pair.as_rule(), Rule::where_clause);
+    let mut regions = Vec::new();
+    let mut types = Vec::new();
+    for wc in pair.into_inner() {
+        // where_constraint = { (lifetime ">=" lifetime) | (identifier ":" identifier) }
+        let range = Range::from(&wc);
+        let mut parts = wc.into_inner();
+        let first = parts.next().missing("where constraint", range)?;
+        match first.as_rule() {
+            Rule::lifetime => {
+                let longer = resolve_lifetime(ctx, &first)?;
+                let shorter = resolve_lifetime(ctx, &parts.next().missing("lifetime", range)?)?;
+                regions.push(RegionConstraint { longer, shorter });
+            }
+            _ => {
+                // `T : Class` — `T` must be a declared type parameter and `Class`
+                // a known typeclass.
+                let pname = first.as_str();
+                let param = ctx
+                    .lookup_type_param(pname)
+                    .ok_or_else(|| AstError::UnknownType {
+                        name: pname.to_string(),
+                        range,
+                    })?;
+                let cpair = parts.next().missing("typeclass name", range)?;
+                let class = ctx.lookup_typeclass(cpair.as_str()).ok_or_else(|| {
+                    AstError::UnknownTypeclass {
+                        name: cpair.as_str().to_string(),
+                        range,
+                    }
+                })?;
+                types.push(TypeConstraint { param, class });
+            }
+        }
+    }
+    Ok((regions, types))
+}
+
+/// Validate the declared variance of a generic enum's parameters against the
+/// positions they occupy in its variant payloads (Calculus §2.1).
+///
+/// Every position in the current type grammar (enum payloads, tuples, generic
+/// applications) is a *producer* (covariant) position — there are no consumer
+/// positions until function types arrive. So a parameter that is used is
+/// covariant, and the only unsound declaration is `Contravariant` on a used
+/// parameter. `Covariant` and `Invariant` are always sound, and an unused
+/// (phantom) parameter accepts any declared variance.
+fn check_variance<'run>(ctx: &CompileCtx<'run>, er: EnumRef<'run>) -> Result<(), AstError> {
+    let def = ctx.get_enum(er);
+    for param in &def.type_params {
+        let used = def
+            .variants
+            .iter()
+            .filter_map(|v| v.payload.get())
+            .any(|ty| ty_mentions_param(ty, param.id));
+        if used && param.variance == Variance::Contravariant {
+            return Err(AstError::UnsoundVariance {
+                type_name: def.name.clone(),
+                param: param.name.clone(),
+                range: param.range,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Whether `ty` mentions the type parameter `id` (directly or nested).
+fn ty_mentions_param(ty: Ty<'_>, id: TypeParamId) -> bool {
+    match ty.kind() {
+        TyKind::Param(p) => *p == id,
+        TyKind::Tuple(elems) => elems.iter().any(|e| ty_mentions_param(*e, id)),
+        TyKind::App(_, args, _) => args.iter().any(|a| ty_mentions_param(*a, id)),
+        TyKind::Region(inner, _) | TyKind::Ref(_, inner) | TyKind::RefMut(_, inner) => {
+            ty_mentions_param(*inner, id)
+        }
+        _ => false,
+    }
+}
+
+/// Parse each `type_param` in a `type_params` pair, applying the default
+/// variance (`Covariant`) and kind (`Owned`) when their annotations are absent.
+/// Region parameters in the same `<...>` list are handled by
+/// [`collect_region_params`] and skipped here.
+fn collect_type_params(pair: Pair<Rule>) -> Vec<TypeParamSpec> {
+    assert_eq!(pair.as_rule(), Rule::type_params);
+    pair.into_inner()
+        .filter(|p| p.as_rule() == Rule::type_param)
+        .map(|tp| {
+            // type_param = { variance_ann? ~ identifier ~ (":" ~ kind_ann)? }
+            let range = Range::from(&tp);
+            let mut variance = Variance::Covariant;
+            let mut kind = Kind::Owned;
+            let mut name = String::new();
+            for part in tp.into_inner() {
+                match part.as_rule() {
+                    Rule::variance_ann => {
+                        variance = match part.as_str() {
+                            "+" => Variance::Covariant,
+                            "-" => Variance::Contravariant,
+                            _ => Variance::Invariant,
+                        };
+                    }
+                    Rule::identifier => name = part.as_str().to_string(),
+                    Rule::kind_ann => {
+                        kind = match part.as_str() {
+                            "Never" => Kind::Never,
+                            _ => Kind::Owned,
+                        };
+                    }
+                    _ => {}
+                }
+            }
+            TypeParamSpec {
+                name,
+                range,
+                variance,
+                kind,
+            }
+        })
+        .collect()
+}
+
+/// Parse each `region_param` (`'r`) in a `type_params` pair. Type parameters in
+/// the same `<...>` list are handled by [`collect_type_params`] and skipped.
+fn collect_region_params(pair: Pair<Rule>) -> Vec<RegionParamSpec> {
+    assert_eq!(pair.as_rule(), Rule::type_params);
+    pair.into_inner()
+        .filter(|p| p.as_rule() == Rule::region_param)
+        .map(|rp| {
+            // region_param = { lifetime }
+            let range = Range::from(&rp);
+            let lt = rp.into_inner().next();
+            let name = lt
+                .map(|l| l.as_str().trim_start_matches('\'').to_string())
+                .unwrap_or_default();
+            RegionParamSpec { name, range }
+        })
+        .collect()
+}
+
 fn build_parameter<'run>(
     ctx: &mut CompileCtx<'run>,
     pair: Pair<Rule>,
-) -> Result<Parameter, AstError> {
+) -> Result<Parameter<'run>, AstError> {
     let rule = pair.as_rule();
     assert_eq!(rule, Rule::parameter);
     // capture span before into_inner
@@ -395,12 +1559,43 @@ fn build_parameter<'run>(
     })
 }
 
-fn build_type<'run>(ctx: &mut CompileCtx<'run>, pair: Pair<Rule>) -> Result<Ty, AstError> {
-    tracing::trace!("build_type called with {:?}", pair.as_str());
+/// Resolve a `lifetime` token (`'r`) to its [`Region`]. The region must be in
+/// scope. `'static` always is, any other name must be a declared region
+/// parameter of the enclosing item (`def f<'r>(...)`).
+fn resolve_lifetime(ctx: &CompileCtx<'_>, lt: &Pair<Rule>) -> Result<Region, AstError> {
+    assert_eq!(lt.as_rule(), Rule::lifetime);
+    let name = lt.as_str().trim_start_matches('\'');
+    ctx.resolve_region(name)
+        .ok_or_else(|| AstError::UnknownRegion {
+            name: name.to_string(),
+            range: Range::from(lt),
+        })
+}
+
+/// Build a type, applying an optional `@ 'r` region ascription (Calculus §2.3).
+/// `type_ = { core_type ~ ("@" ~ lifetime)? }`.
+fn build_type<'run>(ctx: &mut CompileCtx<'run>, pair: Pair<Rule>) -> Result<Ty<'run>, AstError> {
+    assert_eq!(pair.as_rule(), Rule::type_);
+    let range = Range::from(&pair);
+    let mut inner = pair.into_inner();
+    let core = inner.next().missing("core type", range)?;
+    let mut ty = build_core_type(ctx, core)?;
+    if let Some(lt) = inner.next() {
+        let region = resolve_lifetime(ctx, &lt)?;
+        ty = ctx.region_ty(ty, region);
+    }
+    Ok(ty)
+}
+
+fn build_core_type<'run>(
+    ctx: &mut CompileCtx<'run>,
+    pair: Pair<Rule>,
+) -> Result<Ty<'run>, AstError> {
+    tracing::trace!("build_core_type called with {:?}", pair.as_str());
     assert_eq!(
         pair.as_rule(),
-        Rule::type_,
-        "expected type literal, got {:?}: {}",
+        Rule::core_type,
+        "expected core type, got {:?}: {}",
         pair.as_rule(),
         pair.as_str()
     );
@@ -410,12 +1605,35 @@ fn build_type<'run>(ctx: &mut CompileCtx<'run>, pair: Pair<Rule>) -> Result<Ty, 
     // plain identifier / built-in keyword.
     let inner_opt = pair.clone().into_inner().next();
     match inner_opt {
+        Some(inner) if inner.as_rule() == Rule::borrow_type => {
+            // borrow_type = { "&" ~ lifetime? ~ mut_kw? ~ core_type }
+            let mut parts = inner.into_inner().peekable();
+            let region = if parts.peek().map(|p| p.as_rule()) == Some(Rule::lifetime) {
+                let lt = parts.next().missing("lifetime", range)?;
+                resolve_lifetime(ctx, &lt)?
+            } else {
+                ctx.anon_region()
+            };
+            let mutable = if parts.peek().map(|p| p.as_rule()) == Some(Rule::mut_kw) {
+                parts.next();
+                true
+            } else {
+                false
+            };
+            let core_pair = parts.next().missing("borrow target type", range)?;
+            let inner_ty = build_core_type(ctx, core_pair)?;
+            Ok(if mutable {
+                ctx.ref_mut_ty(region, inner_ty)
+            } else {
+                ctx.ref_ty(region, inner_ty)
+            })
+        }
         Some(inner) if inner.as_rule() == Rule::tuple_type => {
             // tuple_type = { "(" ~ type_ ~ ("," ~ type_)+ ~ ")" }
             let elem_tys = inner
                 .into_inner()
                 .map(|p| build_type(ctx, p))
-                .collect::<Result<Vec<Ty>, _>>()?;
+                .collect::<Result<Vec<Ty<'run>>, _>>()?;
             Ok(ctx.intern_tuple(elem_tys))
         }
         Some(inner) if inner.as_rule() == Rule::tag_type => {
@@ -425,6 +1643,109 @@ fn build_type<'run>(ctx: &mut CompileCtx<'run>, pair: Pair<Rule>) -> Result<Ty, 
             let tags: Vec<String> = inner.into_inner().map(|p| p.as_str().to_string()).collect();
             let er = ctx.register_or_get_anon_enum(tags, range);
             Ok(ctx.enum_ty(er))
+        }
+        Some(inner) if inner.as_rule() == Rule::type_application => {
+            // type_application = { identifier ~ "<" ~ type_app_arg (~ "," ~ …)* ~ ">" }
+            // type_app_arg     = { lifetime | type_ }   (lifetimes first)
+            let app_range = Range::from(&inner);
+            let mut parts = inner.into_inner();
+            let name = parts
+                .next()
+                .missing("generic type name", app_range)?
+                .as_str()
+                .to_string();
+
+            // Split args into region args (lifetimes) and type args, enforcing
+            // that all lifetimes precede the first type (the lifetimes-first
+            // convention, mirroring the declaration order).
+            let mut region_args: Vec<Region> = Vec::new();
+            let mut arg_tys: Vec<Ty<'run>> = Vec::new();
+            for arg in parts {
+                // `arg` is a `type_app_arg`; its sole child is a lifetime or a type_.
+                let child = arg
+                    .into_inner()
+                    .next()
+                    .missing("type-application argument", range)?;
+                match child.as_rule() {
+                    Rule::lifetime => {
+                        if !arg_tys.is_empty() {
+                            return Err(AstError::RegionArgsNotFirst { name, range });
+                        }
+                        let lt = child.as_str().trim_start_matches('\'');
+                        let region =
+                            ctx.resolve_region(lt)
+                                .ok_or_else(|| AstError::UnknownRegion {
+                                    name: lt.to_string(),
+                                    range,
+                                })?;
+                        region_args.push(region);
+                    }
+                    _ => arg_tys.push(build_type(ctx, child)?),
+                }
+            }
+
+            // `Ptr<T>` is a built-in generic primitive (Memory Step A), not a
+            // user enum: exactly one type argument, no region arguments (a raw
+            // pointer is outside the region discipline).
+            if name == "Ptr" {
+                if !region_args.is_empty() {
+                    return Err(AstError::RegionArgArityMismatch {
+                        name,
+                        expected: 0,
+                        found: region_args.len(),
+                        range,
+                    });
+                }
+                if arg_tys.len() != 1 {
+                    return Err(AstError::TypeArgArityMismatch {
+                        name,
+                        expected: 1,
+                        found: arg_tys.len(),
+                        range,
+                    });
+                }
+                return Ok(ctx.ptr_ty(arg_tys[0]));
+            }
+
+            let er = ctx
+                .lookup_enum_current(&name)
+                .ok_or_else(|| AstError::UnknownType {
+                    name: name.clone(),
+                    range,
+                })?;
+            let params = ctx.get_enum(er).type_params.clone();
+            let region_params = ctx.get_enum(er).region_params.clone();
+            if params.len() != arg_tys.len() {
+                return Err(AstError::TypeArgArityMismatch {
+                    name,
+                    expected: params.len(),
+                    found: arg_tys.len(),
+                    range,
+                });
+            }
+            if region_params.len() != region_args.len() {
+                return Err(AstError::RegionArgArityMismatch {
+                    name,
+                    expected: region_params.len(),
+                    found: region_args.len(),
+                    range,
+                });
+            }
+            // K-App (Calculus §5): each argument's kind must satisfy the
+            // declared parameter kind.
+            for (param, &arg) in params.iter().zip(&arg_tys) {
+                let arg_kind = ctx.kind_of(arg);
+                if !arg_kind.is_subkind(param.kind) {
+                    return Err(AstError::KindArgMismatch {
+                        type_name: name,
+                        param: param.name.clone(),
+                        expected: param.kind,
+                        found: arg_kind,
+                        range,
+                    });
+                }
+            }
+            Ok(ctx.intern_app(er, arg_tys, region_args))
         }
         Some(inner) if inner.as_rule() == Rule::qualified_type => {
             // qualified_type = { identifier ~ "::" ~ identifier }
@@ -457,16 +1778,48 @@ fn build_type<'run>(ctx: &mut CompileCtx<'run>, pair: Pair<Rule>) -> Result<Ty, 
                 .map(|p| p.as_str().to_string())
                 .unwrap_or_else(|| pair.as_str().to_string());
             match name.as_str() {
-                "Int" => Ok(Ty::INT),
-                "Bool" => Ok(Ty::BOOL),
-                "Unit" => Ok(Ty::UNIT),
-                other => ctx
-                    .lookup_enum_by_name(other)
-                    .map(|er| ctx.enum_ty(er))
-                    .ok_or_else(|| AstError::UnknownType {
-                        name: other.to_string(),
-                        range,
-                    }),
+                "Int" => Ok(ctx.types.int),
+                "Bool" => Ok(ctx.types.bool),
+                "Unit" => Ok(ctx.types.unit),
+                // A type parameter in scope (e.g. `T` inside `def f<T>`)
+                // shadows any same-named enum and resolves to `Ty::Param`.
+                other if ctx.lookup_type_param(other).is_some() => {
+                    let id = ctx.lookup_type_param(other).unwrap();
+                    Ok(ctx.param_ty(id))
+                }
+                other => {
+                    let er =
+                        ctx.lookup_enum_current(other)
+                            .ok_or_else(|| AstError::UnknownType {
+                                name: other.to_string(),
+                                range,
+                            })?;
+                    // A bare name for a *generic* enum is under-applied: it needs
+                    // its type/region arguments (`List<T>`, not `List`). Reject it
+                    // here with a clear arity error rather than silently producing
+                    // a malformed un-applied `Enum` type (which later fails to
+                    // unify with the applied form behind a confusing message).
+                    let def = ctx.get_enum(er);
+                    let tp = def.type_params.len();
+                    let rp = def.region_params.len();
+                    if tp > 0 {
+                        return Err(AstError::TypeArgArityMismatch {
+                            name: other.to_string(),
+                            expected: tp,
+                            found: 0,
+                            range,
+                        });
+                    }
+                    if rp > 0 {
+                        return Err(AstError::RegionArgArityMismatch {
+                            name: other.to_string(),
+                            expected: rp,
+                            found: 0,
+                            range,
+                        });
+                    }
+                    Ok(ctx.enum_ty(er))
+                }
             }
         }
     }
@@ -478,7 +1831,7 @@ fn build_statement<'run>(
     ctx: &mut CompileCtx<'run>,
     pair: Pair<Rule>,
     src: &str,
-) -> Result<Statement, AstError> {
+) -> Result<Statement<'run>, AstError> {
     assert_eq!(pair.as_rule(), Rule::statement);
     // statement = ((declaration | assignment | expression) ~ ";")
     // capture pair span before moving
@@ -574,6 +1927,59 @@ fn build_statement<'run>(
                 });
             }
 
+            // Borrow binding `let &x : T = e` (shared) or `let &mut x : T = e`
+            // (exclusive) (Calculus §6.4): desugar to `let x : &T = &e` /
+            // `let x : &mut T = &mut e`, reusing the borrow-expression
+            // machinery — `e` is borrowed (not consumed) and `x` holds the
+            // reference. A `&mut` binding is assignable (`x = e` writes through
+            // the borrow), so it is marked mutable.
+            if first_child.as_rule() == Rule::borrow_binding {
+                let mut bb_inner = first_child.into_inner().peekable();
+                let mutable = if bb_inner.peek().map(|p| p.as_rule()) == Some(Rule::mut_kw) {
+                    bb_inner.next();
+                    true
+                } else {
+                    false
+                };
+                let name_pair = bb_inner
+                    .next()
+                    .missing("borrow binding name", inner_range)?;
+                let var = HirVar::Decl(ctx.new_original_variable(&name_pair, Rule::declaration)?);
+                let next = decl_inner
+                    .next()
+                    .missing("borrow declaration body", inner_range)?;
+                let (ty, expr_pair) = if next.as_rule() == Rule::type_ {
+                    let inner_ty = build_type(ctx, next)?;
+                    let region = ctx.anon_region();
+                    let ref_ty = if mutable {
+                        ctx.ref_mut_ty(region, inner_ty)
+                    } else {
+                        ctx.ref_ty(region, inner_ty)
+                    };
+                    (
+                        Some(ref_ty),
+                        decl_inner
+                            .next()
+                            .missing("borrow declaration expression", inner_range)?,
+                    )
+                } else {
+                    (None, next)
+                };
+                let inner_expr = build_expr(ctx, expr_pair, src)?;
+                let expr_range = inner_expr.range;
+                let borrowed = Expr {
+                    expr: Expression::Borrow(Box::new(inner_expr), mutable),
+                    range: expr_range,
+                };
+                return Ok(Statement::Declaration {
+                    name: var,
+                    range: inner_range,
+                    ty,
+                    is_mutable: mutable,
+                    val: borrowed,
+                });
+            }
+
             // Regular single-binding declaration.
             let (is_mutable, name_pair) = if first_child.as_rule() == Rule::mut_kw {
                 (
@@ -606,21 +2012,43 @@ fn build_statement<'run>(
         }
         Rule::assignment => {
             let mut a_inner = first.into_inner();
-            let name = a_inner
-                .next()
-                .missing("assignment name", inner_range)?
-                .as_str()
-                .to_string(); // identifier
-            let expr = build_expr(
-                ctx,
-                a_inner.next().missing("assignment type", inner_range)?,
-                src,
-            )?;
-            Ok(Statement::Assignment {
-                name: HirVar::Unqualified(name),
-                range: inner_range,
-                val: expr,
-            })
+            let target = a_inner.next().missing("assignment target", inner_range)?;
+            match target.as_rule() {
+                Rule::identifier => {
+                    let name = target.as_str().to_string();
+                    let expr = build_expr(
+                        ctx,
+                        a_inner.next().missing("assignment value", inner_range)?,
+                        src,
+                    )?;
+                    Ok(Statement::Assignment {
+                        name: HirVar::Unqualified(name),
+                        range: inner_range,
+                        val: expr,
+                    })
+                }
+                // `*r = e`: write-through. The reference is the deref's inner.
+                Rule::deref_expr => {
+                    let ref_pair = target
+                        .into_inner()
+                        .next()
+                        .missing("dereference target", inner_range)?;
+                    let reference = build_primary(ctx, ref_pair, src)?;
+                    let value = build_expr(
+                        ctx,
+                        a_inner.next().missing("assignment value", inner_range)?,
+                        src,
+                    )?;
+                    Ok(Statement::DerefAssign {
+                        reference,
+                        value,
+                        range: inner_range,
+                    })
+                }
+                other => internal_bug!(
+                    "assignment target was neither identifier nor deref_expr: {other:?}"
+                ),
+            }
         }
         Rule::expression => {
             let expr = build_expr(ctx, first, src)?;
@@ -645,7 +2073,7 @@ fn build_expr<'run>(
     ctx: &mut CompileCtx<'run>,
     pair: Pair<Rule>,
     src: &str,
-) -> Result<Expr, AstError> {
+) -> Result<Expr<'run>, AstError> {
     let range = Range::from(&pair);
     match pair.as_rule() {
         Rule::expression => {
@@ -678,9 +2106,9 @@ fn binop_fold<'run, F>(
     mut next_level: F,
     src: &str,
     parent_range: Range,
-) -> Result<Expr, AstError>
+) -> Result<Expr<'run>, AstError>
 where
-    F: FnMut(&mut CompileCtx<'run>, Pair<Rule>, &str) -> Result<Expr, AstError>,
+    F: FnMut(&mut CompileCtx<'run>, Pair<Rule>, &str) -> Result<Expr<'run>, AstError>,
 {
     let first_pair = inner.next().missing("left operand", parent_range)?;
     let mut expr = next_level(ctx, first_pair, src)?;
@@ -709,7 +2137,8 @@ fn bop_from_rule(rule: Rule) -> Bop {
     match rule {
         Rule::or => Bop::Or,
         Rule::xor => Bop::Xor,
-        Rule::and => Bop::And,
+        Rule::logand => Bop::And,
+        Rule::bitand => Bop::BitAnd,
         _ => internal_bug!("unexpected bop_from_rule: {rule:?}"),
     }
 }
@@ -719,7 +2148,7 @@ fn build_logic_or<'run>(
     ctx: &mut CompileCtx<'run>,
     pair: Pair<Rule>,
     src: &str,
-) -> Result<Expr, AstError> {
+) -> Result<Expr<'run>, AstError> {
     let range = Range::from(&pair);
     let inner = pair.into_inner();
     binop_fold(ctx, inner, build_logic_xor, src, range)
@@ -730,7 +2159,7 @@ fn build_logic_xor<'run>(
     ctx: &mut CompileCtx<'run>,
     pair: Pair<Rule>,
     src: &str,
-) -> Result<Expr, AstError> {
+) -> Result<Expr<'run>, AstError> {
     let range = Range::from(&pair);
     let inner = pair.into_inner();
     binop_fold(ctx, inner, build_logic_and, src, range)
@@ -741,7 +2170,7 @@ fn build_logic_and<'run>(
     ctx: &mut CompileCtx<'run>,
     pair: Pair<Rule>,
     src: &str,
-) -> Result<Expr, AstError> {
+) -> Result<Expr<'run>, AstError> {
     let range = Range::from(&pair);
     let inner = pair.into_inner();
     binop_fold(ctx, inner, build_equality, src, range)
@@ -752,7 +2181,7 @@ fn build_equality<'run>(
     ctx: &mut CompileCtx<'run>,
     pair: Pair<Rule>,
     src: &str,
-) -> Result<Expr, AstError> {
+) -> Result<Expr<'run>, AstError> {
     let range = Range::from(&pair);
     let mut inner = pair.into_inner();
 
@@ -785,7 +2214,7 @@ fn build_comparison<'run>(
     ctx: &mut CompileCtx<'run>,
     pair: Pair<Rule>,
     src: &str,
-) -> Result<Expr, AstError> {
+) -> Result<Expr<'run>, AstError> {
     let range = Range::from(&pair);
     let mut inner = pair.into_inner();
 
@@ -820,7 +2249,7 @@ fn build_add_sub<'run>(
     ctx: &mut CompileCtx<'run>,
     pair: Pair<Rule>,
     src: &str,
-) -> Result<Expr, AstError> {
+) -> Result<Expr<'run>, AstError> {
     let range = Range::from(&pair);
     let mut inner = pair.into_inner();
 
@@ -853,7 +2282,7 @@ fn build_mul_div<'run>(
     ctx: &mut CompileCtx<'run>,
     pair: Pair<Rule>,
     src: &str,
-) -> Result<Expr, AstError> {
+) -> Result<Expr<'run>, AstError> {
     let range = Range::from(&pair);
     let mut inner = pair.into_inner();
 
@@ -886,7 +2315,7 @@ fn build_power<'run>(
     ctx: &mut CompileCtx<'run>,
     pair: Pair<Rule>,
     src: &str,
-) -> Result<Expr, AstError> {
+) -> Result<Expr<'run>, AstError> {
     let range = Range::from(&pair);
     let mut inner = pair.into_inner();
 
@@ -914,7 +2343,7 @@ fn build_unary<'run>(
     ctx: &mut CompileCtx<'run>,
     pair: Pair<Rule>,
     src: &str,
-) -> Result<Expr, AstError> {
+) -> Result<Expr<'run>, AstError> {
     assert_eq!(pair.as_rule(), Rule::unary);
     let range = Range::from(&pair);
 
@@ -974,7 +2403,7 @@ fn build_primary<'run>(
     ctx: &mut CompileCtx<'run>,
     pair: Pair<Rule>,
     src: &str,
-) -> Result<Expr, AstError> {
+) -> Result<Expr<'run>, AstError> {
     assert_eq!(pair.as_rule(), Rule::primary);
     let range = Range::from(&pair);
 
@@ -1008,6 +2437,38 @@ fn build_primary<'run>(
         .next()
         .missing("inner expression", range)?;
     match inner.as_rule() {
+        Rule::borrow_expr => {
+            // borrow_expr = { "&" ~ mut_kw? ~ primary }
+            let inner_range = Range::from(&inner);
+            let mut parts = inner.into_inner().peekable();
+            let mutable = if parts.peek().map(|p| p.as_rule()) == Some(Rule::mut_kw) {
+                parts.next();
+                true
+            } else {
+                false
+            };
+            let target = parts
+                .next()
+                .missing("borrow target expression", inner_range)?;
+            let e = build_primary(ctx, target, src)?;
+            Ok(Expr {
+                expr: Expression::Borrow(Box::new(e), mutable),
+                range,
+            })
+        }
+        Rule::deref_expr => {
+            // deref_expr = { "*" ~ primary }
+            let inner_range = Range::from(&inner);
+            let target = inner
+                .into_inner()
+                .next()
+                .missing("dereference target expression", inner_range)?;
+            let e = build_primary(ctx, target, src)?;
+            Ok(Expr {
+                expr: Expression::Deref(Box::new(e)),
+                range,
+            })
+        }
         Rule::expression => build_expr(ctx, inner, src),
         Rule::ifstatement => build_if(ctx, inner, src),
         Rule::whileloop => build_while(ctx, inner, src),
@@ -1150,7 +2611,7 @@ fn build_if<'run>(
     ctx: &mut CompileCtx<'run>,
     pair: Pair<Rule>,
     src: &str,
-) -> Result<Expr, AstError> {
+) -> Result<Expr<'run>, AstError> {
     assert_eq!(pair.as_rule(), Rule::ifstatement);
     let range = Range::from(&pair);
 
@@ -1180,7 +2641,7 @@ fn build_while<'run>(
     ctx: &mut CompileCtx<'run>,
     pair: Pair<Rule>,
     src: &str,
-) -> Result<Expr, AstError> {
+) -> Result<Expr<'run>, AstError> {
     assert_eq!(pair.as_rule(), Rule::whileloop);
     let range = Range::from(&pair);
 
@@ -1204,7 +2665,7 @@ fn build_match<'run>(
     ctx: &mut CompileCtx<'run>,
     pair: Pair<Rule>,
     src: &str,
-) -> Result<Expr, AstError> {
+) -> Result<Expr<'run>, AstError> {
     assert_eq!(pair.as_rule(), Rule::match_expr);
     let range = Range::from(&pair);
 
@@ -1246,7 +2707,7 @@ fn build_match<'run>(
 fn build_let_constructor<'run>(
     ctx: &mut CompileCtx<'run>,
     pair: Pair<Rule>,
-) -> Result<HirPattern, AstError> {
+) -> Result<HirPattern<'run>, AstError> {
     assert_eq!(pair.as_rule(), Rule::let_constructor);
     let range = Range::from(&pair);
     let mut parts = pair.into_inner();
@@ -1282,7 +2743,7 @@ fn build_let_constructor<'run>(
 fn build_let_destructure<'run>(
     ctx: &mut CompileCtx<'run>,
     pair: Pair<Rule>,
-) -> Result<HirPattern, AstError> {
+) -> Result<HirPattern<'run>, AstError> {
     assert_eq!(pair.as_rule(), Rule::let_destructure);
     let range = Range::from(&pair);
     let inner = pair
@@ -1350,7 +2811,7 @@ fn build_let_destructure<'run>(
 fn build_pattern<'run>(
     ctx: &mut CompileCtx<'run>,
     pair: Pair<Rule>,
-) -> Result<HirPattern, AstError> {
+) -> Result<HirPattern<'run>, AstError> {
     assert_eq!(pair.as_rule(), Rule::pattern);
     let range = Range::from(&pair);
     let inner = pair.into_inner().next().missing("pattern body", range)?;
@@ -1446,7 +2907,7 @@ fn build_call<'run>(
     ctx: &mut CompileCtx<'run>,
     pair: Pair<Rule>,
     src: &str,
-) -> Result<Expr, AstError> {
+) -> Result<Expr<'run>, AstError> {
     let rule = pair.as_rule();
     assert!(matches!(
         rule,
@@ -1463,6 +2924,15 @@ fn build_call<'run>(
     let name_pair = inner.next().missing("function call name", range)?;
     let name = name_pair.as_str().to_string();
 
+    // optional turbofish `::<T, …>` (function_call only; Memory Step C)
+    let mut type_args = Vec::new();
+    if inner.peek().map(|p| p.as_rule()) == Some(Rule::turbofish) {
+        let tf = inner.next().missing("turbofish", range)?;
+        for ty_pair in tf.into_inner() {
+            type_args.push(build_type(ctx, ty_pair)?);
+        }
+    }
+
     let mut args = Vec::new();
     for expr_pair in inner {
         args.push(build_expr(ctx, expr_pair, src)?);
@@ -1478,7 +2948,11 @@ fn build_call<'run>(
     };
 
     Ok(Expr {
-        expr: Expression::Call { fn_name, args },
+        expr: Expression::Call {
+            fn_name,
+            args,
+            type_args,
+        },
         range,
     })
 }

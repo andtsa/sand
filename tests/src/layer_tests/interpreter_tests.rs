@@ -12,14 +12,12 @@
 
 use lang::ir_types::typed_hir::Expression;
 
-use crate::common::run_hir;
-use crate::common::run_mir;
+use crate::common::run_hir_and_mir;
 
-/// Run `src` through both interpreters, assert they agree, and return the
-/// result.
-fn run_both(src: &str) -> Expression {
-    let hir = run_hir(src);
-    let mir = crate::common::mir_value_to_expr(run_mir(src));
+/// Run `src` through both interpreters (sharing one compilation, so enum
+/// handles are comparable), assert they agree, and return the result.
+fn run_both(src: &str) -> Expression<'static> {
+    let (hir, mir) = run_hir_and_mir(src);
     assert_eq!(hir, mir, "HIR and MIR interpreters disagree for:\n  {src}");
     hir
 }
@@ -104,7 +102,7 @@ fn interpret_parenthesised_expr() {
 #[test]
 fn interpret_bool_and_true() {
     assert_eq!(
-        run_both("def main(): Bool := true & true"),
+        run_both("def main(): Bool := true and true"),
         Expression::Bool(true)
     );
 }
@@ -112,7 +110,7 @@ fn interpret_bool_and_true() {
 #[test]
 fn interpret_bool_and_false() {
     assert_eq!(
-        run_both("def main(): Bool := true & false"),
+        run_both("def main(): Bool := true and false"),
         Expression::Bool(false)
     );
 }
@@ -383,7 +381,7 @@ fn interpret_negative_zero_is_zero() {
 #[test]
 fn interpret_chained_comparisons_via_bool_ops() {
     assert_eq!(
-        run_both("def main(): Bool := (1 < 2) & (3 > 2)"),
+        run_both("def main(): Bool := (1 < 2) and (3 > 2)"),
         Expression::Bool(true)
     );
 }

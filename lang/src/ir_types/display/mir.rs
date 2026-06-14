@@ -11,8 +11,8 @@ impl std::fmt::Display for BlockId {
     }
 }
 
-impl MirProgram {
-    pub fn dump(&self, ctx: &CompileCtx) -> String {
+impl<'tcx> MirProgram<'tcx> {
+    pub fn dump(&self, ctx: &CompileCtx<'tcx>) -> String {
         let mut out = String::new();
         for func in self.functions.values() {
             out.push_str(&func.dump(ctx));
@@ -22,8 +22,8 @@ impl MirProgram {
     }
 }
 
-impl MirFunction {
-    pub fn dump(&self, ctx: &CompileCtx) -> String {
+impl<'tcx> MirFunction<'tcx> {
+    pub fn dump(&self, ctx: &CompileCtx<'tcx>) -> String {
         let mut out = String::new();
 
         writeln!(
@@ -65,7 +65,13 @@ fn fmt_local(id: &LocalId) -> String {
 }
 
 fn fmt_place(p: &Place) -> String {
-    fmt_local(&p.local)
+    let mut s = fmt_local(&p.local);
+    for elem in &p.projection {
+        match elem {
+            ProjElem::Deref => s = format!("(*{s})"),
+        }
+    }
+    s
 }
 
 fn fmt_constant(c: &Constant) -> String {
@@ -83,9 +89,11 @@ fn fmt_operand(o: &Operand) -> String {
     }
 }
 
-fn fmt_rvalue(rv: &RValue, ctx: &CompileCtx) -> String {
+fn fmt_rvalue<'tcx>(rv: &RValue<'tcx>, ctx: &CompileCtx<'tcx>) -> String {
     match rv {
         RValue::Use(o) => fmt_operand(o),
+        RValue::SizeOf(ty) => format!("size_of::<{}>()", ctx.display_ty(*ty)),
+        RValue::Ref(p) => format!("&{}", fmt_place(p)),
         RValue::BinaryOp { op, left, right } => {
             format!("{} {} {}", fmt_operand(left), op, fmt_operand(right))
         }
@@ -108,12 +116,13 @@ fn fmt_rvalue(rv: &RValue, ctx: &CompileCtx) -> String {
     }
 }
 
-fn fmt_statement(stmt: &Statement, ctx: &CompileCtx) -> String {
+fn fmt_statement<'tcx>(stmt: &Statement<'tcx>, ctx: &CompileCtx<'tcx>) -> String {
     match stmt {
         Statement::Assign { dst, value, .. } => {
             format!("{} = {}", fmt_place(dst), fmt_rvalue(value, ctx))
         }
         Statement::Eval { value, .. } => fmt_rvalue(value, ctx).to_string(),
+        Statement::Drop { place, .. } => format!("drop {}", fmt_place(place)),
     }
 }
 

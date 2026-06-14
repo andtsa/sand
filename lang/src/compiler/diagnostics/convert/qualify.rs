@@ -9,10 +9,10 @@ use crate::compiler::diagnostics::convert::uniquify::uniquify_error_to_diagnosti
 use crate::compiler::structure::FileRef;
 use crate::passes::qualify::error::QualifyError;
 
-pub fn qualify_error_to_diagnostics(
-    ctx: &CompileCtx,
+pub fn qualify_error_to_diagnostics<'tcx>(
+    ctx: &CompileCtx<'tcx>,
     file: FileRef,
-    err: &QualifyError,
+    err: &QualifyError<'tcx>,
 ) -> SandDiagnostics {
     let mut diagnostics = SandDiagnostics::default();
     match err {
@@ -234,6 +234,25 @@ pub fn qualify_error_to_diagnostics(
                 SandDiagnostic {
                     severity: DiagnosticSeverity::Error,
                     message: format!("unknown enum type '{name}' used in match pattern"),
+                    range: *range,
+                    file: Some(file),
+                    ..Default::default()
+                },
+            );
+        }
+        QualifyError::TurbofishUnsupported {
+            func,
+            range,
+            source_module,
+        } => {
+            let file = ctx.file_of_module(source_module.index);
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    message: format!(
+                        "explicit type arguments on '{func}' are not supported yet (only on `size_of`)"
+                    ),
                     range: *range,
                     file: Some(file),
                     ..Default::default()

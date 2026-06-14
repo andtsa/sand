@@ -4,6 +4,8 @@ mod debug;
 mod enums;
 mod functions;
 mod projects;
+mod type_params;
+mod typeclasses;
 mod variables;
 
 use std::collections::BTreeMap;
@@ -13,6 +15,8 @@ pub use debug::*;
 pub use enums::*;
 pub use functions::*;
 pub use projects::*;
+pub use type_params::*;
+pub use typeclasses::*;
 pub use variables::*;
 
 pub type Map<K, V> = BTreeMap<K, V>;

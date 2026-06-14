@@ -8,21 +8,24 @@ use crate::compiler::structure::FunRef;
 use crate::compiler::structure::ModuleRef;
 use crate::compiler::structure::OriginalVarRef;
 use crate::compiler::structure::Range;
+use crate::compiler::structure::RegionParam;
+use crate::compiler::structure::TypeConstraint;
+use crate::compiler::structure::TypeParam;
 use crate::compiler::structure::UniqVar;
 use crate::lang::ops::*;
 use crate::lang::types::*;
 
 #[derive(Debug)]
-pub struct ProgramModule {
-    pub functions: Vec<Function>,
-    pub module_name: ModuleRef,
+pub struct ProgramModule<'tcx> {
+    pub functions: Vec<Function<'tcx>>,
+    pub module_name: ModuleRef<'tcx>,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub enum HirVar {
-    Decl(OriginalVarRef),
+pub enum HirVar<'tcx> {
+    Decl(OriginalVarRef<'tcx>),
     Unqualified(String),
-    Uniq(UniqVar),
+    Uniq(UniqVar<'tcx>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -32,30 +35,34 @@ pub enum HirFnCall {
 }
 
 #[derive(Debug, Clone)]
-pub struct Parameter {
-    pub name: HirVar,
-    pub ty: Ty,
+pub struct Parameter<'tcx> {
+    pub name: HirVar<'tcx>,
+    pub ty: Ty<'tcx>,
     pub range: Range,
     pub is_mutable: bool,
 }
 
 #[derive(Debug)]
-pub struct Function {
-    pub name: FunRef,
+pub struct Function<'tcx> {
+    pub name: FunRef<'tcx>,
     pub range: Range,
-    pub parameters: Vec<Parameter>,
-    pub ret_type: Ty,
-    pub body: Expr,
+    pub type_params: Vec<TypeParam>,
+    pub region_params: Vec<RegionParam>,
+    pub where_constraints: Vec<RegionConstraint>,
+    pub type_constraints: Vec<TypeConstraint>,
+    pub parameters: Vec<Parameter<'tcx>>,
+    pub ret_type: Ty<'tcx>,
+    pub body: Expr<'tcx>,
 }
 
 #[derive(Debug, Clone)]
-pub enum Statement {
+pub enum Statement<'tcx> {
     Declaration {
-        name: HirVar,
+        name: HirVar<'tcx>,
         range: Range,
-        ty: Option<Ty>,
+        ty: Option<Ty<'tcx>>,
         is_mutable: bool,
-        val: Expr,
+        val: Expr<'tcx>,
     },
 
     /// Flat tuple-pattern binding: `let (a, mut b) = expr`.
@@ -63,9 +70,9 @@ pub enum Statement {
     /// Each element is `(name, is_mutable, range)`.  `ty` is the optional
     /// type annotation on the whole binding (`let (a, b): (Int, Bool) = ...`).
     LetTuple {
-        elems: Vec<(HirVar, bool, Range)>,
-        ty: Option<Ty>,
-        val: Expr,
+        elems: Vec<(HirVar<'tcx>, bool, Range)>,
+        ty: Option<Ty<'tcx>>,
+        val: Expr<'tcx>,
         range: Range,
     },
 
@@ -77,30 +84,38 @@ pub enum Statement {
     /// same type as `val` whose outermost constructor must match the
     /// pattern's variant.
     LetPattern {
-        pattern: HirPattern,
-        ty: Option<Ty>,
-        val: Expr,
-        else_branch: Expr,
+        pattern: HirPattern<'tcx>,
+        ty: Option<Ty<'tcx>>,
+        val: Expr<'tcx>,
+        else_branch: Expr<'tcx>,
         range: Range,
     },
 
     Assignment {
-        name: HirVar,
+        name: HirVar<'tcx>,
         range: Range,
-        val: Expr,
+        val: Expr<'tcx>,
     },
 
-    Expr(Expr),
+    /// Write-through `*reference = value` (Calculus §3.2): store `value`
+    /// through a `&mut` reference. `reference : &mut T`, `value : T`.
+    DerefAssign {
+        reference: Expr<'tcx>,
+        value: Expr<'tcx>,
+        range: Range,
+    },
+
+    Expr(Expr<'tcx>),
 }
 
-/// `Expr` wraps an `Expression` and carries start/end positions (line,col)
+/// `Expr` wraps an `Expression` and carries start/end positions (line,col).
 #[derive(Debug, Clone)]
-pub struct Expr {
-    pub expr: Expression,
+pub struct Expr<'tcx> {
+    pub expr: Expression<'tcx>,
     pub range: Range,
 }
 
-impl Expr {
+impl<'tcx> Expr<'tcx> {
     /// A **traversal** over the immediate sub-expressions of an `Expr`.
     ///
     /// Applies the fallible transformation `f` to every direct child `Expr`
@@ -111,7 +126,7 @@ impl Expr {
     /// optional payload and `Tuple` into its elements. `Block` is
     /// deliberately *excluded*: its children are `Statement`s rather than
     /// bare `Expr`s and visiting it requires scope bookkeeping that only the
-    /// caller (e.g. `uniquify`) knows how to do — so callers must match on
+    /// caller (e.g. `uniquify`) knows how to do, so callers must match on
     /// `Block` themselves before falling back to this traversal.
     ///
     /// This is the Rust analogue of a `Traversal'` from the Haskell `lens`
@@ -143,7 +158,7 @@ impl Expr {
     /// cases to be written out by hand. It borrows `self` (mirroring the
     /// existing borrow-and-rebuild style of the passes) and calls `f` once
     /// per immediate child, cloning only the non-recursive payload of each
-    /// node — exactly as much cloning as the hand-written version did.
+    /// node
     pub fn traverse_subexprs<E>(
         &self,
         mut f: impl FnMut(&Self) -> Result<Self, E>,
@@ -167,9 +182,16 @@ impl Expr {
                 op: *op,
                 right: Box::new(f(right)?),
             },
-            Expression::Call { fn_name, args } => Expression::Call {
+            Expression::Borrow(inner, m) => Expression::Borrow(Box::new(f(inner)?), *m),
+            Expression::Deref(inner) => Expression::Deref(Box::new(f(inner)?)),
+            Expression::Call {
+                fn_name,
+                args,
+                type_args,
+            } => Expression::Call {
                 fn_name: fn_name.clone(),
                 args: args.iter().map(&mut f).collect::<Result<_, _>>()?,
+                type_args: type_args.clone(),
             },
             Expression::Match { scrutinee, arms } => Expression::Match {
                 scrutinee: Box::new(f(scrutinee)?),
@@ -217,7 +239,7 @@ impl Expr {
             | Expression::Int(_)
             | Expression::Bool(_)
             | Expression::Unit) => (*leaf).clone(),
-            // `Block` mixes `Statement` children and scoping concerns —
+            // `Block` mixes `Statement` children and scoping concerns.
             // callers must handle it before delegating here.
             block @ Expression::Block { .. } => (*block).clone(),
         };
@@ -229,78 +251,88 @@ impl Expr {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Expression {
+pub enum Expression<'tcx> {
     If {
-        cond: Box<Expr>,
-        t: Box<Expr>,
-        f: Option<Box<Expr>>,
+        cond: Box<Expr<'tcx>>,
+        t: Box<Expr<'tcx>>,
+        f: Option<Box<Expr<'tcx>>>,
     },
     While {
-        cond: Box<Expr>,
-        body: Box<Expr>,
+        cond: Box<Expr<'tcx>>,
+        body: Box<Expr<'tcx>>,
     },
     BinOp {
-        left: Box<Expr>,
+        left: Box<Expr<'tcx>>,
         op: Bop,
-        right: Box<Expr>,
+        right: Box<Expr<'tcx>>,
     },
     UnOp {
         op: Uop,
-        right: Box<Expr>,
+        right: Box<Expr<'tcx>>,
     },
     Call {
         fn_name: HirFnCall,
-        args: Vec<Expr>,
+        args: Vec<Expr<'tcx>>,
+        /// Explicit type arguments from a turbofish `f::<T, …>(…)` (Memory Step
+        /// C). Empty for an ordinary call. Resolved against the active
+        /// type-param scope, so a `T` inside a generic function is its `Param`.
+        type_args: Vec<Ty<'tcx>>,
     },
-    Var(HirVar),
+    Var(HirVar<'tcx>),
     Int(i64),
     Bool(bool),
     Unit,
+    /// borrow `&e` (shared) or `&mut e` (exclusive, the `bool` is `true`)
+    /// (Calculus §3.2).
+    Borrow(Box<Expr<'tcx>>, bool),
+    /// dereference `*e`: read through a reference (`&T`/`&mut T` -> T).
+    /// Transparent at runtime (borrows are erased), so it lowers like `Borrow`.
+    Deref(Box<Expr<'tcx>>),
     Block {
-        statements: Vec<Statement>,
-        expr: Option<Box<Expr>>,
+        statements: Vec<Statement<'tcx>>,
+        expr: Option<Box<Expr<'tcx>>>,
     },
     Constructor {
         type_name: String,
         variant: String,
-        payload: Option<Box<Expr>>,
+        payload: Option<Box<Expr<'tcx>>>,
     },
     ExternalConstructor {
         mod_name: String,
         type_name: String,
         variant: String,
-        payload: Option<Box<Expr>>,
+        payload: Option<Box<Expr<'tcx>>>,
     },
     Tag {
         variant: String,
-        payload: Option<Box<Expr>>,
+        payload: Option<Box<Expr<'tcx>>>,
     },
     Match {
-        scrutinee: Box<Expr>,
-        arms: Vec<HirMatchArm>,
+        scrutinee: Box<Expr<'tcx>>,
+        arms: Vec<HirMatchArm<'tcx>>,
     },
-    Tuple(Vec<Expr>),
+    Tuple(Vec<Expr<'tcx>>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct HirMatchArm {
-    pub pattern: HirPattern,
-    pub body: Expr,
+pub struct HirMatchArm<'tcx> {
+    pub pattern: HirPattern<'tcx>,
+    pub body: Expr<'tcx>,
     pub range: Range,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum HirPattern {
+pub enum HirPattern<'tcx> {
     Constructor {
         type_name: String,
         variant: String,
-        payload: Option<Box<HirPattern>>,
+        payload: Option<Box<HirPattern<'tcx>>>,
     },
     Tag {
         variant: String,
-        payload: Option<Box<HirPattern>>,
+        payload: Option<Box<HirPattern<'tcx>>>,
     },
-    Tuple(Vec<HirPattern>),
+    Tuple(Vec<HirPattern<'tcx>>),
     /// integer literal in pattern position: `42` or `-7`.
     IntLit(i64),
     /// boolean literal in pattern position: `true` or `false`.
@@ -311,21 +343,21 @@ pub enum HirPattern {
     /// diagnostics, mirroring `OriginalVarRef`/`UniqVar` declarations
     /// elsewhere).
     Binding {
-        var: HirVar,
+        var: HirVar<'tcx>,
         range: Range,
     },
     Wildcard,
 }
 
-impl HirVar {
+impl HirVar<'_> {
     pub fn is_uniq(&self) -> bool {
         matches!(self, HirVar::Uniq(_))
     }
 }
 
-impl Eq for Statement {}
+impl<'tcx> Eq for Statement<'tcx> {}
 
-impl Hash for Statement {
+impl<'tcx> Hash for Statement<'tcx> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         use Statement::*;
         std::mem::discriminant(self).hash(state);
@@ -340,6 +372,12 @@ impl Hash for Statement {
             Assignment { name, val, .. } => {
                 name.hash(state);
                 val.hash(state);
+            }
+            DerefAssign {
+                reference, value, ..
+            } => {
+                reference.hash(state);
+                value.hash(state);
             }
             LetTuple { elems, ty, val, .. } => {
                 elems.hash(state);
@@ -363,7 +401,7 @@ impl Hash for Statement {
     }
 }
 
-impl PartialEq for Statement {
+impl<'tcx> PartialEq for Statement<'tcx> {
     fn eq(&self, other: &Self) -> bool {
         use Statement::*;
         match (self, other) {
@@ -427,16 +465,16 @@ impl PartialEq for Statement {
     }
 }
 
-impl PartialEq for Expr {
+impl<'tcx> PartialEq for Expr<'tcx> {
     fn eq(&self, other: &Self) -> bool {
         self.expr == other.expr
     }
 }
 
-impl Hash for Expr {
+impl<'tcx> Hash for Expr<'tcx> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.expr.hash(state);
     }
 }
 
-impl Eq for Expr {}
+impl<'tcx> Eq for Expr<'tcx> {}
