@@ -187,6 +187,18 @@ impl<'tcx> TypedProgram<'tcx> {
             }
 
             Expression::Call { fn_name, args } => {
+                // External (FFI) functions (Memory Step A) have no body; dispatch
+                // the known C symbols to simulated-heap built-ins.
+                if ctx.is_extern(*fn_name) {
+                    let vals = args
+                        .iter()
+                        .map(|a| self.eval_expr(&a.expr, env, ctx, output))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let symbol = ctx
+                        .extern_symbol(*fn_name)
+                        .expect("extern fn has a registered symbol");
+                    return eval_extern(symbol, vals);
+                }
                 let function = &self.functions[fn_name];
                 let mut call_env = function
                     .parameters
@@ -661,6 +673,51 @@ fn eval_intrinsic<'tcx>(
                 ))),
             }
         }
+        // Raw-pointer ops (Memory Step A). A `Ptr<T>` is a cell handle, like a
+        // reference: `read`/`write` load/store the cell, `cast` is identity.
+        Intrinsic::PtrRead => {
+            debug_assert_eq!(vals.len(), 1, "__ptr_read expects 1 arg");
+            match &vals[0] {
+                Value::Ref(c) => Ok(c.borrow().clone()),
+                v => Err(InterpError::Runtime(format!(
+                    "__ptr_read: expected a pointer, got {}",
+                    fmt(v)
+                ))),
+            }
+        }
+        Intrinsic::PtrWrite => {
+            debug_assert_eq!(vals.len(), 2, "__ptr_write expects 2 args");
+            match &vals[0] {
+                Value::Ref(c) => {
+                    *c.borrow_mut() = vals[1].clone();
+                    Ok(Value::Unit)
+                }
+                v => Err(InterpError::Runtime(format!(
+                    "__ptr_write: expected a pointer, got {}",
+                    fmt(v)
+                ))),
+            }
+        }
+        Intrinsic::PtrCast => {
+            debug_assert_eq!(vals.len(), 1, "__ptr_cast expects 1 arg");
+            Ok(vals.into_iter().next().unwrap())
+        }
+        // No-op until types acquire destructors (Step C).
+        Intrinsic::DropInPlace => Ok(Value::Unit),
+    }
+}
+
+/// Execute a known external (FFI) function in the HIR interpreter (Memory Step
+/// A). `malloc` allocates a fresh interpreter cell and returns a `Value::Ref`
+/// handle to it; `free` is a no-op (the `Rc` drop reclaims it). The cell starts
+/// at `Unit` (the HIR cell has no uninitialised state).
+fn eval_extern<'tcx>(symbol: &str, _vals: Vec<Value<'tcx>>) -> Result<Value<'tcx>, InterpError> {
+    match symbol {
+        "malloc" | "calloc" => Ok(Value::Ref(cell(Value::Unit))),
+        "free" => Ok(Value::Unit),
+        other => Err(InterpError::Runtime(format!(
+            "extern function '{other}' is not supported by the interpreter"
+        ))),
     }
 }
 

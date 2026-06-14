@@ -12,6 +12,7 @@ use crate::compiler::context::CompileCtx;
 use crate::compiler::context::ContextError;
 use crate::compiler::structure::FileRef;
 use crate::compiler::structure::FunRef;
+use crate::compiler::structure::FunSig;
 use crate::compiler::structure::ImplDef;
 use crate::compiler::structure::Map;
 use crate::compiler::structure::MethodDef;
@@ -24,6 +25,7 @@ use crate::compiler::structure::TypeParam;
 use crate::compiler::structure::TypeParamSpec;
 use crate::compiler::structure::TypeclassDef;
 use crate::compiler::structure::TypeclassRef;
+use crate::compiler::structure::UniqVar;
 use crate::compiler::structure::UriError;
 use crate::internal_bug;
 use crate::ir_types::hhir::*;
@@ -108,6 +110,11 @@ pub enum AstError {
     )]
     PayloadBorrowNeedsLifetime { name: String, range: Range },
 
+    #[error(
+        "type '{ty}' at {range} is not FFI-safe; an `extern def` may only use `Int`, `Unit`, or `Ptr<T>` across the C boundary"
+    )]
+    NonFfiSafeType { ty: String, range: Range },
+
     #[error("unknown typeclass '{name}' at {range}")]
     UnknownTypeclass { name: String, range: Range },
 
@@ -156,6 +163,12 @@ pub enum AstError {
         superclass: String,
         range: Range,
     },
+
+    #[error("`Copy` at {range} requires every field to be `Copy`")]
+    CopyPayloadNotCopy { range: Range },
+
+    #[error("`Copy` for a generic type at {range} is not supported")]
+    CopyOnGenericType { range: Range },
 
     #[error("malformed `use` at {range}: expected `use module::name;` or `use module::*;`")]
     MalformedUse { range: Range },
@@ -288,6 +301,7 @@ pub fn build_program<'i, 'run>(
     // that): a subclass instance requires its superclass instances for the same
     // head type (Calculus §8.9).
     check_superclass_instances(ctx)?;
+    check_copy_instances(ctx)?;
     Ok(mods)
 }
 
@@ -503,12 +517,6 @@ fn resolve_enum_payloads<'i, 'run>(
 /// phase 2, build every function body, grouped by the module it is declared in
 /// (`module ...;` switches the current module). Enum / `use` declarations were
 /// already handled in phase 1.
-/// Whether a module is *local* (user-defined) for the orphan rule: anything
-/// other than the prelude module `core`.
-fn module_is_local<'a>(ctx: &CompileCtx<'a>, m: ModuleRef<'a>) -> bool {
-    ctx.module_info(&m).name != "core"
-}
-
 /// A display string for an instance head, used to mangle impl-method names.
 fn head_name<'a>(ctx: &CompileCtx<'a>, head: TypeHead<'a>) -> String {
     match head {
@@ -808,13 +816,17 @@ fn build_impl<'run>(
         .type_head(for_ty)
         .ok_or(AstError::NonInstanceableType { range })?;
 
-    // orphan rule: the class or the implemented type must be local.
-    let class_local = module_is_local(ctx, ctx.get_typeclass(tref).src_module);
-    let type_local = match head {
-        TypeHead::Enum(er) => module_is_local(ctx, ctx.get_enum(er).src_module),
-        _ => false,
+    // orphan rule: the impl is legal only if the class or the implemented type is
+    // *at home* — declared in the impl's own module. (This is the whole-program
+    // analogue of Rust's crate-orphan rule; it lets `core.sand` implement its own
+    // `Copy`/`Clone` for primitives while still rejecting a user module that
+    // implements a foreign class for a foreign type.)
+    let class_at_home = ctx.get_typeclass(tref).src_module == *cur_module;
+    let type_at_home = match head {
+        TypeHead::Enum(er) => ctx.get_enum(er).src_module == *cur_module,
+        _ => false, // primitives belong to no module
     };
-    if !class_local && !type_local {
+    if !class_at_home && !type_at_home {
         return Err(AstError::OrphanInstance {
             class: class_name,
             range,
@@ -885,6 +897,34 @@ fn build_impl<'run>(
     Ok(())
 }
 
+/// Final check: a `Copy` instance is sound only if every field/payload of the
+/// type is itself `Copy`, and the type is not generic (Step 14; no conditional
+/// or blanket `Copy` impls).
+fn check_copy_instances(ctx: &CompileCtx<'_>) -> Result<(), AstError> {
+    let Some(copy) = ctx.copy_class() else {
+        return Ok(());
+    };
+    for (class, head, range) in ctx.instance_keys() {
+        if class != copy {
+            continue;
+        }
+        if let TypeHead::Enum(er) = head {
+            let def = ctx.get_enum(er);
+            if !def.type_params.is_empty() {
+                return Err(AstError::CopyOnGenericType { range });
+            }
+            for v in &def.variants {
+                if let Some(payload) = v.payload.get()
+                    && !ctx.is_copy(payload)
+                {
+                    return Err(AstError::CopyPayloadNotCopy { range });
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Final check: a subclass instance requires its superclass instances for the
 /// same head type (Calculus §8.9 `requires`).
 fn check_superclass_instances(ctx: &CompileCtx<'_>) -> Result<(), AstError> {
@@ -939,6 +979,9 @@ fn build_functions<'i, 'run>(
             }
             Rule::function => {
                 funcs.push(build_function(ctx, child, src, &current_module, None)?);
+            }
+            Rule::extern_decl => {
+                collect_extern(ctx, child, &current_module)?;
             }
             Rule::impl_decl => {
                 build_impl(ctx, child, src, &current_module, &mut funcs)?;
@@ -1096,6 +1139,112 @@ fn build_function<'run>(
         ret_type,
         body,
     })
+}
+
+/// Collect one `extern def` (Memory Step A): register a bodyless external
+/// (FFI) function with a real `FunRef` + `FunSig` so calls resolve through the
+/// normal path, and record its C symbol in the extern registry. Parameter and
+/// return types must be FFI-safe (`Int`, `Unit`, `Ptr<T>`). No generics.
+fn collect_extern<'run>(
+    ctx: &mut CompileCtx<'run>,
+    pair: Pair<Rule>,
+    cur_module: &ModuleRef<'run>,
+) -> Result<(), AstError> {
+    assert_eq!(pair.as_rule(), Rule::extern_decl);
+    ctx.set_build_module(*cur_module);
+    let range = Range::from(&pair);
+
+    // An extern declares no generics; give `build_type` empty param scopes.
+    let _tp = ctx.begin_type_params(&[]);
+    let _rp = ctx.begin_region_params(&[]);
+
+    let mut inner = pair.into_inner();
+    let name_pair = inner.next().missing("extern function name", range)?;
+    let name_range = Range::from(&name_pair);
+    if name_pair.as_rule() != Rule::identifier {
+        return Err(AstError::UnexpectedRule {
+            expected: "identifier",
+            got: name_pair.as_rule(),
+            range: name_range,
+        });
+    }
+    let name = name_pair.as_str().to_string();
+    if !intrinsics::fn_name_allowed(&name) {
+        return Err(AstError::InvalidName {
+            got: name,
+            range: name_range,
+        });
+    }
+
+    // collect parameters (optional), enforcing FFI-safe types
+    let mut args: Vec<(UniqVar<'run>, Ty<'run>)> = Vec::new();
+    let ret_type;
+    loop {
+        let peek = inner.peek().map(|p| p.as_rule());
+        match peek {
+            Some(Rule::parameter) | Some(Rule::parameters) => {
+                let p = inner.next().missing("parameter", range)?;
+                let param_pairs: Vec<Pair<Rule>> = if p.as_rule() == Rule::parameters {
+                    p.into_inner().collect()
+                } else {
+                    vec![p]
+                };
+                for pp in param_pairs {
+                    let prange = Range::from(&pp);
+                    let param = build_parameter(ctx, pp)?;
+                    require_ffi_safe(ctx, param.ty, prange)?;
+                    let HirVar::Decl(ovref) = param.name else {
+                        internal_bug!("build_parameter produced a non-declaration var");
+                    };
+                    let uv = ctx.uniquify_original_variable(ovref);
+                    args.push((uv, param.ty));
+                }
+            }
+            _ => {
+                // next token is the return type_
+                let ty_pair = inner.next().missing("extern return type", range)?;
+                let trange = Range::from(&ty_pair);
+                let ty = build_type(ctx, ty_pair)?;
+                require_ffi_safe(ctx, ty, trange)?;
+                ret_type = ty;
+                break;
+            }
+        }
+    }
+
+    let fref = ctx.register_function(&name_pair, cur_module)?;
+    ctx.set_fun_sig(
+        fref,
+        FunSig {
+            args,
+            ret_ty: ret_type,
+            region_params: Vec::new(),
+            where_constraints: Vec::new(),
+            type_constraints: Vec::new(),
+        },
+    );
+    // C symbol = the sand identifier (explicit rename is deferred).
+    ctx.register_extern(fref, *cur_module, name);
+
+    ctx.end_type_params();
+    Ok(())
+}
+
+/// An FFI boundary type must be `Int`, `Unit`, or `Ptr<T>` (Memory Step A).
+fn require_ffi_safe<'tcx>(
+    ctx: &CompileCtx<'tcx>,
+    ty: Ty<'tcx>,
+    range: Range,
+) -> Result<(), AstError> {
+    let ok = matches!(ty.kind(), TyKind::Int | TyKind::Unit | TyKind::Ptr(_));
+    if ok {
+        Ok(())
+    } else {
+        Err(AstError::NonFfiSafeType {
+            ty: ctx.display_ty(ty).to_string(),
+            range,
+        })
+    }
 }
 
 /// Build the outlives constraints from a `where 'r >= 's, ...` clause. Both
@@ -1398,6 +1547,29 @@ fn build_core_type<'run>(
                 }
             }
 
+            // `Ptr<T>` is a built-in generic primitive (Memory Step A), not a
+            // user enum: exactly one type argument, no region arguments (a raw
+            // pointer is outside the region discipline).
+            if name == "Ptr" {
+                if !region_args.is_empty() {
+                    return Err(AstError::RegionArgArityMismatch {
+                        name,
+                        expected: 0,
+                        found: region_args.len(),
+                        range,
+                    });
+                }
+                if arg_tys.len() != 1 {
+                    return Err(AstError::TypeArgArityMismatch {
+                        name,
+                        expected: 1,
+                        found: arg_tys.len(),
+                        range,
+                    });
+                }
+                return Ok(ctx.ptr_ty(arg_tys[0]));
+            }
+
             let er = ctx
                 .lookup_enum_current(&name)
                 .ok_or_else(|| AstError::UnknownType {
@@ -1478,13 +1650,39 @@ fn build_core_type<'run>(
                     let id = ctx.lookup_type_param(other).unwrap();
                     Ok(ctx.param_ty(id))
                 }
-                other => ctx
-                    .lookup_enum_current(other)
-                    .map(|er| ctx.enum_ty(er))
-                    .ok_or_else(|| AstError::UnknownType {
-                        name: other.to_string(),
-                        range,
-                    }),
+                other => {
+                    let er =
+                        ctx.lookup_enum_current(other)
+                            .ok_or_else(|| AstError::UnknownType {
+                                name: other.to_string(),
+                                range,
+                            })?;
+                    // A bare name for a *generic* enum is under-applied: it needs
+                    // its type/region arguments (`List<T>`, not `List`). Reject it
+                    // here with a clear arity error rather than silently producing
+                    // a malformed un-applied `Enum` type (which later fails to
+                    // unify with the applied form behind a confusing message).
+                    let def = ctx.get_enum(er);
+                    let tp = def.type_params.len();
+                    let rp = def.region_params.len();
+                    if tp > 0 {
+                        return Err(AstError::TypeArgArityMismatch {
+                            name: other.to_string(),
+                            expected: tp,
+                            found: 0,
+                            range,
+                        });
+                    }
+                    if rp > 0 {
+                        return Err(AstError::RegionArgArityMismatch {
+                            name: other.to_string(),
+                            expected: rp,
+                            found: 0,
+                            range,
+                        });
+                    }
+                    Ok(ctx.enum_ty(er))
+                }
             }
         }
     }

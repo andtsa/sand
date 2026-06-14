@@ -52,7 +52,7 @@ borrow_type = { "&" ~ lifetime? ~ mut_kw? ~ core_type }
 type_ = { core_type ~ ("@" ~ lifetime)? }
 
 // keywords (prevent them from being identifiers)
-KEYWORD = { "if" | "then" | "else" | "let" | "def" | "true" | "false" | "Unit" | "Int" | "Bool" | "while" | "do" | "module" | "mut" | "type" | "match" | "and" | "where" | "use" | "typeclass" | "impl" | "requires" | "for" }
+KEYWORD = { "if" | "then" | "else" | "let" | "def" | "true" | "false" | "Unit" | "Int" | "Bool" | "while" | "do" | "module" | "mut" | "type" | "match" | "and" | "where" | "use" | "typeclass" | "impl" | "requires" | "for" | "extern" }
 
 identifier       = @{ !(KEYWORD ~ !(ASCII_ALPHANUMERIC | "_")) ~ "_"* ~ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
 empty_identifier = @{ "_" }
@@ -226,6 +226,11 @@ parameters = { parameter ~ ("," ~ parameter)* ~ ","? }
 
 function = { "def" ~ identifier ~ type_params? ~ "(" ~ parameters? ~ ")" ~ ":" ~ type_ ~ where_clause? ~ ":=" ~ expression }
 
+// External (FFI) function declaration (Memory Step A): a bodyless `def` bound
+// to a C symbol of the same name. C ABI, non-variadic; parameter/return types
+// must be FFI-safe (Int, Ptr<T>, Unit). No generics, no `where`-clause.
+extern_decl = { "extern" ~ "def" ~ identifier ~ "(" ~ parameters? ~ ")" ~ ":" ~ type_ ~ ";" }
+
 // Typeclass declaration (Calculus §8.8). A single type parameter for now
 // (`typeclass Eq<T> { … }`); `requires` lists superclasses. A method is a `def`
 // header (sand has no arrow types yet, so a signature reuses the function-header
@@ -247,4 +252,4 @@ use_glob = { "*" }
 use_path = { identifier ~ ("::" ~ identifier)* ~ ("::" ~ use_glob)? }
 use_decl = { "use" ~ use_path ~ ";" }
 
-program = { SOI ~ (function | type_alias | typeclass_decl | impl_decl | module | use_decl)* ~ EOI }
+program = { SOI ~ (function | extern_decl | type_alias | typeclass_decl | impl_decl | module | use_decl)* ~ EOI }

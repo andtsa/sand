@@ -215,6 +215,12 @@ pub struct CompileCtx<'tcx> {
     global_functions: Vec<FunRef<'tcx>>,
     function_signatures: Map<FunRef<'tcx>, FunSig<'tcx>>,
     pub entrypoint: Option<FunRef<'tcx>>,
+    /// External (FFI) functions (Memory Step A): a bodyless `extern def` bound
+    /// to a C symbol. Registered with a real `FunRef`+`FunSig` (so calls
+    /// resolve through the normal path) but no body in any IR; codegen
+    /// declares the symbol, the interpreter dispatches to a built-in. Maps
+    /// to `(declaring module, C symbol name)`.
+    extern_funcs: Map<FunRef<'tcx>, (ModuleRef<'tcx>, String)>,
 
     // enums
     enum_defs: Vec<EnumRef<'tcx>>,
@@ -235,6 +241,16 @@ pub struct CompileCtx<'tcx> {
     method_index: Map<String, TypeclassRef>,
     /// The one global, coherent instance set, keyed by `(class, head type)`.
     instances: Map<(TypeclassRef, TypeHead<'tcx>), ImplDef<'tcx>>,
+    /// Lang-item handles for the `Copy` / `Clone` classes (resolved by name
+    /// when `core.sand` registers them), used to drive implicit-copy.
+    copy_class: Option<TypeclassRef>,
+    clone_class: Option<TypeclassRef>,
+    /// The `Heaped` lang-item class (Memory Step A registration hook). The
+    /// class itself is declared in `core.sand` at Step C; this slot stays
+    /// `None` until then, but the by-name registration is reserved here so
+    /// the compiler can emit `alloc`/`borrow`/`release` calls once it
+    /// exists.
+    heaped_class: Option<TypeclassRef>,
 
     // modules
     project_modules: Vec<ModuleRef<'tcx>>,
@@ -364,6 +380,7 @@ impl<'tcx> CompileCtx<'tcx> {
             global_functions: Default::default(),
             function_signatures: Default::default(),
             entrypoint: None,
+            extern_funcs: Default::default(),
             enum_defs: Default::default(),
             enum_names: Default::default(),
             anon_tag_types: Default::default(),
@@ -371,6 +388,9 @@ impl<'tcx> CompileCtx<'tcx> {
             typeclass_names: Default::default(),
             method_index: Default::default(),
             instances: Default::default(),
+            copy_class: None,
+            clone_class: None,
+            heaped_class: None,
             cur_build_module: None,
             project_modules: Default::default(),
             module_imports: Default::default(),
@@ -492,6 +512,12 @@ impl<'tcx> CompileCtx<'tcx> {
         self.intern_ty(TyKind::RefMut(region, inner))
     }
 
+    /// Intern a raw pointer type `Ptr<inner>` (Memory Step A). Unlike a
+    /// reference, it carries no region and survives monomorphisation.
+    pub fn ptr_ty(&mut self, inner: Ty<'tcx>) -> Ty<'tcx> {
+        self.intern_ty(TyKind::Ptr(inner))
+    }
+
     /// Canonicalise the region of every reference (`&'r T`, `&'r mut T`) in
     /// `ty` to the shared anonymous region. Reference types carry no
     /// *type-level* region constraints — region safety is the lexical
@@ -537,6 +563,12 @@ impl<'tcx> CompileCtx<'tcx> {
                 let r = self.anon_region();
                 self.ref_mut_ty(r, inner)
             }
+            // raw pointers carry no region of their own, but their element may
+            // (e.g. `Ptr<&'r T>`): recurse so it is canonicalised too.
+            TyKind::Ptr(inner) => {
+                let inner = self.region_erase(*inner);
+                self.ptr_ty(inner)
+            }
             _ => ty,
         }
     }
@@ -581,6 +613,10 @@ impl<'tcx> CompileCtx<'tcx> {
                 let rr = pick(r);
                 let inner = self.region_fill(*inner, region);
                 self.ref_mut_ty(rr, inner)
+            }
+            TyKind::Ptr(inner) => {
+                let inner = self.region_fill(*inner, region);
+                self.ptr_ty(inner)
             }
             _ => ty,
         }
@@ -732,6 +768,10 @@ impl<'tcx> CompileCtx<'tcx> {
                 let rr = apply_region_subst(*r, subst);
                 let inner = self.region_subst_ty(*inner, subst);
                 self.ref_mut_ty(rr, inner)
+            }
+            TyKind::Ptr(inner) => {
+                let inner = self.region_subst_ty(*inner, subst);
+                self.ptr_ty(inner)
             }
             _ => ty,
         }
@@ -1092,6 +1132,37 @@ impl<'tcx> CompileCtx<'tcx> {
         self.entrypoint == Some(fun)
     }
 
+    /// Record `fun` as an external (FFI) function (Memory Step A) bound to the
+    /// given C symbol in `module`.
+    pub fn register_extern(&mut self, fun: FunRef<'tcx>, module: ModuleRef<'tcx>, symbol: String) {
+        self.extern_funcs.insert(fun, (module, symbol));
+    }
+
+    /// Whether `fun` is an external (FFI) function with no Sand body.
+    pub fn is_extern(&self, fun: FunRef<'tcx>) -> bool {
+        self.extern_funcs.contains_key(&fun)
+    }
+
+    /// The C symbol an external function is bound to, if it is one.
+    pub fn extern_symbol(&self, fun: FunRef<'tcx>) -> Option<&str> {
+        self.extern_funcs.get(&fun).map(|(_, s)| s.as_str())
+    }
+
+    /// All registered external functions, as `(FunRef, C symbol)` pairs.
+    pub fn extern_functions(&self) -> impl Iterator<Item = (FunRef<'tcx>, &str)> + '_ {
+        self.extern_funcs.iter().map(|(f, (_, s))| (*f, s.as_str()))
+    }
+
+    /// The external functions declared in `module` (for unqualified-call
+    /// visibility in [`crate::passes::qualify`]).
+    pub fn externs_in_module(&self, module: ModuleRef<'tcx>) -> Vec<FunRef<'tcx>> {
+        self.extern_funcs
+            .iter()
+            .filter(|(_, (m, _))| *m == module)
+            .map(|(f, _)| *f)
+            .collect()
+    }
+
     // ============================ Enums =====================================
 
     /// Phase 1 of enum registration: allocate the `EnumRef` and record the
@@ -1363,6 +1434,15 @@ impl<'tcx> CompileCtx<'tcx> {
     /// separately).
     pub fn register_typeclass(&mut self, def: TypeclassDef<'tcx>) -> TypeclassRef {
         let tref = TypeclassRef(self.typeclasses.len());
+        // Recognise the `Copy` / `Clone` lang-items by name (declared in
+        // `core.sand`) so the ownership pass can drive implicit copy.
+        match def.name.as_str() {
+            "Copy" => self.copy_class = Some(tref),
+            "Clone" => self.clone_class = Some(tref),
+            // Reserved for Step C; harmless until `core.sand` declares `Heaped`.
+            "Heaped" => self.heaped_class = Some(tref),
+            _ => {}
+        }
         self.typeclass_names.insert(def.name.clone(), tref);
         // Index method names now (from declaration order) so the skeleton's
         // methods can be filled in a later resolve phase.
@@ -1396,6 +1476,75 @@ impl<'tcx> CompileCtx<'tcx> {
 
     pub fn lookup_typeclass(&self, name: &str) -> Option<TypeclassRef> {
         self.typeclass_names.get(name).copied()
+    }
+
+    /// The `Clone` lang-item class, if `core.sand` declared it.
+    pub fn clone_class(&self) -> Option<TypeclassRef> {
+        self.clone_class
+    }
+
+    /// The `Copy` lang-item class, if `core.sand` declared it.
+    pub fn copy_class(&self) -> Option<TypeclassRef> {
+        self.copy_class
+    }
+
+    /// The `Heaped` lang-item class, if `core.sand` declared it (Step C).
+    /// `None` through Steps A/B; the registration hook is reserved in Step
+    /// A.
+    pub fn heaped_class(&self) -> Option<TypeclassRef> {
+        self.heaped_class
+    }
+
+    /// Whether `ty` has a registered `class` implementation.
+    pub fn is_class(&self, ty: Ty<'tcx>, class: TypeclassRef) -> bool {
+        self.type_head(ty)
+            .is_some_and(|head| self.lookup_instance(class, head).is_some())
+    }
+
+    /// Whether `ty` can be cloned (explicitly via `clone()`).
+    /// checks if `ty` has a registered `Clone` implementation.
+    pub fn is_clone(&self, ty: Ty<'tcx>) -> bool {
+        self.clone_class.is_some_and(|c| self.is_class(ty, c))
+    }
+
+    /// Whether `ty` is implicitly copied on use: a primitive or
+    /// reference (builtin), or a type whose head has a registered `Copy`
+    /// instance. `where T : Copy` on a type parameter is handled by the caller
+    /// (the ownership pass) via [`is_copy_under`].
+    pub fn is_copy(&self, ty: Ty<'tcx>) -> bool {
+        match ty.kind() {
+            TyKind::Int | TyKind::Bool | TyKind::Unit => true,
+            TyKind::Ref(..) => true,
+            // raw pointers are `Copy` and outside the affine discipline (A).
+            TyKind::Ptr(_) => true,
+            TyKind::Region(t, _) => self.is_copy(*t),
+            // a tuple is Copy iff every element is (structural Copy).
+            TyKind::Tuple(elems) => elems.iter().all(|e| self.is_copy(*e)),
+            TyKind::Enum(_) | TyKind::App(..) => self
+                .copy_class
+                .zip(self.type_head(ty))
+                .is_some_and(|(c, head)| self.lookup_instance(c, head).is_some()),
+            _ => false,
+        }
+    }
+
+    /// Like [`is_copy`](Self::is_copy), but a type parameter additionally
+    /// counts as `Copy` when the in-scope `constraints` bind it to `Copy`
+    /// (a `where T : Copy`). Used by the ownership pass inside generic
+    /// functions.
+    pub fn is_copy_under(
+        &self,
+        ty: Ty<'tcx>,
+        constraints: &[crate::compiler::structure::TypeConstraint],
+    ) -> bool {
+        if let TyKind::Param(pid) = ty.kind() {
+            return self.copy_class.is_some_and(|copy| {
+                constraints
+                    .iter()
+                    .any(|tc| tc.param == *pid && self.class_satisfies(tc.class, copy))
+            });
+        }
+        self.is_copy(ty)
     }
 
     pub fn get_typeclass(&self, tref: TypeclassRef) -> &TypeclassDef<'tcx> {
@@ -1588,6 +1737,29 @@ impl std::fmt::Display for TyDisplay<'_, '_> {
                 }
                 write!(f, ")")
             }
+            // `Name<T, ...>` — the enum name applied to its type arguments. Region
+            // arguments are elided (their internal ids carry no source meaning in
+            // a diagnostic; lifetime errors are reported separately).
+            TyKind::App(er, args, _) => {
+                write!(f, "{}", self.ctx.get_enum(*er).name)?;
+                if !args.is_empty() {
+                    write!(f, "<")?;
+                    for (i, arg) in args.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "{}", self.ctx.display_ty(*arg))?;
+                    }
+                    write!(f, ">")?;
+                }
+                Ok(())
+            }
+            // references print as `&T` / `&mut T`; a region ascription shows only
+            // its inner type — internal regions are omitted for readability.
+            TyKind::Ref(_, inner) => write!(f, "&{}", self.ctx.display_ty(*inner)),
+            TyKind::RefMut(_, inner) => write!(f, "&mut {}", self.ctx.display_ty(*inner)),
+            TyKind::Region(inner, _) => write!(f, "{}", self.ctx.display_ty(*inner)),
+            TyKind::Ptr(inner) => write!(f, "Ptr<{}>", self.ctx.display_ty(*inner)),
             _ => write!(f, "{}", self.ty),
         }
     }

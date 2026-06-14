@@ -13,6 +13,7 @@ pub enum OwnershipError {
         name: String,
         moved_at: Range,
         used_at: Range,
+        is_clone: bool,
     },
 
     #[error(

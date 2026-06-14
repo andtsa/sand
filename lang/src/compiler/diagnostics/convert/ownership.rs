@@ -19,12 +19,20 @@ pub fn ownership_error_to_diagnostic(
             name,
             moved_at,
             used_at,
+            is_clone,
         } => {
             diagnostics.add_one(
                 file,
                 SandDiagnostic {
                     severity: DiagnosticSeverity::Error,
-                    message: format!("use of moved value '{name}'"),
+                    message: format!(
+                        "use of moved value '{name}'{}",
+                        if *is_clone {
+                            " (use `clone(&{name})` to keep a copy)"
+                        } else {
+                            ""
+                        }
+                    ),
                     range: *used_at,
                     related: vec![SdRelatedInfo {
                         file,

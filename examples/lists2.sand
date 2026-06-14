@@ -1,12 +1,17 @@
 
-type List<T> = Empty | Cons((T, List));
+type List<T> = Empty | Cons((T, List<T>));
 
 def push<T>(elem: T, list: &mut List<T>): Unit := {
-    match list {
+    match *list {
         List#Cons((x, List#Empty)) => {
-            (*list) = List#Cons((x, List#Cons((elem, List#Empty))));
+            *list = {
+                let empty: List<T> = List#Empty;
+                let pay = (elem, empty);
+                let cont = List#Cons(pay);
+                List#Cons((x, cont))
+            };
         }
-        List#Cons((x, tail)) => push(elem, tail),
+        List#Cons((x, mut tail)) => push(elem, &mut tail),
         List#Empty => {
             *list = List#Cons((elem, List#Empty));
         }

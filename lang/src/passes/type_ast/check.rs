@@ -19,6 +19,7 @@ use crate::passes::type_ast::generics::subst;
 use crate::passes::type_ast::infer::escape_check;
 use crate::passes::type_ast::infer::infer;
 use crate::passes::type_ast::infer::infer_constructor;
+use crate::passes::type_ast::infer::infer_ptr_op;
 use crate::passes::type_ast::infer::infer_statement;
 use crate::passes::type_ast::infer::join_region_ty;
 
@@ -1020,6 +1021,21 @@ pub(super) fn check<'tcx>(
             if let Some(coerced) = coerce_never(&e, expected) {
                 return Ok(coerced);
             }
+            if !e.ty.eq_modulo_regions(expected) {
+                return Err(AstTypeError::TypeError {
+                    message: format!("expected type {} but found {}", expected, e.ty),
+                    expected,
+                    found: e.ty,
+                    range: expr.range,
+                });
+            }
+            Ok(e)
+        }
+
+        // Raw-pointer ops (Memory Step A) are generic; push the expected type
+        // down so `__ptr_cast` can take its target type from the context.
+        qhir::Expression::IntrinsicCall { fn_name, args } if fn_name.is_ptr_op() => {
+            let e = infer_ptr_op(ctx, env, *fn_name, args, Some(expected), expr.range)?;
             if !e.ty.eq_modulo_regions(expected) {
                 return Err(AstTypeError::TypeError {
                     message: format!("expected type {} but found {}", expected, e.ty),

@@ -40,6 +40,7 @@ pub fn check<'tcx>(
         let checker = OwnershipChecker {
             ctx,
             module: func.src_module,
+            type_constraints: func.type_constraints.clone(),
         };
 
         let mut env = OwnershipEnv::new();
@@ -55,6 +56,16 @@ pub fn check<'tcx>(
 struct OwnershipChecker<'a, 'tcx> {
     ctx: &'a CompileCtx<'tcx>,
     module: ModuleRef<'tcx>,
+    /// the current function's `where T : C` constraints — a `where T : Copy`
+    /// makes a parameter of type `T` implicitly copyable (Step 14c).
+    type_constraints: Vec<crate::compiler::structure::TypeConstraint>,
+}
+
+impl<'tcx> OwnershipChecker<'_, 'tcx> {
+    /// Is `ty` implicitly copied here, accounting for `where T : Copy` bounds?
+    fn is_copy(&self, ty: crate::lang::types::Ty<'tcx>) -> bool {
+        self.ctx.is_copy_under(ty, &self.type_constraints)
+    }
 }
 
 impl<'tcx> OwnershipChecker<'_, 'tcx> {
@@ -83,7 +94,7 @@ impl<'tcx> OwnershipChecker<'_, 'tcx> {
                 self.check_expr(val, env)?;
                 // the LHS variable's old value is implicitly dropped
                 // for non-Copy types, re-declare as Owned
-                if !val.ty.is_copy() {
+                if !self.is_copy(val.ty) {
                     env.declare(*name);
                 }
                 Ok(())
@@ -170,7 +181,7 @@ impl<'tcx> OwnershipChecker<'_, 'tcx> {
                 if !matches!(inner.expr, th::Expression::Var(_)) {
                     self.check_expr(inner, env)?;
                 }
-                if !expr.ty.is_copy() {
+                if !self.is_copy(expr.ty) {
                     return Err(self.err(OwnershipError::MoveOutOfBorrow { range: expr.range }));
                 }
                 Ok(())
@@ -184,7 +195,7 @@ impl<'tcx> OwnershipChecker<'_, 'tcx> {
             th::Expression::Tuple(elems) => self.check_exprs(elems, env),
 
             th::Expression::Var(v) => {
-                if expr.ty.is_copy() {
+                if self.is_copy(expr.ty) {
                     return Ok(());
                 }
                 match env.get(v) {
@@ -208,6 +219,7 @@ impl<'tcx> OwnershipChecker<'_, 'tcx> {
                             name: self.ctx.uniq_variable_name(v),
                             moved_at: *at,
                             used_at: expr.range,
+                            is_clone: self.ctx.is_clone(expr.ty),
                         }))
                     }
                     None => Ok(()),

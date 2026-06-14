@@ -1,0 +1,20 @@
+//@TEST:{42}[]
+// Memory Step A — the raw-pointer substrate.
+//
+// Exercises the whole substrate end to end through the LLVM backend: a minimal
+// FFI (`extern def malloc`/`free`, real libc), the `Ptr<T>` primitive, and the
+// generic pointer ops (`__ptr_cast` reinterpret, `__ptr_write` store,
+// `__ptr_read` load). Allocates a cell, stores 42, reads it back, frees, and
+// returns the recovered value as the exit code.
+
+extern def malloc(size: Int): Ptr<Unit>;
+extern def free(p: Ptr<Unit>): Unit;
+
+def main(): Int := {
+    let raw: Ptr<Unit> = malloc(8);
+    let p: Ptr<Int> = __ptr_cast(raw);
+    __ptr_write(p, 42);
+    let x: Int = __ptr_read(p);
+    free(raw);
+    x
+}

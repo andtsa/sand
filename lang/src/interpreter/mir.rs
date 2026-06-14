@@ -81,10 +81,18 @@ impl<'tcx> MirProgram<'tcx> {
 
     fn call_function(
         &self,
-        fun: FunRef,
+        fun: FunRef<'tcx>,
         args: &[MirValue<'tcx>],
         ctx: &CompileCtx<'tcx>,
     ) -> Result<MirValue<'tcx>, MirInterpError> {
+        // External (FFI) functions (Memory Step A) have no MIR body; dispatch
+        // the known C symbols to simulated-heap built-ins.
+        if ctx.is_extern(fun) {
+            let symbol = ctx
+                .extern_symbol(fun)
+                .expect("extern fn has a registered symbol");
+            return eval_extern(symbol, args);
+        }
         let func = &self.functions[&fun];
 
         // initialise locals: one fresh, distinct cell per local, all unset.
@@ -136,7 +144,7 @@ impl<'tcx> MirProgram<'tcx> {
 }
 
 fn execute_statement<'tcx>(
-    stmt: &Statement,
+    stmt: &Statement<'tcx>,
     locals: &[Cell<'tcx>],
     local_decls: &[LocalDecl<'tcx>],
     prog: &MirProgram<'tcx>,
@@ -200,7 +208,7 @@ fn place_ty<'tcx>(place: &Place, local_decls: &[LocalDecl<'tcx>]) -> Ty<'tcx> {
 }
 
 fn eval_rvalue<'tcx>(
-    rv: &RValue,
+    rv: &RValue<'tcx>,
     result_ty: Ty<'tcx>,
     locals: &[Cell<'tcx>],
     prog: &MirProgram<'tcx>,
@@ -409,6 +417,24 @@ fn eval_unop<'tcx>(op: Uop, v: MirValue<'tcx>) -> Result<MirValue<'tcx>, MirInte
     }
 }
 
+/// Execute a known external (FFI) function in the interpreter (Memory Step A).
+/// There is no real heap; a `malloc`'d cell is a fresh interpreter cell and a
+/// pointer is a `MirValue::Ref` handle to it. `free` is a no-op (the `Rc` drop
+/// reclaims the cell).
+fn eval_extern<'tcx>(
+    symbol: &str,
+    _args: &[MirValue<'tcx>],
+) -> Result<MirValue<'tcx>, MirInterpError> {
+    match symbol {
+        // size argument is ignored: one cell holds one value of any type.
+        "malloc" | "calloc" => Ok(MirValue::Ref(Rc::new(RefCell::new(None)))),
+        "free" => Ok(MirValue::Unit),
+        other => Err(MirInterpError::Runtime(format!(
+            "extern function '{other}' is not supported by the interpreter"
+        ))),
+    }
+}
+
 fn eval_intrinsic<'tcx>(
     fn_name: Intrinsic,
     args: Vec<MirValue<'tcx>>,
@@ -473,6 +499,39 @@ fn eval_intrinsic<'tcx>(
                 ))),
             }
         }
+        // Raw-pointer ops (Memory Step A). A `Ptr<T>` is a cell handle, exactly
+        // like a reference, so `read`/`write` are a load/store of that cell and
+        // `cast` is the identity.
+        Intrinsic::PtrRead => {
+            debug_assert_eq!(args.len(), 1, "__ptr_read expects 1 arg");
+            match &args[0] {
+                MirValue::Ref(cell) => cell.borrow().clone().ok_or_else(|| {
+                    MirInterpError::Runtime("__ptr_read: read of uninitialised pointer".into())
+                }),
+                v => Err(MirInterpError::Runtime(format!(
+                    "__ptr_read: expected a pointer, got {v:?}"
+                ))),
+            }
+        }
+        Intrinsic::PtrWrite => {
+            debug_assert_eq!(args.len(), 2, "__ptr_write expects 2 args");
+            match &args[0] {
+                MirValue::Ref(cell) => {
+                    *cell.borrow_mut() = Some(args[1].clone());
+                    Ok(MirValue::Unit)
+                }
+                v => Err(MirInterpError::Runtime(format!(
+                    "__ptr_write: expected a pointer, got {v:?}"
+                ))),
+            }
+        }
+        Intrinsic::PtrCast => {
+            debug_assert_eq!(args.len(), 1, "__ptr_cast expects 1 arg");
+            Ok(args.into_iter().next().unwrap())
+        }
+        // No-op until types acquire destructors (Step C); the value is simply
+        // discarded (its `Rc`-backed cells, if any, drop here).
+        Intrinsic::DropInPlace => Ok(MirValue::Unit),
     }
 }
 

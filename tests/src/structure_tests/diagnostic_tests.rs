@@ -106,3 +106,44 @@ fn error_display_is_deterministic() {
     let err2 = compile_err("def main(): Int := undefined_var");
     assert_eq!(format!("{err1}"), format!("{err2}"));
 }
+
+#[test]
+fn type_diagnostics_render_types_in_source_syntax() {
+    // A type-mismatch diagnostic must show source-like types (`&mut List<T>`,
+    // `List<T>`) rather than internal debug forms (`App(EnumRef(..)<Param(..)>)`,
+    // `&Var(RegionVar(..)) mut ...`).
+    use lang::compiler::diagnostics::SandDiagnostic;
+
+    let mut ctx = CompileCtx::initial();
+    let fr = ctx.stub_file();
+    let src = "type List<T> = Empty | Cons((T, List<T>)) \n \
+               def push<T>(elem: T, list: &mut List<T>): Unit := \
+                 match *list { \
+                   List#Cons((x, tail)) => push(elem, tail), \
+                   List#Empty => { *list = List#Cons((elem, List#Empty)); } \
+                 } \n \
+               def main(): Int := 0";
+    let code = Map::from([(fr, src)]);
+    let err = compile_hir(code, &mut ctx).expect_err("should fail");
+    let diagnostics = SandDiagnostic::from_compiler_error(&ctx, &err);
+
+    let mut text = String::new();
+    for diags in diagnostics.map.values() {
+        for d in diags {
+            text.push_str(&d.message);
+            for r in &d.related {
+                text.push_str(&r.message);
+            }
+        }
+    }
+    std::mem::forget(ctx);
+
+    assert!(text.contains("List<T>"), "expected `List<T>` in: {text}");
+    assert!(
+        text.contains("&mut List<T>"),
+        "expected `&mut List<T>` in: {text}"
+    );
+    assert!(!text.contains("App("), "leaked internal `App(` in: {text}");
+    assert!(!text.contains("RegionVar"), "leaked `RegionVar` in: {text}");
+    assert!(!text.contains("Param("), "leaked `Param(` in: {text}");
+}

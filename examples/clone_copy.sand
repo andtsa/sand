@@ -1,0 +1,10 @@
+//@TEST:{10}[]
+// Clone/Copy (Step 14): `where T : Copy` lets `doubled` use its generic argument
+// twice (implicit copy), and the call is monomorphised for `Int`. Compiled via
+// LLVM; exits with `doubled(5) = 5 + 5 = 10`.
+typeclass ToInt<T> { def to_int(x: T): Int }
+impl ToInt for Int { def to_int(x: Int): Int := x }
+
+def doubled<T>(x: T): Int where T : ToInt, T : Copy := to_int(x) + to_int(x)
+
+def main(): Int := doubled(5)

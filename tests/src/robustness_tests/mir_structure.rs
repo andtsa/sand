@@ -30,9 +30,11 @@ fn find_main<'a>(
 
 #[test]
 fn function_count_matches_source() {
-    // core library contributes 9 functions:
-    // abs, min, max, clamp, is_odd, is_even, pow, read_int, exit.
-    const CORE_FN_COUNT: usize = 9;
+    // core library contributes 12 functions: abs, min, max, clamp, is_odd,
+    // is_even, pow, read_int, exit, plus the `Clone` impl methods for the three
+    // primitives (`clone` for Int / Bool / Unit). The `Copy` impls are markers
+    // with no methods, so they add no functions.
+    const CORE_FN_COUNT: usize = 12;
 
     let (mir, _ctx) = lower("def main(): Int := 42");
     assert_eq!(mir.functions.len(), 1 + CORE_FN_COUNT);

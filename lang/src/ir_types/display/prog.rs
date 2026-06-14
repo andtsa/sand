@@ -145,8 +145,8 @@ fn format_function<'tcx>(
                     f.push_str(&pad);
                     line_len = pad.len();
                 } /*else {
-                    f.push(' ');
-                    line_len += 1;
+                f.push(' ');
+                line_len += 1;
                 }*/
             }
             FormatOpt::Nothing => {}
