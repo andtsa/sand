@@ -100,6 +100,9 @@ pub enum AstError {
     )]
     PayloadBorrowNeedsLifetime { name: String, range: Range },
 
+    #[error("malformed `use` at {range}: expected `use module::name;` or `use module::*;`")]
+    MalformedUse { range: Range },
+
     #[error(
         "type argument for parameter '{param}' of '{type_name}' has kind {found:?}, but kind {expected:?} is required at {range}"
     )]
@@ -191,122 +194,202 @@ impl<'run> ProgramModule<'run> {
 
 // ============== top level ==============
 
-pub fn build_program<'run>(
+pub fn build_program<'i, 'run>(
     ctx: &mut CompileCtx<'run>,
-    pair: Pair<Rule>,
+    pair: Pair<'i, Rule>,
     src: &str,
     default_module: ModuleRef<'run>,
     file: FileRef,
 ) -> Result<Map<ModuleRef<'run>, Vec<Function<'run>>>, AstError> {
     assert_eq!(pair.as_rule(), Rule::program);
+    let children: Vec<Pair<'i, Rule>> = pair.into_inner().collect();
 
-    // Collect all top-level children so we can do two passes.
-    let children: Vec<Pair<Rule>> = pair.into_inner().collect();
-
-    // first pass: register enum type declarations (phase 1 — names only).
-    // we also track the current module as module declarations are encountered,
-    // so that enum defs are attributed to the correct module.
+    // The front end runs as a collect-then-resolve sequence:
     //
-    // phase 1 deliberately allocates every `EnumRef` and variant name (with
-    // `payload: None`) before any payload type annotation is resolved: a
-    // payload may reference another enum — including forward or recursive
-    // references (`type Tree = Leaf | Node((Tree, Tree))`) — so every
-    // `EnumRef` must exist before `build_type` runs on any payload. We stash
-    // the raw payload `type_` pairs (cloned — they borrow from `src`) here
-    // and resolve them in phase 1.5 below, once every enum skeleton exists.
-    let mut pending_payloads: Vec<(EnumRef, usize, Pair<Rule>)> = Vec::new();
-    let mut generic_enums: Vec<EnumRef> = Vec::new();
-    {
-        let mut cur_mod = default_module;
-        for child in &children {
-            match child.as_rule() {
-                Rule::module => {
-                    let child_span = child.as_span();
-                    let modname_pair = child
-                        .clone()
-                        .into_inner()
-                        .next()
-                        .missing("module name", Range::from(child_span))?;
-                    cur_mod = ctx
-                        .get_mod_by_name(modname_pair.as_str())
-                        .unwrap_or_else(|| ctx.register_module(modname_pair.as_str(), file));
-                }
-                Rule::type_alias => {
-                    let range = Range::from(child);
-                    let mut inner = child.clone().into_inner();
-                    let name_pair = inner.next().missing("enum name", range)?;
-                    let enum_name = name_pair.as_str().to_string();
+    //   1 a collect declarations, register enum *skeletons* + `use` imports;
+    //     b resolve enum payloads, now that every skeleton exists, so forward /
+    //       recursive payload types (`type Tree = Node((Tree, Tree))`) resolve;
+    //     c variance soundness, declared variance vs. payload positions;
+    //
+    //   2   build function bodies, names resolve against the collected decls.
+    let collected = collect_declarations(ctx, &children, default_module, file)?;
+    resolve_enum_payloads(ctx, collected.pending_payloads)?;
+    for er in collected.generic_enums {
+        check_variance(ctx, er)?;
+    }
+    build_functions(ctx, children, src, default_module, file)
+}
 
-                    // optional type and region parameters: `type Ref<'r, T> =
-                    // ...`. Allocate them now so phase 1.5 can resolve `T` and
-                    // `'r` in payloads.
-                    let (type_params, region_params) =
-                        if inner.peek().map(|p| p.as_rule()) == Some(Rule::type_params) {
-                            let tp_pair = inner.next().missing("type parameters", range)?;
-                            let type_params =
-                                ctx.begin_type_params(&collect_type_params(tp_pair.clone()));
-                            let region_params =
-                                ctx.begin_region_params(&collect_region_params(tp_pair));
-                            (type_params, region_params)
-                        } else {
-                            (Vec::new(), Vec::new())
-                        };
+/// The declarations gathered in phase 1, to be resolved in later phases.
+struct Collected<'i, 'run> {
+    /// `(enum, variant index, raw payload `type_` pair)` — resolved in phase
+    /// 1.5 once every enum skeleton exists. Pairs borrow from the parse
+    /// (`'i`).
+    pending_payloads: Vec<(EnumRef<'run>, usize, Pair<'i, Rule>)>,
+    /// Generic enums, for the phase-1.6 variance check.
+    generic_enums: Vec<EnumRef<'run>>,
+}
 
-                    // enum_variant = { identifier ~ ("(" ~ type_ ~ ")")? }
-                    let mut variant_names = Vec::new();
-                    let mut variant_payloads = Vec::new();
-                    for variant_pair in inner {
-                        assert_eq!(variant_pair.as_rule(), Rule::enum_variant);
-                        let v_range = Range::from(&variant_pair);
-                        let mut v_inner = variant_pair.into_inner();
-                        let v_name = v_inner
-                            .next()
-                            .missing("variant name", v_range)?
-                            .as_str()
-                            .to_string();
-                        let payload_pair = v_inner.next();
-                        variant_names.push(v_name);
-                        variant_payloads.push(payload_pair);
-                    }
-
-                    let is_generic = !type_params.is_empty();
-                    let er = ctx.register_enum(
-                        &enum_name,
-                        variant_names,
-                        type_params,
-                        region_params,
-                        range,
-                        cur_mod,
-                    )?;
-                    if is_generic {
-                        generic_enums.push(er);
-                    }
-                    for (idx, payload_pair) in variant_payloads.into_iter().enumerate() {
-                        if let Some(p) = payload_pair {
-                            pending_payloads.push((er, idx, p));
-                        }
-                    }
-                }
-                _ => {}
+/// phase 1, walk the top level and register each enum *skeleton* (name +
+/// variant names, payloads deferred) and each `use` import, tracking the
+/// current module. No payload types are resolved yet (a payload may
+/// forward-reference another enum), so every `EnumRef` exists before any
+/// `build_type` runs.
+fn collect_declarations<'i, 'run>(
+    ctx: &mut CompileCtx<'run>,
+    children: &[Pair<'i, Rule>],
+    default_module: ModuleRef<'run>,
+    file: FileRef,
+) -> Result<Collected<'i, 'run>, AstError> {
+    let mut pending_payloads: Vec<(EnumRef<'run>, usize, Pair<'i, Rule>)> = Vec::new();
+    let mut generic_enums: Vec<EnumRef<'run>> = Vec::new();
+    let mut cur_mod = default_module;
+    for child in children {
+        match child.as_rule() {
+            Rule::module => {
+                let child_span = child.as_span();
+                let modname_pair = child
+                    .clone()
+                    .into_inner()
+                    .next()
+                    .missing("module name", Range::from(child_span))?;
+                cur_mod = ctx
+                    .get_mod_by_name(modname_pair.as_str())
+                    .unwrap_or_else(|| ctx.register_module(modname_pair.as_str(), file));
             }
+            Rule::type_alias => collect_enum_skeleton(
+                ctx,
+                child,
+                cur_mod,
+                &mut pending_payloads,
+                &mut generic_enums,
+            )?,
+            Rule::use_decl => collect_use(ctx, child, cur_mod)?,
+            _ => {}
         }
     }
+    Ok(Collected {
+        pending_payloads,
+        generic_enums,
+    })
+}
 
-    // phase 1.5: resolve every variant's payload type annotation now that all
-    // `EnumRef`s exist (so forward/recursive payload types resolve correctly).
-    // Each payload is resolved with its own enum's type parameters in scope, so
-    // a `T` in `type Option<T> = Some(T)` resolves to that enum's `Ty::Param`.
+/// Register one `type` declaration's skeleton (name, type/region params,
+/// variant names) and stash its raw payload pairs for phase 1b.
+fn collect_enum_skeleton<'i, 'run>(
+    ctx: &mut CompileCtx<'run>,
+    child: &Pair<'i, Rule>,
+    cur_mod: ModuleRef<'run>,
+    pending_payloads: &mut Vec<(EnumRef<'run>, usize, Pair<'i, Rule>)>,
+    generic_enums: &mut Vec<EnumRef<'run>>,
+) -> Result<(), AstError> {
+    let range = Range::from(child);
+    let mut inner = child.clone().into_inner();
+    let enum_name = inner
+        .next()
+        .missing("enum name", range)?
+        .as_str()
+        .to_string();
+
+    // optional type/region parameters: `type Ref<'r, T> = ...`. Allocate them
+    // now so phase 1b can resolve `T` and `'r` in payloads.
+    let (type_params, region_params) =
+        if inner.peek().map(|p| p.as_rule()) == Some(Rule::type_params) {
+            let tp_pair = inner.next().missing("type parameters", range)?;
+            let type_params = ctx.begin_type_params(&collect_type_params(tp_pair.clone()));
+            let region_params = ctx.begin_region_params(&collect_region_params(tp_pair));
+            (type_params, region_params)
+        } else {
+            (Vec::new(), Vec::new())
+        };
+
+    // enum_variant = { identifier ~ ("(" ~ type_ ~ ")")? }
+    let mut variant_names = Vec::new();
+    let mut variant_payloads = Vec::new();
+    for variant_pair in inner {
+        assert_eq!(variant_pair.as_rule(), Rule::enum_variant);
+        let v_range = Range::from(&variant_pair);
+        let mut v_inner = variant_pair.into_inner();
+        let v_name = v_inner
+            .next()
+            .missing("variant name", v_range)?
+            .as_str()
+            .to_string();
+        variant_names.push(v_name);
+        variant_payloads.push(v_inner.next());
+    }
+
+    let is_generic = !type_params.is_empty();
+    let er = ctx.register_enum(
+        &enum_name,
+        variant_names,
+        type_params,
+        region_params,
+        range,
+        cur_mod,
+    )?;
+    if is_generic {
+        generic_enums.push(er);
+    }
+    for (idx, payload_pair) in variant_payloads.into_iter().enumerate() {
+        if let Some(p) = payload_pair {
+            pending_payloads.push((er, idx, p));
+        }
+    }
+    Ok(())
+}
+
+/// Record one `use src::name;` / `use src::*;` import into `cur_mod`'s scope.
+/// (`use_decl = { "use" ~ use_path ~ ";" }`;
+/// `use_path = { identifier ~ ("::" ~ identifier)* ~ ("::" ~ "*")? }`.)
+fn collect_use<'run>(
+    ctx: &mut CompileCtx<'run>,
+    child: &Pair<Rule>,
+    cur_mod: ModuleRef<'run>,
+) -> Result<(), AstError> {
+    let upath = child
+        .clone()
+        .into_inner()
+        .next()
+        .missing("use path", Range::from(child))?;
+    let mut segs: Vec<String> = Vec::new();
+    let mut glob = false;
+    for seg in upath.into_inner() {
+        match seg.as_rule() {
+            Rule::identifier => segs.push(seg.as_str().to_string()),
+            Rule::use_glob => glob = true,
+            _ => {}
+        }
+    }
+    if glob {
+        ctx.add_import(cur_mod, segs.join("::"), None);
+    } else if segs.len() >= 2 {
+        let item = segs.pop().expect("checked len >= 2");
+        ctx.add_import(cur_mod, segs.join("::"), Some(item));
+    } else {
+        return Err(AstError::MalformedUse {
+            range: Range::from(child),
+        });
+    }
+    Ok(())
+}
+
+/// phase 1b, resolve each stashed variant payload type, now that every enum
+/// skeleton exists. Each payload resolves with its enum's type/region
+/// parameters in scope and its bare type names in the enum's own module; a
+/// borrow in a payload must name a declared region parameter (or `'static`).
+fn resolve_enum_payloads<'i, 'run>(
+    ctx: &mut CompileCtx<'run>,
+    pending_payloads: Vec<(EnumRef<'run>, usize, Pair<'i, Rule>)>,
+) -> Result<(), AstError> {
     for (er, idx, payload_pair) in pending_payloads {
         let params = ctx.get_enum(er).type_params.clone();
         let region_params = ctx.get_enum(er).region_params.clone();
+        ctx.set_build_module(ctx.get_enum(er).src_module);
         ctx.enter_type_param_scope(&params);
         ctx.enter_region_param_scope(&region_params);
         let payload_range = Range::from(&payload_pair);
         let payload_ty = build_type(ctx, payload_pair)?;
-        // a borrow in a payload must name a declared region parameter (or
-        // `'static`) so its lifetime is tracked in the type; an elided `&`
-        // (the shared `anon` region) is region-opaque and would let a borrow
-        // escape undetected. Reject it at the declaration.
         let mut payload_regions = Vec::new();
         payload_ty.free_regions(&mut payload_regions);
         for r in payload_regions {
@@ -324,14 +407,19 @@ pub fn build_program<'run>(
         ctx.set_variant_payload(er, idx, payload_ty);
     }
     ctx.end_type_params();
+    Ok(())
+}
 
-    // phase 1.6: validate declared variance against the positions each
-    // parameter occupies in the enum's variant payloads (Calculus §2.1).
-    for er in generic_enums {
-        check_variance(ctx, er)?;
-    }
-
-    // second pass: build functions
+/// phase 2, build every function body, grouped by the module it is declared in
+/// (`module ...;` switches the current module). Enum / `use` declarations were
+/// already handled in phase 1.
+fn build_functions<'i, 'run>(
+    ctx: &mut CompileCtx<'run>,
+    children: Vec<Pair<'i, Rule>>,
+    src: &str,
+    default_module: ModuleRef<'run>,
+    file: FileRef,
+) -> Result<Map<ModuleRef<'run>, Vec<Function<'run>>>, AstError> {
     let mut mods: Map<ModuleRef, Vec<Function>> = Map::new();
     let mut funcs = Vec::new();
     let mut current_module = default_module;
@@ -362,9 +450,8 @@ pub fn build_program<'run>(
             Rule::function => {
                 funcs.push(build_function(ctx, child, src, &current_module)?);
             }
-            // type_alias declarations were handled in the first pass
-            Rule::type_alias => {}
-            // ignore start/end markers
+            // enum / `use` declarations were handled in phase 1.
+            Rule::type_alias | Rule::use_decl => {}
             Rule::EOI => continue,
             other => {
                 let range = Range::from(child);
@@ -377,11 +464,9 @@ pub fn build_program<'run>(
             }
         }
     }
-
     if !funcs.is_empty() {
         mods.entry(current_module).or_default().append(&mut funcs);
     }
-
     Ok(mods)
 }
 
@@ -660,7 +745,7 @@ fn build_parameter<'run>(
 }
 
 /// Resolve a `lifetime` token (`'r`) to its [`Region`]. The region must be in
-/// scope — `'static` always is, any other name must be a declared region
+/// scope. `'static` always is, any other name must be a declared region
 /// parameter of the enclosing item (`def f<'r>(...)`).
 fn resolve_lifetime(ctx: &CompileCtx<'_>, lt: &Pair<Rule>) -> Result<Region, AstError> {
     assert_eq!(lt.as_rule(), Rule::lifetime);
@@ -785,7 +870,7 @@ fn build_core_type<'run>(
             }
 
             let er = ctx
-                .lookup_enum_by_name(&name)
+                .lookup_enum_current(&name)
                 .ok_or_else(|| AstError::UnknownType {
                     name: name.clone(),
                     range,
@@ -865,7 +950,7 @@ fn build_core_type<'run>(
                     Ok(ctx.param_ty(id))
                 }
                 other => ctx
-                    .lookup_enum_by_name(other)
+                    .lookup_enum_current(other)
                     .map(|er| ctx.enum_ty(er))
                     .ok_or_else(|| AstError::UnknownType {
                         name: other.to_string(),

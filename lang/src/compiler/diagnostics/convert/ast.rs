@@ -222,6 +222,19 @@ pub fn ast_error_to_diagnostics(
                 },
             );
         }
+        AstError::MalformedUse { range } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    file: Some(file),
+                    severity: DiagnosticSeverity::Error,
+                    message: "malformed `use`: expected `use module::name;` or `use module::*;`"
+                        .to_string(),
+                    range: *range,
+                    ..Default::default()
+                },
+            );
+        }
         AstError::RegionArgsNotFirst { name, range } => {
             diagnostics.add_one(
                 file,

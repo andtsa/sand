@@ -17,6 +17,7 @@ pub mod generics_tests;
 pub mod interpreter_tests;
 pub mod kind_tests;
 pub mod match_tests;
+pub mod module_tests;
 pub mod mut_borrow_tests;
 pub mod operator_tests;
 pub mod ownership_tests;
