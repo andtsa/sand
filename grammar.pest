@@ -52,7 +52,7 @@ borrow_type = { "&" ~ lifetime? ~ mut_kw? ~ core_type }
 type_ = { core_type ~ ("@" ~ lifetime)? }
 
 // keywords (prevent them from being identifiers)
-KEYWORD = { "if" | "then" | "else" | "let" | "def" | "true" | "false" | "Unit" | "Int" | "Bool" | "while" | "do" | "module" | "mut" | "type" | "match" | "and" | "where" }
+KEYWORD = { "if" | "then" | "else" | "let" | "def" | "true" | "false" | "Unit" | "Int" | "Bool" | "while" | "do" | "module" | "mut" | "type" | "match" | "and" | "where" | "use" }
 
 identifier       = @{ !(KEYWORD ~ !(ASCII_ALPHANUMERIC | "_")) ~ "_"* ~ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
 empty_identifier = @{ "_" }
@@ -228,4 +228,12 @@ function = { "def" ~ identifier ~ type_params? ~ "(" ~ parameters? ~ ")" ~ ":" ~
 
 module = { "module" ~ identifier ~ ";"? }
 
-program = { SOI ~ (function | type_alias | module)* ~ EOI }
+// import a name (or all names) from another module into unqualified scope.
+// `use math::gcd;` brings one item; `use geometry::*;` is a glob. The path is
+// parsed as a general multi-segment path (room for nested modules later);
+// resolution currently handles the flat `module::item` / `module::*` case.
+use_glob = { "*" }
+use_path = { identifier ~ ("::" ~ identifier)* ~ ("::" ~ use_glob)? }
+use_decl = { "use" ~ use_path ~ ";" }
+
+program = { SOI ~ (function | type_alias | module | use_decl)* ~ EOI }

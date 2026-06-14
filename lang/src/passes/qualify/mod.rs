@@ -68,11 +68,62 @@ impl<'qual, 'run> QualfiyCtx<'qual, 'run> {
         }
     }
 
-    /// search all modules for a function with the given name
-    /// (used for global/unqualified lookup)
-    fn find_function_globally(&self, name: &str) -> Option<FunRef<'run>> {
-        for fn_ref_set in self.available_functions.values() {
-            for fr in fn_ref_set {
+    /// Resolve an unqualified function name lexically: the caller's own
+    /// module, then explicit `use src::name`, then glob `use src::*`, then
+    /// prelude (`core`). Two distinct glob hits are ambiguous and resolve
+    /// to nothing (the caller must qualify), rather than a silent pick.
+    fn resolve_unqualified_function(
+        &self,
+        name: &str,
+        module: &ModuleRef<'run>,
+        range: Range,
+    ) -> Option<FunRef<'run>> {
+        // own module
+        if let Ok(fr) = self.get_function_by_name(name, module, range, module) {
+            return Some(fr);
+        }
+        // explicit `use src::name`
+        if let Some(src) = self.compile_ctx.explicit_import(*module, name)
+            && let Ok(fr) = self.get_function_by_name(name, &src, range, module)
+        {
+            return Some(fr);
+        }
+        // glob `use src::*`
+        let mut glob_hit: Option<FunRef<'run>> = None;
+        for g in self.compile_ctx.glob_import_modules(*module) {
+            if let Ok(fr) = self.get_function_by_name(name, &g, range, module) {
+                match glob_hit {
+                    None => glob_hit = Some(fr),
+                    Some(prev) if prev == fr => {}
+                    Some(_) => {
+                        glob_hit = None;
+                        break;
+                    }
+                }
+            }
+        }
+        if glob_hit.is_some() {
+            return glob_hit;
+        }
+        // prelude (core)
+        self.find_in_prelude(name)
+    }
+
+    /// Look up a function in the **prelude**
+    /// (the `core` module, auto-imported into every module's scope)
+    /// This is the only implicit cross-module lookup:
+    /// an unqualified name resolves in the caller's
+    /// own module first, then here; everything else
+    /// must be qualified (`mod::f`) or `use`d.
+    fn find_in_prelude(&self, name: &str) -> Option<FunRef<'run>> {
+        for (mref, fns) in &self.available_functions {
+            if !self
+                .compile_ctx
+                .is_core_module(self.compile_ctx.file_of_module(*mref))
+            {
+                continue;
+            }
+            for fr in fns {
                 if name == self.compile_ctx.original_fun_name(*fr) {
                     return Some(*fr);
                 }
@@ -158,7 +209,7 @@ impl<'qual, 'run> QualfiyCtx<'qual, 'run> {
     ) -> Result<(EnumRef<'run>, usize), QualifyError<'run>> {
         let enum_ref = self
             .compile_ctx
-            .lookup_enum_by_name(type_name)
+            .lookup_enum_scoped(type_name, *module_name)
             .ok_or_else(|| {
                 not_found(
                     type_name.to_string(),
@@ -479,19 +530,15 @@ fn qualify_expr<'tcx>(
                             args: qargs,
                         }
                     } else {
-                        // try the caller's own module first, then fall back to any module
-                        // (this allows core library functions to be called without qualification)
+                        // Unqualified resolution: own module, then explicit
+                        // `use`, then glob `use *`, then prelude (`core`)
                         let fn_ref = q
-                            .get_function_by_name(&name, module_name, expr.range, module_name)
-                            .or_else(|_| {
-                                q.find_function_globally(&name).ok_or_else(|| {
-                                    QualifyError::FunctionQualFailedFunctionNotFound {
-                                        func: name.clone(),
-                                        range: expr.range,
-                                        module: q.compile_ctx.module_info(module_name),
-                                        source_module: q.compile_ctx.module_info(module_name),
-                                    }
-                                })
+                            .resolve_unqualified_function(&name, module_name, expr.range)
+                            .ok_or_else(|| QualifyError::FunctionQualFailedFunctionNotFound {
+                                func: name.clone(),
+                                range: expr.range,
+                                module: q.compile_ctx.module_info(module_name),
+                                source_module: q.compile_ctx.module_info(module_name),
                             })?;
                         qhir::Expression::Call {
                             fn_name: fn_ref,

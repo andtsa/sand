@@ -43,6 +43,16 @@ use crate::passes::parse::Rule;
 /// detectable.
 const DEFAULT_MODULE_NAME: &str = "mAin";
 
+/// A module's `use` imports (Step M). Source modules are kept by name and
+/// resolved to a [`ModuleRef`] lazily at name-resolution time.
+#[derive(Default)]
+struct ModuleImports {
+    /// `use src::name` — imported item name → source module name.
+    explicit: std::collections::BTreeMap<String, String>,
+    /// `use src::*` — glob-imported source module names.
+    globs: Vec<String>,
+}
+
 // ============================= Arena =========================================
 
 /// Backing store for all arena-allocated compiler data.
@@ -209,6 +219,11 @@ pub struct CompileCtx<'tcx> {
 
     // modules
     project_modules: Vec<ModuleRef<'tcx>>,
+    /// Per-module `use` imports (Step M): for an importing module, the explicit
+    /// `use src::name` brings `name` into its unqualified scope, and `use
+    /// src::*` glob-imports `src`. Source modules are stored by name and
+    /// resolved lazily (every module is registered before resolution runs).
+    module_imports: Map<ModuleRef<'tcx>, ModuleImports>,
 
     // defaults
     file_defaults: Map<FileRef, ModuleRef<'tcx>>,
@@ -334,6 +349,7 @@ impl<'tcx> CompileCtx<'tcx> {
             anon_tag_types: Default::default(),
             cur_build_module: None,
             project_modules: Default::default(),
+            module_imports: Default::default(),
             default_module: None,
             file_defaults: Default::default(),
             diagnostics: Vec::new(),
@@ -1144,6 +1160,98 @@ impl<'tcx> CompileCtx<'tcx> {
             .copied()
     }
 
+    /// Resolve a bare (unqualified) type name lexically (Step M): the importing
+    /// `module`, then its explicit `use` imports, then its glob `use` imports,
+    /// then the prelude (`core`). A type in another *user* module is reachable
+    /// only if qualified (`mod::Type`) or `use`d. (`core` defines no types yet,
+    /// so the prelude layer is empty.)
+    pub fn lookup_enum_scoped(&self, name: &str, module: ModuleRef<'tcx>) -> Option<EnumRef<'tcx>> {
+        // own module
+        if let Some(er) = self.lookup_enum_in_module(module, name) {
+            return Some(er);
+        }
+        // explicit `use src::name`
+        if let Some(src) = self.explicit_import(module, name)
+            && let Some(er) = self.lookup_enum_in_module(src, name)
+        {
+            return Some(er);
+        }
+        // glob `use src::*` — two distinct hits are ambiguous and resolve to
+        // nothing, forcing a qualification rather than a silent pick.
+        let mut glob_hit: Option<EnumRef<'tcx>> = None;
+        for g in self.glob_import_modules(module) {
+            if let Some(er) = self.lookup_enum_in_module(g, name) {
+                match glob_hit {
+                    None => glob_hit = Some(er),
+                    Some(prev) if prev == er => {}
+                    Some(_) => {
+                        glob_hit = None;
+                        break;
+                    }
+                }
+            }
+        }
+        if let Some(er) = glob_hit {
+            return Some(er);
+        }
+        // prelude (core)
+        self.core_module()
+            .and_then(|core| self.lookup_enum_in_module(core, name))
+    }
+
+    /// [`Self::lookup_enum_scoped`] against the module currently being built
+    /// (set by [`Self::set_build_module`]). Used by `build_type` to resolve
+    /// bare type names during AST construction.
+    pub fn lookup_enum_current(&self, name: &str) -> Option<EnumRef<'tcx>> {
+        self.lookup_enum_scoped(name, self.cur_build_module?)
+    }
+
+    // ---- module imports (`use`, Step M) -------------------------------------
+
+    /// Record a `use src::name;` (item = `Some(name)`) or `use src::*;`
+    /// (item = `None`) declared in `importing`.
+    pub fn add_import(&mut self, importing: ModuleRef<'tcx>, source: String, item: Option<String>) {
+        let entry = self.module_imports.entry(importing).or_default();
+        match item {
+            Some(name) => {
+                entry.explicit.insert(name, source);
+            }
+            None => entry.globs.push(source),
+        }
+    }
+
+    /// The source module a `name` is explicitly imported from (`use
+    /// src::name`).
+    pub fn explicit_import(
+        &self,
+        importing: ModuleRef<'tcx>,
+        name: &str,
+    ) -> Option<ModuleRef<'tcx>> {
+        let src = self.module_imports.get(&importing)?.explicit.get(name)?;
+        self.get_mod_by_name(src)
+    }
+
+    /// The modules glob-imported by `importing` (`use src::*`).
+    pub fn glob_import_modules(&self, importing: ModuleRef<'tcx>) -> Vec<ModuleRef<'tcx>> {
+        self.module_imports
+            .get(&importing)
+            .map(|i| {
+                i.globs
+                    .iter()
+                    .filter_map(|n| self.get_mod_by_name(n))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// The `core` module (the prelude), if registered.
+    pub fn core_module(&self) -> Option<ModuleRef<'tcx>> {
+        self.project_modules
+            .iter()
+            .copied()
+            .find(|m| self.is_core_module(self.file_of_module(*m)))
+    }
+
     /// Record the module currently being processed during AST building so that
     /// anonymous tag-union types can be attributed to the right module.
     pub fn set_build_module(&mut self, m: ModuleRef<'tcx>) {
@@ -1268,7 +1376,7 @@ impl<'tcx> CompileCtx<'tcx> {
     pub fn ensure_core_module(&mut self) -> FileRef {
         let core_file = FileRef(usize::MAX - 1);
         if !self.file_defaults.contains_key(&core_file) {
-            self.create_default_module(core_file, "__core");
+            self.create_default_module(core_file, "core");
         }
         core_file
     }

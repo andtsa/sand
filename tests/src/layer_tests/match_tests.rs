@@ -244,7 +244,11 @@ fn match_result_used_in_arithmetic() {
 // ── cross-module enum match
 // ───────────────────────────────────────────────────
 
-/// A match on a cross-module enum using local constructors works.
+/// A match on a cross-module enum: the scrutinee is qualified
+/// (`colors::Light#…`) and the arms use bare `#tag` patterns, which resolve
+/// against the scrutinee's type. (Under the module redesign, the foreign type
+/// name `Light` is *not* in `app`'s scope, so unqualified `Light#…` patterns
+/// would not resolve — bare tags are the idiomatic cross-module match.)
 #[test]
 fn match_cross_module_enum() {
     let val = run_mir(
@@ -254,9 +258,9 @@ fn match_cross_module_enum() {
          module app;
          def main(): Int :=
              match colors::Light#Yellow {
-                 Light#Red => 0,
-                 Light#Yellow => 1,
-                 Light#Green => 2,
+                 #Red => 0,
+                 #Yellow => 1,
+                 #Green => 2,
              }",
     );
     assert_eq!(val, MirValue::Int(1));

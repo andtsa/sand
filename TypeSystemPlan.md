@@ -869,6 +869,126 @@ may exist.
 
 ---
 
+## Step M — Module System Redesign (prerequisite for Step 10)
+
+The module system grew incrementally (multi-file support → the `module` keyword →
+a global core library → enums bolted on) and has accreted historical cruft:
+unqualified names resolve by **scanning every module** (an unprincipled fallback
+introduced to reach `core` without `core::`); **types/enums live outside the
+module system entirely** (shoved straight into `CompileCtx`); and `build_ast`
+interleaves declaration-collection with name-resolution in one stateful,
+two-passes-in-one-function blob. Typeclasses make this untenable (orphan rules and
+"where do classes/impls live" need a coherent namespace). Redesign it cleanly
+*before* Step 10b's resolution work.
+
+### Principles (locked)
+
+1. **Modules are namespaces, not compilation units.** Sand compiles the whole
+   program at once — no separate compilation, ABI, or interface stability. A
+   module is *only* a namespace; this deletes most of the complexity other
+   languages carry.
+2. **A file is a module named after the file; internals stay tree-shaped
+   (path-based).** One module per file *for now*, but do **not** hardwire
+   `file == module` — model modules as nodes addressable by a multi-segment path,
+   leaving room for nested `mod { … }` later (the user's stated direction).
+3. **Uniform items.** Functions, types, and typeclasses are all named items owned
+   by a module, registered and resolved *identically*. Types stop being global.
+4. **Lexical resolution — no global fallback.** An unqualified name in module `M`
+   resolves in order and stops: **own items → explicit `use` → glob `use` →
+   prelude**. A qualified `path::name` resolves directly. (Kills
+   `find_function_globally`.)
+5. **Prelude = all of `core`, auto-seeded** into every *non-core* module's scope
+   (the lowest layer). `core` is compiled as an ordinary module and does **not**
+   receive the prelude itself (no self-reference). Primitives (`Int`/`Bool`/`Unit`,
+   `__`-intrinsics) sit *below* modules, always in scope.
+6. **Instances are one global coherent set** — never `use`d, separate from name
+   resolution (lands with Step 10; the redesign reserves the seam).
+7. **`use` imports** (§8 of the design): `use path::name;` and `use path::*;`;
+   paths parsed as general multi-segment; module-top-level only. Precedence: own >
+   explicit-use > glob-use > prelude. Clashes: an explicit `use` colliding with an
+   own item / another explicit `use` is an eager error; two globs offering one name
+   error only at an ambiguous *reference*. **Deferred:** `{a,b}` grouping, `as`
+   aliases, block-level `use`, `super`/`crate` roots.
+8. **Two-phase front end: Collect → Resolve.** *Collect* walks every parsed file
+   and registers each module + every item it declares (functions, types; later
+   typeclasses/impls) into module-scoped symbol tables — **no bodies, no
+   resolution**. *Resolve* resolves names against the now-complete tables (by the
+   scope rules) and builds the qualified/typed AST. This replaces the
+   two-passes-in-`build_program` blob and folds types into modules for free; the
+   prelude is "just another collected module," so it needs no special ordering.
+9. **Privacy: designed-for, deferred.** Every item has an owning module so `pub`
+   is *expressible* later; everything is public for now (no keyword yet).
+10. **One path mechanism.** Qualified references to any item kind go through a
+    single path-resolution, replacing the per-construct `external_function_call` /
+    `qualified_type` special cases.
+
+### Representation
+
+- **Grammar**: a general `path = { identifier ~ ("::" ~ identifier)* }`; a
+  top-level `use_decl = { "use" ~ path ~ ("::" ~ "*")? ~ ";" }`; add `use_decl` to
+  `program`.
+- **Declaration model — NOT yet changed (M1–M4 were resolution-only).** The
+  imperative `module Foo;` *cursor* (every item after it belongs to `Foo`, order-
+  dependent) is **still supported and unchanged**, and the default module is still
+  synthetically named (`mAin_<fileN>`), not the file name. The principle-2 target
+  (a file is a module named after the file; cursor replaced by nested `mod { }`)
+  is **remaining work** — the cursor currently *is* the only way to get multiple
+  modules per file (the "room" the design wants to keep), so it stays until nested
+  `mod { }` blocks land. See "Remaining declaration-model work" below.
+- **HHIR**: `ProgramModule` gains `uses: Vec<UseDecl>` (and, with Step 10,
+  `typeclasses`/`impls`). A file's items default into the module named after the
+  file.
+- **`CompileCtx`**: module-scoped symbol tables for functions *and* types
+  (replacing the flat global maps and the per-module `available_functions` set in
+  qualify); a scope-builder that layers own-items + imports + prelude; `core`
+  becomes a normal module named `core` (drop the `__core` sentinel naming).
+
+### Phasing (each ends green; cleans its area as it goes)
+
+- **M1 — Lexical function resolution + prelude. ✅ DONE.** `find_function_globally`
+  replaced with own-module → prelude(`core`) resolution (`qualify::find_in_prelude`);
+  qualified `mod::f` stays; no test relied on the user↔user fallback.
+- **M2 — Types into the module system. ✅ DONE.** Bare type/constructor names
+  resolve module-scoped (`CompileCtx::lookup_enum_scoped`/`lookup_enum_current`);
+  phase 1.5 sets the enum's module for payload resolution. One test migrated to
+  idiomatic bare `#tag` patterns.
+- **M3 — `use` imports. ✅ DONE.** `use path::name;` / `use path::*;` grammar +
+  per-module import store in `CompileCtx`; resolution layers own → explicit `use`
+  → glob `use` → prelude for both functions (`qualify`) and types
+  (`lookup_enum_scoped`); glob ambiguity resolves to nothing (must qualify);
+  validate-on-use for unresolved imports. Tests in `module_tests.rs`. *(Path-form
+  unification — converging `external_function_call`/`qualified_type` — deferred to
+  M4's structural pass.)*
+- **M4 — Finalize the Collect/Resolve seam. ✅ DONE.** `__core` renamed to a
+  normal `core` module (so `core::f` works). `build_program`'s
+  two-passes-in-one-function is extracted into a thin Collect → Resolve
+  orchestrator over named phases: `collect_declarations` (with
+  `collect_enum_skeleton` + `collect_use`) → `resolve_enum_payloads` →
+  variance → `build_functions`. This is the seam Step 10's typeclass/impl
+  registration plugs into (a new `collect_*` per item kind). *Optional remaining
+  tidy (not blocking):* converge the `external_function_call`/`qualified_type`
+  grammar forms into one path-resolution rule.
+
+### Remaining declaration-model work (not done by M1–M4)
+
+M1–M4 rebuilt name *resolution*; module *declaration* is untouched. Still to do,
+to realise principle 2:
+- **Name the default module after its file** (replace the synthetic `mAin_<fileN>`).
+- **Decide the cursor's fate.** `module Foo;` is currently the only way to get
+  multiple modules per file (capability we want to keep), so it stays until
+  **nested `mod { }` blocks** provide the clean, non-stateful replacement; at that
+  point the cursor can be deprecated/removed.
+This is independent of Step 10 (which depends only on resolution + the Collect
+seam, both done).
+
+### Out of scope (deferred)
+
+Nested `mod { }` blocks, `pub`/privacy, `{}`-grouping / `as` / block-level `use`,
+`super`/`crate` path roots, separate compilation, and instance namespacing
+(instances are global by construction).
+
+---
+
 ## Step 10 — Typeclass Declarations and Instance Resolution
 
 > **Pre-step note — retire `Ty::TOP`:**
@@ -913,6 +1033,130 @@ resolution during type checking. Enforce strict orphan rules.
 
 **Out of scope**: Multi-parameter typeclasses, functional dependencies,
 higher-kinded typeclasses (`Functor`, `Monad` — these require Step 11).
+
+### Detailed implementation plan
+
+**Design decisions (the forks, resolved):**
+
+1. **Method calls are free-function calls resolved by argument type — no dot
+   syntax (for now).** A method `eq(a, b)` is an ordinary `function_call` whose
+   name happens to be a typeclass method; the *instance* is selected from the
+   argument types. This matches how the Calculus writes method bodies
+   (`ap(pure(f), x)`) and adds **zero** new expression grammar. (`x.method()`
+   sugar is a deferred, purely-syntactic add-on.) **One owning class per method
+   name** — a method name belongs to exactly one typeclass (no cross-class
+   overloading yet); a clash is a declaration error.
+2. **Dispatch is monomorphization-based — no dictionaries, no `dyn`.** A method
+   call on a *concrete* receiver type is resolved to the impl's concrete function
+   at type-check time (rewritten to an ordinary `Call`). A method call on a
+   *type parameter* constrained by `where T : C` stays a `MethodCall` node and is
+   resolved by **mono**, once `T` is concrete — exactly mirroring how mono already
+   specialises generic functions. (This is Rust-without-`dyn`, and fits the
+   existing "no generics past mono" invariant.)
+3. **Orphan rule:** `impl C for T` is legal iff `C` *or* `T` is **user-defined**
+   (declared in a non-core project module) — so you cannot `impl CoreClass for
+   Int` where both are foreign. **Coherence:** at most one impl per `(C, head(T))`,
+   where `head(T)` is the type constructor (so `impl C for Option<_>` is one
+   instance, keyed by the base enum, not per type argument — Step 10 keys on the
+   head; per-argument specialisation is mono's job).
+
+**Representation:**
+
+- **Grammar** (`grammar.pest`): `typeclass_decl`, `impl_decl` added to the
+  top-level `program` alternation (§8.8–8.9). `where_constraint` gains a typeclass
+  form: `where_constraint = { (lifetime ~ ">=" ~ lifetime) | (identifier ~ ":" ~
+  typeclass_constraint) }` (§8.10). Method signatures inside a `typeclass` body
+  reuse the function-signature grammar (no body) + optional default (`def … :=`).
+- **HHIR** (`ir_types/hhir.rs`): `ProgramModule` gains `typeclasses:
+  Vec<TypeclassDecl>` and `impls: Vec<ImplDecl>`. `TypeclassDecl { name, param,
+  superclasses, methods: Vec<MethodSig | DefaultMethod>, range }`; `ImplDecl {
+  class_name, for_type, methods: Vec<Function>, range }`.
+- **QHIR + ctx**: new typed newtypes `TypeclassRef` / `ImplRef`. `CompileCtx`
+  gains:
+  - **typeclass table** `TypeclassRef → TypeclassDef { param: TypeParamId,
+    superclasses: Vec<TypeclassRef>, methods: Map<String, MethodDef>,
+    src_module }` where `MethodDef` holds the method's signature (over the class's
+    param) and whether it has a default body.
+  - **instance table** `(TypeclassRef, EnumRef|prim-head) → ImplDef { for_ty,
+    methods: Map<String, FunRef>, src_module }`.
+  - **method index** `String → TypeclassRef` (resolve a call name to its class).
+- **Impl methods are functions.** Each `impl C for T { def m(…) := body }`
+  registers a `FunRef` with a mangled name (`C$T$m`) and an ordinary `FunSig`;
+  its body type-checks like any function (with the class param bound to `T`). A
+  method the impl omits but that has a **default** is synthesised from the default
+  body with the class param set to `T`.
+- **typed_hir**: a new `Expression::MethodCall { class: TypeclassRef, method:
+  String, self_ty: Ty, args }` for *deferred* (type-parameter-receiver) dispatch;
+  concrete dispatch is rewritten to `Expression::Call` during type-checking, so
+  most of the pipeline never sees `MethodCall`.
+- **`where` constraints**: functions/typeclasses store `Vec<TypeConstraint {
+  param: TypeParamId, class: TypeclassRef }>` alongside the existing region
+  `where_constraints`.
+
+**Phasing (each ends green; mirrors 8a/8b, 9a/9b):**
+
+- **10a — declarations, tables, coherence + orphan (structural; no dispatch).**
+  Grammar + HHIR/QHIR items; register typeclasses (methods, superclasses, the
+  class param) and impls (methods as `FunRef`s) into the ctx tables; build the
+  method index; **coherence** (reject duplicate `(C, head)` impls), **orphan**
+  (reject all-foreign impls), **superclass presence** (an `impl C for T` requires
+  `impl A for T` for every `A` in `C`'s `requires`), and **method-set
+  completeness** (every non-default method is provided; no unknown methods).
+  Method *calls* are not yet dispatched — a program that only *declares*
+  typeclasses/impls type-checks; calling a method is still "unknown function".
+  Existing tests untouched. Tests: declaration/registration, duplicate-impl
+  rejection, orphan rejection, missing-superclass rejection, missing-method
+  rejection.
+- **10b — resolution + `where` + defaults + mono dispatch.**
+  - **qualify**: a `function_call` whose name is in the method index becomes
+    `qhir::MethodCall { class, method, args }` instead of a `FunRef` call (so it
+    no longer errors as "unknown function").
+  - **type-check** (`type_ast`): infer the args; unify the method's declared
+    signature (over the class param) against the actual arg types to solve the
+    class param → the receiver type. If **concrete**: look up `(class, head)` in
+    the instance table → rewrite to `Call(impl_method_fr, args)` with the
+    substituted result type. If a **type parameter** `U`: require `where U :
+    class` to be in scope (else error), and emit `MethodCall { self_ty: U, … }`.
+  - **`where T : C` checking at call sites**: when a generic function with
+    `where T : C` is called with `T = Concrete`, verify `(C, head(Concrete))` (and
+    its superclasses) resolve — reusing the call-site machinery built for region
+    `where` clauses. Inside the body, the constraint is assumed.
+  - **default methods**: derivation at impl-registration (10a stored the default
+    bodies; 10b synthesises the missing impl methods).
+  - **mono**: a `MethodCall { self_ty, … }` is resolved once `self_ty` is
+    concrete (after the enclosing generic function is specialised) — look up the
+    instance, rewrite to a concrete `Call`. Output is free of `MethodCall` (white-
+    box assert, like `Ty::App`/`Ty::Param`).
+  - Tests: method call on a concrete type runs end-to-end (interp + LLVM); a
+    generic function dispatching on `where T : C` runs for two instantiations;
+    superclass-method use; default-method use + override; missing-instance
+    rejection at the call site.
+
+**Edge cases (no open holes):**
+- *Method name shadowing a real function* → declaration error (the one-class-per-
+  name rule; the method index and function table must be disjoint).
+- *Superclass method called via a subclass constraint* (`where T : Monad` lets you
+  call `fmap`) — resolved through the `requires` chain; **deferred to Step 11**
+  (needs HKT to even express Functor/Monad); for Step 10, superclass dispatch is
+  exercised only with first-order classes.
+- *Impl for a generic enum* (`impl C for Option`) — keyed by the **head** enum;
+  the impl method is itself generic over the enum's type params (specialised by
+  mono per instantiation), so the instance table holds one entry per `(C, base
+  enum)`.
+- *Constraint not satisfiable at a call site* → a clear "no impl `C` for `T`"
+  error (mirrors the region `where` failure path).
+- *Recursion through default methods* (a default calls another method of the same
+  class) — resolves against the same instance; terminates because methods are
+  finite.
+
+**Test plan:** see the per-phase lists above; plus a `core.sand`-style user
+typeclass (`Eq`/`ToInt`) exercised through the interpreters *and* a compiled
+`examples/typeclass_*.sand`.
+
+**Out of scope (Step 10, restated):** higher-kinded classes (`Functor`/`Monad`,
+Step 11), multi-parameter classes, functional dependencies, associated types/
+consts, `dyn`/dictionaries, `x.method()` dot sugar, blanket impls, and retiring
+`Ty::TOP` (deferred until the core-library typeclasses land).
 
 ---
 
