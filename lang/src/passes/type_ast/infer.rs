@@ -6,6 +6,7 @@ use crate::compiler::structure::FunSig;
 use crate::compiler::structure::Map;
 use crate::compiler::structure::Range;
 use crate::compiler::structure::RegionParam;
+use crate::compiler::structure::TypeclassRef;
 use crate::ir_types::qhir;
 use crate::ir_types::typed_hir;
 use crate::ir_types::typed_hir::TypedFunction;
@@ -37,6 +38,7 @@ pub(super) fn infer_function<'tcx>(
     // The function's own `where 'a >= 's` clauses become the outlives
     // assumptions available while checking callee constraints at call sites.
     let prev_where = ctx.set_where_assumptions(func.where_constraints.clone());
+    let prev_tc = ctx.set_type_assumptions(func.type_constraints.clone());
     let env: TypeEnv<'tcx> = func
         .parameters
         .iter()
@@ -46,6 +48,7 @@ pub(super) fn infer_function<'tcx>(
     // use check() so that bare tags in return position are resolved against the
     // declared return type.
     let body_result = check(ctx, &env, &func.body, func.ret_type);
+    ctx.set_type_assumptions(prev_tc);
     ctx.set_where_assumptions(prev_where);
     ctx.exit_region_scope();
     let body = body_result.map_err(|e| TypeError {
@@ -77,6 +80,7 @@ pub(super) fn infer_function<'tcx>(
             type_params: func.type_params.clone(),
             region_params: func.region_params.clone(),
             where_constraints: func.where_constraints.clone(),
+            type_constraints: func.type_constraints.clone(),
             parameters: func.parameters.to_vec(),
             ret_type: func.ret_type,
             body,
@@ -566,6 +570,144 @@ pub(super) fn infer_statement<'tcx>(
     }
 }
 
+/// Check that a `where T : class` constraint is satisfied for the concrete type
+/// `ty` at a call site. A concrete type needs a registered instance;
+/// a still-abstract type parameter must itself be constrained in the caller
+/// (the bound propagates upward).
+fn check_type_constraint<'tcx>(
+    ctx: &CompileCtx<'tcx>,
+    class: TypeclassRef,
+    ty: Ty<'tcx>,
+    range: Range,
+) -> Result<(), AstTypeError<'tcx>> {
+    if let TyKind::Param(pid) = ty.kind() {
+        let licensed = ctx
+            .type_assumptions()
+            .iter()
+            .any(|tc| tc.param == *pid && ctx.class_satisfies(tc.class, class));
+        return if licensed {
+            Ok(())
+        } else {
+            Err(AstTypeError::TypeclassNoInstance {
+                class: ctx.get_typeclass(class).name.clone(),
+                ty,
+                range,
+            })
+        };
+    }
+    let ok = ctx
+        .type_head(ty)
+        .map(|head| ctx.lookup_instance(class, head).is_some())
+        .unwrap_or(false);
+    if ok {
+        Ok(())
+    } else {
+        Err(AstTypeError::TypeclassNoInstance {
+            class: ctx.get_typeclass(class).name.clone(),
+            ty,
+            range,
+        })
+    }
+}
+
+/// Resolve a typeclass method call. Infers the arguments, solves the
+/// class's type parameter (the receiver) by unifying the method's declared
+/// signature against the actual argument types, then:
+/// - **concrete receiver** -> look up the instance and rewrite to a direct
+///   `Call` of the impl method;
+/// - **type-parameter receiver** -> dispatch is deferred to monomorphisation
+///   (emitted as `typed_hir::MethodCall`), provided a `where T : C` bound
+///   licenses it
+fn infer_method_call<'tcx>(
+    ctx: &mut CompileCtx<'tcx>,
+    env: &TypeEnv<'tcx>,
+    expr: &qhir::Expr<'tcx>,
+    class: TypeclassRef,
+    method: &str,
+    args: &[qhir::Expr<'tcx>],
+) -> Result<typed_hir::Expr<'tcx>, AstTypeError<'tcx>> {
+    let arg_exprs: Vec<typed_hir::Expr<'tcx>> = args
+        .iter()
+        .map(|a| infer(ctx, env, a))
+        .collect::<Result<_, _>>()?;
+
+    let mdef = ctx.get_typeclass(class).methods[method].clone();
+    let class_param = ctx.get_typeclass(class).param;
+    let class_name = ctx.get_typeclass(class).name.clone();
+
+    // Solve the class parameter (the receiver type) from the arguments.
+    let mut mapping: Subst<'tcx> = Map::new();
+    if mdef.param_tys.len() == arg_exprs.len() {
+        for (decl, a) in mdef.param_tys.iter().zip(&arg_exprs) {
+            let _ = unify(*decl, a.ty, &mut mapping);
+        }
+    }
+    let receiver =
+        mapping
+            .get(&class_param)
+            .copied()
+            .ok_or_else(|| AstTypeError::TypeclassCannotResolve {
+                method: method.to_string(),
+                range: expr.range,
+            })?;
+
+    let result_ty = subst(ctx, mdef.ret_ty, &mapping);
+
+    // Type-parameter receiver: licensed only by a `where T : C` bound (or a
+    // bound on a subclass of `C`). If licensed, defer dispatch to mono; else
+    // reject. `mono` resolves the emitted `MethodCall` once the parameter is
+    // concrete.
+    if let TyKind::Param(pid) = receiver.kind() {
+        let licensed = ctx
+            .type_assumptions()
+            .iter()
+            .any(|tc| tc.param == *pid && ctx.class_satisfies(tc.class, class));
+        if !licensed {
+            return Err(AstTypeError::TypeclassNeedsConstraint {
+                method: method.to_string(),
+                range: expr.range,
+            });
+        }
+        return Ok(typed_hir::Expr {
+            expr: typed_hir::Expression::MethodCall {
+                class,
+                method: method.to_string(),
+                self_ty: receiver,
+                args: arg_exprs,
+            },
+            ty: result_ty,
+            kind: Kind::Owned,
+            range: expr.range,
+        });
+    }
+
+    let head = ctx
+        .type_head(receiver)
+        .ok_or_else(|| AstTypeError::TypeclassNoInstance {
+            class: class_name.clone(),
+            ty: receiver,
+            range: expr.range,
+        })?;
+    let impl_fn = ctx
+        .lookup_instance(class, head)
+        .and_then(|idef| idef.methods.get(method).copied())
+        .ok_or(AstTypeError::TypeclassNoInstance {
+            class: class_name,
+            ty: receiver,
+            range: expr.range,
+        })?;
+
+    Ok(typed_hir::Expr {
+        expr: typed_hir::Expression::Call {
+            fn_name: impl_fn,
+            args: arg_exprs,
+        },
+        ty: result_ty,
+        kind: Kind::Owned,
+        range: expr.range,
+    })
+}
+
 pub(super) fn infer<'tcx>(
     ctx: &mut CompileCtx<'tcx>,
     env: &TypeEnv<'tcx>,
@@ -880,6 +1022,12 @@ pub(super) fn infer<'tcx>(
                 kind,
             })
         }
+        qhir::Expression::MethodCall {
+            class,
+            method,
+            args,
+        } => infer_method_call(ctx, env, expr, *class, method, args),
+
         qhir::Expression::Call { fn_name, args } => {
             let fun_sig = ctx.fun_sig(fn_name);
             let raw_expected: Vec<Ty<'tcx>> = fun_sig.args.iter().map(|p| p.1).collect();
@@ -969,6 +1117,13 @@ pub(super) fn infer<'tcx>(
                             range: expr.range,
                         }
                     })?;
+                }
+            }
+            // Check the callee's `where T : C` constraints against the solved
+            // type arguments (Step 10b): the instantiation must have an instance.
+            for tc in &fun_sig.type_constraints {
+                if let Some(&arg_ty) = mapping.get(&tc.param) {
+                    check_type_constraint(ctx, tc.class, arg_ty, expr.range)?;
                 }
             }
             // Infer the call's region substitution per lifetime parameter and

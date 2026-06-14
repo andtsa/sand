@@ -342,6 +342,7 @@ impl<'tcx> Program<'tcx> {
                         qf.ret_type,
                         qf.region_params.clone(),
                         qf.where_constraints.clone(),
+                        qf.type_constraints.clone(),
                     ),
                 );
                 functions.insert(qf.name, qf);
@@ -371,6 +372,7 @@ fn qualify_function<'tcx>(
         type_params: func.type_params,
         region_params: func.region_params,
         where_constraints: func.where_constraints,
+        type_constraints: func.type_constraints,
         parameters,
         ret_type: func.ret_type,
         body,
@@ -527,6 +529,14 @@ fn qualify_expr<'tcx>(
                     if let Ok(intrinsic) = Intrinsic::try_from(name.as_str()) {
                         qhir::Expression::IntrinsicCall {
                             fn_name: intrinsic,
+                            args: qargs,
+                        }
+                    } else if let Some(class) = q.compile_ctx.method_class(&name) {
+                        // a typeclass method instance is resolved by the
+                        // type checker from the argument types
+                        qhir::Expression::MethodCall {
+                            class,
+                            method: name,
                             args: qargs,
                         }
                     } else {

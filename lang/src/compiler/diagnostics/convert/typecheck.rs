@@ -513,6 +513,50 @@ pub fn type_error_to_diagnostic<'tcx>(
             );
         }
 
+        TypeclassNoInstance { class, ty, range } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    message: format!("no instance of typeclass '{class}' for type {ty}"),
+                    range: *range,
+                    related: vec![],
+                    file: Some(file),
+                    ..Default::default()
+                },
+            );
+        }
+        TypeclassCannotResolve { method, range } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    message: format!(
+                        "cannot determine the receiver type for method '{method}' from its arguments"
+                    ),
+                    range: *range,
+                    related: vec![],
+                    file: Some(file),
+                    ..Default::default()
+                },
+            );
+        }
+        TypeclassNeedsConstraint { method, range } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    message: format!(
+                        "method '{method}' is called on a type parameter not constrained by a `where` clause"
+                    ),
+                    range: *range,
+                    related: vec![],
+                    file: Some(file),
+                    ..Default::default()
+                },
+            );
+        }
+
         MutBorrowOfImmutable { name, range } => {
             diagnostics.add_one(
                 file,

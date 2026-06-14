@@ -11,11 +11,19 @@ use thiserror::Error;
 use crate::compiler::context::CompileCtx;
 use crate::compiler::context::ContextError;
 use crate::compiler::structure::FileRef;
+use crate::compiler::structure::FunRef;
+use crate::compiler::structure::ImplDef;
 use crate::compiler::structure::Map;
+use crate::compiler::structure::MethodDef;
 use crate::compiler::structure::ModuleRef;
 use crate::compiler::structure::Range;
 use crate::compiler::structure::RegionParamSpec;
+use crate::compiler::structure::TypeConstraint;
+use crate::compiler::structure::TypeHead;
+use crate::compiler::structure::TypeParam;
 use crate::compiler::structure::TypeParamSpec;
+use crate::compiler::structure::TypeclassDef;
+use crate::compiler::structure::TypeclassRef;
 use crate::compiler::structure::UriError;
 use crate::internal_bug;
 use crate::ir_types::hhir::*;
@@ -99,6 +107,55 @@ pub enum AstError {
         "a reference in a payload of type '{name}' at {range} must use a declared lifetime parameter (e.g. `type {name}<'a> = ...(&'a T)`) or `'static`; an elided `&` cannot be tracked"
     )]
     PayloadBorrowNeedsLifetime { name: String, range: Range },
+
+    #[error("unknown typeclass '{name}' at {range}")]
+    UnknownTypeclass { name: String, range: Range },
+
+    #[error("typeclass '{name}' at {range} must declare exactly one type parameter")]
+    TypeclassParamArity { name: String, range: Range },
+
+    #[error("typeclass method at {range} may not declare its own generics yet")]
+    MethodGenericsUnsupported { range: Range },
+
+    #[error("unknown superclass '{name}' at {range}")]
+    UnknownSuperclass { name: String, range: Range },
+
+    #[error("method name '{name}' at {range} already names another typeclass method")]
+    DuplicateMethodName { name: String, range: Range },
+
+    #[error("cannot implement a typeclass for this type at {range}")]
+    NonInstanceableType { range: Range },
+
+    #[error("'{method}' at {range} is not a method of typeclass '{class}'")]
+    UnknownMethod {
+        class: String,
+        method: String,
+        range: Range,
+    },
+
+    #[error("instance of '{class}' at {range} is missing method '{method}'")]
+    MissingMethod {
+        class: String,
+        method: String,
+        range: Range,
+    },
+
+    #[error("duplicate instance of '{class}' for this type at {range}")]
+    DuplicateInstance { class: String, range: Range },
+
+    #[error(
+        "orphan instance at {range}: implementing '{class}' requires the class or the type to be defined locally"
+    )]
+    OrphanInstance { class: String, range: Range },
+
+    #[error(
+        "instance of '{class}' at {range} requires an instance of its superclass '{superclass}' for the same type"
+    )]
+    MissingSuperclass {
+        class: String,
+        superclass: String,
+        range: Range,
+    },
 
     #[error("malformed `use` at {range}: expected `use module::name;` or `use module::*;`")]
     MalformedUse { range: Range },
@@ -217,7 +274,21 @@ pub fn build_program<'i, 'run>(
     for er in collected.generic_enums {
         check_variance(ctx, er)?;
     }
-    build_functions(ctx, children, src, default_module, file)
+    // Typeclass method signatures resolve after every enum + class skeleton
+    // exists, so a method type may reference any enum or the class parameter.
+    let defaults = resolve_typeclass_sigs(ctx, collected.pending_classes)?;
+    // Build defaulted methods (as generic functions) *before* impls, so an impl
+    // that omits a defaulted method can point its instance entry at the default.
+    let default_fns = build_default_methods(ctx, defaults, src)?;
+    let mut mods = build_functions(ctx, children, src, default_module, file)?;
+    for (module, f) in default_fns {
+        mods.entry(module).or_default().push(f);
+    }
+    // Instance-set checks need every instance registered (build_functions did
+    // that): a subclass instance requires its superclass instances for the same
+    // head type (Calculus §8.9).
+    check_superclass_instances(ctx)?;
+    Ok(mods)
 }
 
 /// The declarations gathered in phase 1, to be resolved in later phases.
@@ -228,6 +299,20 @@ struct Collected<'i, 'run> {
     pending_payloads: Vec<(EnumRef<'run>, usize, Pair<'i, Rule>)>,
     /// Generic enums, for the phase-1.6 variance check.
     generic_enums: Vec<EnumRef<'run>>,
+    /// Typeclass skeletons whose method signatures + superclasses resolve in a
+    /// later phase (once all classes/enums exist). Pairs borrow from the parse.
+    pending_classes: Vec<PendingClass<'i>>,
+}
+
+/// A registered typeclass skeleton awaiting method-signature + superclass
+/// resolution (see [`resolve_typeclass_sigs`]).
+struct PendingClass<'i> {
+    tref: TypeclassRef,
+    /// the class's type parameter(s) — exactly one — to re-enter while building
+    /// method signatures (so `T` resolves in them).
+    class_params: Vec<TypeParam>,
+    method_pairs: Vec<Pair<'i, Rule>>,
+    superclass_names: Vec<(String, Range)>,
 }
 
 /// phase 1, walk the top level and register each enum *skeleton* (name +
@@ -243,9 +328,13 @@ fn collect_declarations<'i, 'run>(
 ) -> Result<Collected<'i, 'run>, AstError> {
     let mut pending_payloads: Vec<(EnumRef<'run>, usize, Pair<'i, Rule>)> = Vec::new();
     let mut generic_enums: Vec<EnumRef<'run>> = Vec::new();
+    let mut pending_classes: Vec<PendingClass<'i>> = Vec::new();
     let mut cur_mod = default_module;
     for child in children {
         match child.as_rule() {
+            Rule::typeclass_decl => {
+                pending_classes.push(collect_typeclass(ctx, child, cur_mod)?);
+            }
             Rule::module => {
                 let child_span = child.as_span();
                 let modname_pair = child
@@ -271,6 +360,7 @@ fn collect_declarations<'i, 'run>(
     Ok(Collected {
         pending_payloads,
         generic_enums,
+        pending_classes,
     })
 }
 
@@ -413,6 +503,406 @@ fn resolve_enum_payloads<'i, 'run>(
 /// phase 2, build every function body, grouped by the module it is declared in
 /// (`module ...;` switches the current module). Enum / `use` declarations were
 /// already handled in phase 1.
+/// Whether a module is *local* (user-defined) for the orphan rule: anything
+/// other than the prelude module `core`.
+fn module_is_local<'a>(ctx: &CompileCtx<'a>, m: ModuleRef<'a>) -> bool {
+    ctx.module_info(&m).name != "core"
+}
+
+/// A display string for an instance head, used to mangle impl-method names.
+fn head_name<'a>(ctx: &CompileCtx<'a>, head: TypeHead<'a>) -> String {
+    match head {
+        TypeHead::Int => "Int".to_string(),
+        TypeHead::Bool => "Bool".to_string(),
+        TypeHead::Unit => "Unit".to_string(),
+        TypeHead::Enum(er) => ctx.get_enum(er).name.clone(),
+    }
+}
+
+/// Phase 1: register a `typeclass` skeleton (name, type parameter, method
+/// names, superclass names). Method *signatures* and superclass *refs* resolve
+/// later in [`resolve_typeclass_sigs`], once every class + enum skeleton
+/// exists.
+fn collect_typeclass<'i, 'run>(
+    ctx: &mut CompileCtx<'run>,
+    child: &Pair<'i, Rule>,
+    cur_mod: ModuleRef<'run>,
+) -> Result<PendingClass<'i>, AstError> {
+    let range = Range::from(child);
+    let mut inner = child.clone().into_inner();
+    let name = inner
+        .next()
+        .missing("typeclass name", range)?
+        .as_str()
+        .to_string();
+
+    // grammar requires `type_params`; a class carries exactly one type parameter
+    // and no region parameters (Step 10).
+    let tp_pair = inner.next().missing("typeclass type parameter", range)?;
+    let type_param_specs = collect_type_params(tp_pair.clone());
+    let region_param_specs = collect_region_params(tp_pair);
+    if type_param_specs.len() != 1 || !region_param_specs.is_empty() {
+        return Err(AstError::TypeclassParamArity { name, range });
+    }
+    let class_params = ctx.begin_type_params(&type_param_specs);
+    let class_param_id = class_params[0].id;
+    ctx.end_type_params();
+
+    let mut superclass_names: Vec<(String, Range)> = Vec::new();
+    let mut method_pairs: Vec<Pair<'i, Rule>> = Vec::new();
+    let mut method_order: Vec<String> = Vec::new();
+    for item in inner {
+        match item.as_rule() {
+            Rule::requires_clause => {
+                for id in item.into_inner() {
+                    superclass_names.push((id.as_str().to_string(), Range::from(&id)));
+                }
+            }
+            Rule::typeclass_method => {
+                let mrange = Range::from(&item);
+                let mname = item
+                    .clone()
+                    .into_inner()
+                    .next()
+                    .missing("method name", mrange)?
+                    .as_str()
+                    .to_string();
+                // one class per method name (across all classes, and within one).
+                if ctx.method_class(&mname).is_some() || method_order.contains(&mname) {
+                    return Err(AstError::DuplicateMethodName {
+                        name: mname,
+                        range: mrange,
+                    });
+                }
+                method_order.push(mname);
+                method_pairs.push(item);
+            }
+            _ => {}
+        }
+    }
+
+    let def = TypeclassDef {
+        name,
+        param: class_param_id,
+        superclasses: Vec::new(),
+        methods: Map::new(),
+        method_order,
+        src_module: cur_mod,
+        range,
+    };
+    let tref = ctx.register_typeclass(def);
+    Ok(PendingClass {
+        tref,
+        class_params,
+        method_pairs,
+        superclass_names,
+    })
+}
+
+/// Phase 2b: build each class's method signatures (with its type parameter in
+/// scope) and resolve its superclass names to refs.
+fn resolve_typeclass_sigs<'i>(
+    ctx: &mut CompileCtx<'_>,
+    pending: Vec<PendingClass<'i>>,
+) -> Result<Vec<PendingDefault<'i>>, AstError> {
+    let mut defaults = Vec::new();
+    for pc in pending {
+        ctx.enter_type_param_scope(&pc.class_params);
+        ctx.begin_region_params(&[]);
+        let mut methods = Map::new();
+        for mp in &pc.method_pairs {
+            let (mname, mdef) = build_method_def(ctx, mp)?;
+            if mdef.has_default {
+                defaults.push(PendingDefault {
+                    class: pc.tref,
+                    class_params: pc.class_params.clone(),
+                    method: mname.clone(),
+                    method_pair: mp.clone(),
+                });
+            }
+            methods.insert(mname, mdef);
+        }
+        ctx.end_type_params();
+
+        let mut supers = Vec::new();
+        for (sname, srange) in &pc.superclass_names {
+            let sref = ctx
+                .lookup_typeclass(sname)
+                .ok_or_else(|| AstError::UnknownSuperclass {
+                    name: sname.clone(),
+                    range: *srange,
+                })?;
+            supers.push(sref);
+        }
+        ctx.set_typeclass_methods(pc.tref, methods, supers);
+    }
+    Ok(defaults)
+}
+
+/// A typeclass method with a default body, to be built once as a generic
+/// function `<T> where T : C` (see [`build_default_methods`]).
+struct PendingDefault<'i> {
+    class: TypeclassRef,
+    class_params: Vec<TypeParam>,
+    method: String,
+    method_pair: Pair<'i, Rule>,
+}
+
+/// Build each defaulted typeclass method as a generic function over the class
+/// parameter (with a `where T : C` constraint so its sibling-method calls
+/// type-check), register it, and record it on the method so impls that omit the
+/// method dispatch to it. Returns the `(module, function)` pairs to add to the
+/// program.
+fn build_default_methods<'run>(
+    ctx: &mut CompileCtx<'run>,
+    defaults: Vec<PendingDefault<'_>>,
+    src: &str,
+) -> Result<Vec<(ModuleRef<'run>, Function<'run>)>, AstError> {
+    let mut out = Vec::new();
+    for d in defaults {
+        let module = ctx.get_typeclass(d.class).src_module;
+        let class_name = ctx.get_typeclass(d.class).name.clone();
+        ctx.set_build_module(module);
+        ctx.enter_type_param_scope(&d.class_params);
+        ctx.begin_region_params(&[]);
+
+        // parse the method header + default body.
+        let range = Range::from(&d.method_pair);
+        let mut inner = d.method_pair.clone().into_inner();
+        let _name = inner.next().missing("method name", range)?;
+        let mut parameters = Vec::new();
+        if inner.peek().map(|p| p.as_rule()) == Some(Rule::parameters) {
+            let ps = inner.next().missing("parameters", range)?;
+            for pp in ps.into_inner() {
+                parameters.push(build_parameter(ctx, pp)?);
+            }
+        }
+        let ty_pair = inner.next().missing("method return type", range)?;
+        let ret_type = build_type(ctx, ty_pair)?;
+        // skip an optional method-level where clause, then the body expression.
+        let mut body_pair = None;
+        for rest in inner {
+            if rest.as_rule() == Rule::expression {
+                body_pair = Some(rest);
+            }
+        }
+        let body = build_expr(ctx, body_pair.missing("default body", range)?, src)?;
+
+        let mangled = format!("{class_name}$default${}", d.method);
+        let fref = ctx.register_mono_function(mangled, module, range);
+        ctx.end_type_params();
+        ctx.set_method_default_fn(d.class, &d.method, fref);
+
+        out.push((
+            module,
+            Function {
+                name: fref,
+                range,
+                // generic over the class parameter, constrained to the class so
+                // sibling method calls on `T` resolve.
+                type_params: d.class_params.clone(),
+                region_params: Vec::new(),
+                where_constraints: Vec::new(),
+                type_constraints: vec![TypeConstraint {
+                    param: d.class_params[0].id,
+                    class: d.class,
+                }],
+                parameters,
+                ret_type,
+                body,
+            },
+        ));
+    }
+    Ok(out)
+}
+
+/// Build one typeclass method's signature (over the class parameter, which must
+/// already be in scope). The default body, if present, is not built here
+/// (Step 10b synthesises it per instance); only its presence is recorded.
+fn build_method_def<'run>(
+    ctx: &mut CompileCtx<'run>,
+    mpair: &Pair<Rule>,
+) -> Result<(String, MethodDef<'run>), AstError> {
+    let range = Range::from(mpair);
+    let mut inner = mpair.clone().into_inner();
+    let name = inner
+        .next()
+        .missing("method name", range)?
+        .as_str()
+        .to_string();
+    if inner.peek().map(|p| p.as_rule()) == Some(Rule::type_params) {
+        return Err(AstError::MethodGenericsUnsupported { range });
+    }
+
+    let mut param_tys = Vec::new();
+    if inner.peek().map(|p| p.as_rule()) == Some(Rule::parameters) {
+        let params = inner.next().missing("parameters", range)?;
+        for pp in params.into_inner() {
+            param_tys.push(param_type(ctx, pp)?);
+        }
+    }
+
+    let ty_pair = inner.next().missing("method return type", range)?;
+    let ret_ty = build_type(ctx, ty_pair)?;
+
+    let mut has_default = false;
+    for rest in inner {
+        if rest.as_rule() == Rule::expression {
+            has_default = true;
+        }
+    }
+
+    Ok((
+        name.clone(),
+        MethodDef {
+            name,
+            type_params: Vec::new(),
+            param_tys,
+            ret_ty,
+            has_default,
+            default_fn: None,
+            range,
+        },
+    ))
+}
+
+/// Extract a parameter's declared type without registering a variable (used for
+/// typeclass method signatures, which have no bodies).
+fn param_type<'run>(ctx: &mut CompileCtx<'run>, p: Pair<Rule>) -> Result<Ty<'run>, AstError> {
+    let range = Range::from(&p);
+    let ty_pair = p
+        .into_inner()
+        .find(|c| c.as_rule() == Rule::type_)
+        .missing("parameter type", range)?;
+    build_type(ctx, ty_pair)
+}
+
+/// Phase 3 (in `build_functions`): build an `impl C for T { … }`. Each method
+/// is built as an ordinary function under a mangled name and recorded as the
+/// instance's implementation; the instance is registered (coherence-checked)
+/// and orphan + completeness rules are enforced here.
+fn build_impl<'run>(
+    ctx: &mut CompileCtx<'run>,
+    child: Pair<Rule>,
+    src: &str,
+    cur_module: &ModuleRef<'run>,
+    funcs: &mut Vec<Function<'run>>,
+) -> Result<(), AstError> {
+    ctx.set_build_module(*cur_module);
+    let range = Range::from(&child);
+    let mut inner = child.into_inner();
+    let class_name = inner
+        .next()
+        .missing("typeclass name", range)?
+        .as_str()
+        .to_string();
+    let tref = ctx
+        .lookup_typeclass(&class_name)
+        .ok_or_else(|| AstError::UnknownTypeclass {
+            name: class_name.clone(),
+            range,
+        })?;
+    let ty_pair = inner.next().missing("impl target type", range)?;
+    let for_ty = build_type(ctx, ty_pair)?;
+    let head = ctx
+        .type_head(for_ty)
+        .ok_or(AstError::NonInstanceableType { range })?;
+
+    // orphan rule: the class or the implemented type must be local.
+    let class_local = module_is_local(ctx, ctx.get_typeclass(tref).src_module);
+    let type_local = match head {
+        TypeHead::Enum(er) => module_is_local(ctx, ctx.get_enum(er).src_module),
+        _ => false,
+    };
+    if !class_local && !type_local {
+        return Err(AstError::OrphanInstance {
+            class: class_name,
+            range,
+        });
+    }
+
+    let head_str = head_name(ctx, head);
+    let mut methods: Map<String, FunRef> = Map::new();
+    for fpair in inner {
+        if fpair.as_rule() != Rule::function {
+            continue;
+        }
+        let mrange = Range::from(&fpair);
+        let mname = fpair
+            .clone()
+            .into_inner()
+            .next()
+            .missing("method name", mrange)?
+            .as_str()
+            .to_string();
+        if !ctx.get_typeclass(tref).methods.contains_key(&mname) {
+            return Err(AstError::UnknownMethod {
+                class: class_name,
+                method: mname,
+                range: mrange,
+            });
+        }
+        let mangled = format!("{class_name}${head_str}${mname}");
+        let f = build_function(ctx, fpair, src, cur_module, Some(mangled))?;
+        methods.insert(mname, f.name);
+        funcs.push(f);
+    }
+
+    // completeness: every method must end up implemented — by the impl, or by
+    // the class's default (a generic function built in `build_default_methods`).
+    let order = ctx.get_typeclass(tref).method_order.clone();
+    for mname in &order {
+        if methods.contains_key(mname) {
+            continue;
+        }
+        match ctx.get_typeclass(tref).methods[mname].default_fn {
+            Some(default_fr) => {
+                methods.insert(mname.clone(), default_fr);
+            }
+            None => {
+                return Err(AstError::MissingMethod {
+                    class: class_name,
+                    method: mname.clone(),
+                    range,
+                });
+            }
+        }
+    }
+
+    let impl_def = ImplDef {
+        class: tref,
+        for_ty,
+        head,
+        methods,
+        src_module: *cur_module,
+        range,
+    };
+    ctx.register_instance(impl_def)
+        .map_err(|_existing| AstError::DuplicateInstance {
+            class: class_name,
+            range,
+        })?;
+    Ok(())
+}
+
+/// Final check: a subclass instance requires its superclass instances for the
+/// same head type (Calculus §8.9 `requires`).
+fn check_superclass_instances(ctx: &CompileCtx<'_>) -> Result<(), AstError> {
+    for (class, head, range) in ctx.instance_keys() {
+        let supers = ctx.get_typeclass(class).superclasses.clone();
+        for s in supers {
+            if ctx.lookup_instance(s, head).is_none() {
+                return Err(AstError::MissingSuperclass {
+                    class: ctx.get_typeclass(class).name.clone(),
+                    superclass: ctx.get_typeclass(s).name.clone(),
+                    range,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
 fn build_functions<'i, 'run>(
     ctx: &mut CompileCtx<'run>,
     children: Vec<Pair<'i, Rule>>,
@@ -448,10 +938,14 @@ fn build_functions<'i, 'run>(
                     .unwrap_or_else(|| ctx.register_module(mod_span.as_str(), file));
             }
             Rule::function => {
-                funcs.push(build_function(ctx, child, src, &current_module)?);
+                funcs.push(build_function(ctx, child, src, &current_module, None)?);
             }
-            // enum / `use` declarations were handled in phase 1.
-            Rule::type_alias | Rule::use_decl => {}
+            Rule::impl_decl => {
+                build_impl(ctx, child, src, &current_module, &mut funcs)?;
+            }
+            // enum / `use` / typeclass declarations were handled in phase 1
+            // (typeclass method *bodies* — defaults — arrive in Step 10b).
+            Rule::type_alias | Rule::use_decl | Rule::typeclass_decl => {}
             Rule::EOI => continue,
             other => {
                 let range = Range::from(child);
@@ -475,6 +969,7 @@ fn build_function<'run>(
     pair: Pair<Rule>,
     src: &str,
     cur_module: &ModuleRef<'run>,
+    name_override: Option<String>,
 ) -> Result<Function<'run>, AstError> {
     // keep the build-module hint up to date so that anonymous tag-union types
     // declared in `build_type` are attributed to the right module.
@@ -569,18 +1064,25 @@ fn build_function<'run>(
 
     // optional `where 'r >= 's` outlives constraints (resolved while the
     // function's region parameters are still in scope).
-    let where_constraints = if inner.peek().map(|p| p.as_rule()) == Some(Rule::where_clause) {
-        let wc_pair = inner.next().missing("where clause", range)?;
-        build_where_clause(ctx, wc_pair)?
-    } else {
-        Vec::new()
-    };
+    let (where_constraints, type_constraints) =
+        if inner.peek().map(|p| p.as_rule()) == Some(Rule::where_clause) {
+            let wc_pair = inner.next().missing("where clause", range)?;
+            build_where_clause(ctx, wc_pair)?
+        } else {
+            (Vec::new(), Vec::new())
+        };
 
     // final child is the function body expression
     let body_pair = inner.next().missing("function body expression", range)?;
     let body = build_expr(ctx, body_pair, src)?;
 
-    let ofref = ctx.register_function(&name_pair, cur_module)?;
+    // An impl method is registered under a mangled, collision-free name (so two
+    // `impl … { def eq }` blocks don't clash); a top-level function keeps its
+    // source name.
+    let ofref = match name_override {
+        Some(n) => ctx.register_mono_function(n, *cur_module, Range::from(&name_pair)),
+        None => ctx.register_function(&name_pair, cur_module)?,
+    };
     ctx.end_type_params();
 
     Ok(Function {
@@ -589,6 +1091,7 @@ fn build_function<'run>(
         type_params,
         region_params,
         where_constraints,
+        type_constraints,
         parameters,
         ret_type,
         body,
@@ -598,21 +1101,47 @@ fn build_function<'run>(
 /// Build the outlives constraints from a `where 'r >= 's, ...` clause. Both
 /// lifetimes must already be in scope (declared region parameters or
 /// `'static`).
+#[allow(clippy::type_complexity)]
 fn build_where_clause(
     ctx: &CompileCtx<'_>,
     pair: Pair<Rule>,
-) -> Result<Vec<RegionConstraint>, AstError> {
+) -> Result<(Vec<RegionConstraint>, Vec<TypeConstraint>), AstError> {
     assert_eq!(pair.as_rule(), Rule::where_clause);
-    pair.into_inner()
-        .map(|wc| {
-            // where_constraint = { lifetime ~ ">=" ~ lifetime }
-            let range = Range::from(&wc);
-            let mut parts = wc.into_inner();
-            let longer = resolve_lifetime(ctx, &parts.next().missing("lifetime", range)?)?;
-            let shorter = resolve_lifetime(ctx, &parts.next().missing("lifetime", range)?)?;
-            Ok(RegionConstraint { longer, shorter })
-        })
-        .collect()
+    let mut regions = Vec::new();
+    let mut types = Vec::new();
+    for wc in pair.into_inner() {
+        // where_constraint = { (lifetime ">=" lifetime) | (identifier ":" identifier) }
+        let range = Range::from(&wc);
+        let mut parts = wc.into_inner();
+        let first = parts.next().missing("where constraint", range)?;
+        match first.as_rule() {
+            Rule::lifetime => {
+                let longer = resolve_lifetime(ctx, &first)?;
+                let shorter = resolve_lifetime(ctx, &parts.next().missing("lifetime", range)?)?;
+                regions.push(RegionConstraint { longer, shorter });
+            }
+            _ => {
+                // `T : Class` — `T` must be a declared type parameter and `Class`
+                // a known typeclass.
+                let pname = first.as_str();
+                let param = ctx
+                    .lookup_type_param(pname)
+                    .ok_or_else(|| AstError::UnknownType {
+                        name: pname.to_string(),
+                        range,
+                    })?;
+                let cpair = parts.next().missing("typeclass name", range)?;
+                let class = ctx.lookup_typeclass(cpair.as_str()).ok_or_else(|| {
+                    AstError::UnknownTypeclass {
+                        name: cpair.as_str().to_string(),
+                        range,
+                    }
+                })?;
+                types.push(TypeConstraint { param, class });
+            }
+        }
+    }
+    Ok((regions, types))
 }
 
 /// Validate the declared variance of a generic enum's parameters against the

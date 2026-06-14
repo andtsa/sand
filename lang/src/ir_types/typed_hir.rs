@@ -11,7 +11,9 @@ use crate::compiler::structure::Map;
 use crate::compiler::structure::ModuleRef;
 use crate::compiler::structure::Range;
 use crate::compiler::structure::RegionParam;
+use crate::compiler::structure::TypeConstraint;
 use crate::compiler::structure::TypeParam;
+use crate::compiler::structure::TypeclassRef;
 use crate::compiler::structure::UniqVar;
 pub use crate::ir_types::qhir::Parameter;
 use crate::lang::intrinsics::Intrinsic;
@@ -30,6 +32,7 @@ pub struct TypedFunction<'tcx> {
     pub type_params: Vec<TypeParam>,
     pub region_params: Vec<RegionParam>,
     pub where_constraints: Vec<RegionConstraint>,
+    pub type_constraints: Vec<TypeConstraint>,
     pub parameters: Vec<Parameter<'tcx>>,
     pub ret_type: Ty<'tcx>,
     pub body: Expr<'tcx>,
@@ -130,6 +133,17 @@ pub enum Expression<'tcx> {
     },
     IntrinsicCall {
         fn_name: Intrinsic,
+        args: Vec<Expr<'tcx>>,
+    },
+    /// A typeclass method call whose instance is **not yet known** because the
+    /// receiver is a type parameter (under a `where T : C` bound).
+    /// Monomorphisation resolves it to a concrete `Call` once `self_ty` is
+    /// concrete (Step 10b); concrete calls are resolved to `Call` already
+    /// during type-checking, so this never survives mono.
+    MethodCall {
+        class: TypeclassRef,
+        method: String,
+        self_ty: Ty<'tcx>,
         args: Vec<Expr<'tcx>>,
     },
     Var(UniqVar<'tcx>),

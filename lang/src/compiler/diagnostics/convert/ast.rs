@@ -263,6 +263,30 @@ pub fn ast_error_to_diagnostics(
                 },
             );
         }
+        // Typeclass declaration errors (Step 10): the `#[error]` Display already
+        // carries a full message; surface it with the variant's range.
+        err @ (AstError::UnknownTypeclass { range, .. }
+        | AstError::TypeclassParamArity { range, .. }
+        | AstError::MethodGenericsUnsupported { range }
+        | AstError::UnknownSuperclass { range, .. }
+        | AstError::DuplicateMethodName { range, .. }
+        | AstError::NonInstanceableType { range }
+        | AstError::UnknownMethod { range, .. }
+        | AstError::MissingMethod { range, .. }
+        | AstError::DuplicateInstance { range, .. }
+        | AstError::OrphanInstance { range, .. }
+        | AstError::MissingSuperclass { range, .. }) => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    file: Some(file),
+                    severity: DiagnosticSeverity::Error,
+                    message: err.to_string(),
+                    range: *range,
+                    ..Default::default()
+                },
+            );
+        }
         AstError::KindArgMismatch {
             type_name,
             param,

@@ -67,7 +67,9 @@ pub fn collect_dependencies<'tcx>(
             collect_dependencies(&cond.expr, dependencies);
             collect_dependencies(&body.expr, dependencies);
         }
-        Expression::Call { args, .. } | Expression::IntrinsicCall { args, .. } => {
+        Expression::Call { args, .. }
+        | Expression::IntrinsicCall { args, .. }
+        | Expression::MethodCall { args, .. } => {
             for arg in args {
                 collect_dependencies(&arg.expr, dependencies);
             }

@@ -14,6 +14,7 @@ use crate::compiler::structure::ModuleRef;
 use crate::compiler::structure::Range;
 use crate::compiler::structure::RegionParam;
 use crate::compiler::structure::TypeParam;
+use crate::compiler::structure::TypeclassRef;
 use crate::compiler::structure::UniqVar;
 use crate::lang::intrinsics::Intrinsic;
 use crate::lang::ops::*;
@@ -39,6 +40,7 @@ pub struct Function<'tcx> {
     pub type_params: Vec<TypeParam>,
     pub region_params: Vec<RegionParam>,
     pub where_constraints: Vec<RegionConstraint>,
+    pub type_constraints: Vec<crate::compiler::structure::TypeConstraint>,
     pub parameters: Vec<Parameter<'tcx>>,
     pub ret_type: Ty<'tcx>,
     pub body: Expr<'tcx>,
@@ -122,6 +124,15 @@ pub enum Expression<'tcx> {
     },
     IntrinsicCall {
         fn_name: Intrinsic,
+        args: Vec<Expr<'tcx>>,
+    },
+    /// A call to a typeclass method (Step 10). The instance is unresolved here
+    /// — type-checking picks it from the argument types (rewriting to
+    /// `Call`, or to a deferred `typed_hir::MethodCall` when the receiver
+    /// is a type parameter).
+    MethodCall {
+        class: TypeclassRef,
+        method: String,
         args: Vec<Expr<'tcx>>,
     },
     Var(UniqVar<'tcx>),

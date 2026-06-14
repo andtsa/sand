@@ -142,7 +142,9 @@ fn collect_locals<'tcx>(cx: &mut FnCx<'tcx>, expr: &th::Expr<'tcx>) {
         th::Expression::UnOp { right, .. } => collect_locals(cx, right),
         th::Expression::Borrow(inner, _) => collect_locals(cx, inner),
         th::Expression::Deref(inner) => collect_locals(cx, inner),
-        th::Expression::Call { args, .. } | th::Expression::IntrinsicCall { args, .. } => {
+        th::Expression::Call { args, .. }
+        | th::Expression::IntrinsicCall { args, .. }
+        | th::Expression::MethodCall { args, .. } => {
             for a in args {
                 collect_locals(cx, a);
             }

@@ -925,6 +925,13 @@ impl<'tcx> FnCx<'tcx> {
                     .fold(final_bb, |k, (arg, tmp)| self.lower_assign(arg, tmp, k))
             }
 
+            // Typeclass method calls are resolved to concrete `Call`s by the type
+            // checker (concrete) or monomorphisation (generic), so none survive
+            // into explication.
+            th::Expression::MethodCall { .. } => {
+                internal_bug!("typeclass method call survived monomorphisation")
+            }
+
             th::Expression::Match { scrutinee, arms } => {
                 // evaluate scrutinee into a fresh temp.
                 let scrut_tmp = self.fresh_temp("match_scrutinee", scrutinee.ty, scrutinee.range);

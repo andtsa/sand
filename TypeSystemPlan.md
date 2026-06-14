@@ -991,6 +991,17 @@ Nested `mod { }` blocks, `pub`/privacy, `{}`-grouping / `as` / block-level `use`
 
 ## Step 10 — Typeclass Declarations and Instance Resolution
 
+> **Status: ✅ DONE.** 660 tests pass, clippy clean. Free-function method calls
+> resolved by argument type; monomorphization-based dispatch (concrete resolved at
+> type-check, generic deferred to mono); orphan + coherence + superclass +
+> completeness checks; `where T : C` parsing + call-site checking; default methods
+> as shared generic `<T> where T:C` functions. End-to-end via both interpreters +
+> LLVM (`examples/typeclass_dispatch.sand`). Coverage in
+> `tests/layer_tests/typeclass_tests.rs`. Deferred as planned: HKT classes
+> (Step 11), multi-param classes, dot sugar, `Ty::TOP` retirement, and using a
+> generic value twice in a default (needs `Clone`/`Copy`, Step 14).
+
+
 > **Pre-step note — retire `Ty::TOP`:**
 > `println`/`print` currently use `Ty::TOP` as their argument type (an
 > escape hatch since they accept any printable value). Once a `Display`

@@ -1,0 +1,16 @@
+//@TEST:{8}[]
+// Typeclasses (Step 10): a class with two instances, a default method, and
+// generic dispatch through a `where T : ToInt` bound (monomorphised per
+// instantiation). Compiled via LLVM; exits with
+// `use_it(true) + use_it(7) = 1 + 7 = 8`.
+typeclass ToInt<T> {
+  def to_int(x: T): Int
+  def is_zero(x: T): Bool := if to_int(x) == 0 then true else false
+}
+
+impl ToInt for Bool { def to_int(x: Bool): Int := if x then 1 else 0 }
+impl ToInt for Int { def to_int(x: Int): Int := x }
+
+def use_it<T>(x: T): Int where T : ToInt := to_int(x)
+
+def main(): Int := use_it(true) + use_it(7)

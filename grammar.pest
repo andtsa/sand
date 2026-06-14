@@ -52,7 +52,7 @@ borrow_type = { "&" ~ lifetime? ~ mut_kw? ~ core_type }
 type_ = { core_type ~ ("@" ~ lifetime)? }
 
 // keywords (prevent them from being identifiers)
-KEYWORD = { "if" | "then" | "else" | "let" | "def" | "true" | "false" | "Unit" | "Int" | "Bool" | "while" | "do" | "module" | "mut" | "type" | "match" | "and" | "where" | "use" }
+KEYWORD = { "if" | "then" | "else" | "let" | "def" | "true" | "false" | "Unit" | "Int" | "Bool" | "while" | "do" | "module" | "mut" | "type" | "match" | "and" | "where" | "use" | "typeclass" | "impl" | "requires" | "for" }
 
 identifier       = @{ !(KEYWORD ~ !(ASCII_ALPHANUMERIC | "_")) ~ "_"* ~ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
 empty_identifier = @{ "_" }
@@ -96,7 +96,7 @@ type_params  = { "<" ~ (region_param | type_param) ~ ("," ~ (region_param | type
 
 // outlives constraints on a function signature: `where 'r >= 's` (Calculus
 // §8.10). typeclass constraints (`where T : Clone`) arrive in Step 15.
-where_constraint = { lifetime ~ ">=" ~ lifetime }
+where_constraint = { (lifetime ~ ">=" ~ lifetime) | (identifier ~ ":" ~ identifier) }
 where_clause     = { "where" ~ where_constraint ~ ("," ~ where_constraint)* }
 
 // enum type declarations
@@ -226,6 +226,17 @@ parameters = { parameter ~ ("," ~ parameter)* ~ ","? }
 
 function = { "def" ~ identifier ~ type_params? ~ "(" ~ parameters? ~ ")" ~ ":" ~ type_ ~ where_clause? ~ ":=" ~ expression }
 
+// Typeclass declaration (Calculus §8.8). A single type parameter for now
+// (`typeclass Eq<T> { … }`); `requires` lists superclasses. A method is a `def`
+// header (sand has no arrow types yet, so a signature reuses the function-header
+// form) with an optional default body (`:= expression`).
+typeclass_method = { "def" ~ identifier ~ type_params? ~ "(" ~ parameters? ~ ")" ~ ":" ~ type_ ~ where_clause? ~ (":=" ~ expression)? }
+requires_clause  = { "requires" ~ identifier ~ ("," ~ identifier)* }
+typeclass_decl   = { "typeclass" ~ identifier ~ type_params ~ requires_clause? ~ "{" ~ typeclass_method* ~ "}" }
+
+// Typeclass implementation (Calculus §8.9): `impl Eq for Int { def eq(…) := … }`.
+impl_decl = { "impl" ~ identifier ~ "for" ~ type_ ~ "{" ~ function* ~ "}" }
+
 module = { "module" ~ identifier ~ ";"? }
 
 // import a name (or all names) from another module into unqualified scope.
@@ -236,4 +247,4 @@ use_glob = { "*" }
 use_path = { identifier ~ ("::" ~ identifier)* ~ ("::" ~ use_glob)? }
 use_decl = { "use" ~ use_path ~ ";" }
 
-program = { SOI ~ (function | type_alias | module | use_decl)* ~ EOI }
+program = { SOI ~ (function | type_alias | typeclass_decl | impl_decl | module | use_decl)* ~ EOI }

@@ -9,6 +9,7 @@ use crate::compiler::structure::ModuleRef;
 use crate::compiler::structure::OriginalVarRef;
 use crate::compiler::structure::Range;
 use crate::compiler::structure::RegionParam;
+use crate::compiler::structure::TypeConstraint;
 use crate::compiler::structure::TypeParam;
 use crate::compiler::structure::UniqVar;
 use crate::lang::ops::*;
@@ -48,6 +49,7 @@ pub struct Function<'tcx> {
     pub type_params: Vec<TypeParam>,
     pub region_params: Vec<RegionParam>,
     pub where_constraints: Vec<RegionConstraint>,
+    pub type_constraints: Vec<TypeConstraint>,
     pub parameters: Vec<Parameter<'tcx>>,
     pub ret_type: Ty<'tcx>,
     pub body: Expr<'tcx>,
