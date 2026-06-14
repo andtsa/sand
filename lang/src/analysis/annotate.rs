@@ -74,7 +74,9 @@ pub fn collect_dependencies<'tcx>(
                 collect_dependencies(&arg.expr, dependencies);
             }
         }
-        Expression::Block { statements, expr } => {
+        Expression::Block {
+            statements, expr, ..
+        } => {
             for stmt in statements {
                 match stmt {
                     Statement::Declaration { val, .. } => {
@@ -141,7 +143,9 @@ pub fn get_mutations_expr<'tcx>(expr: &Expr<'tcx>) -> HashSet<UniqVar<'tcx>> {
 
 fn collect_mutations<'tcx>(expr: &Expression<'tcx>, mutations: &mut HashSet<UniqVar<'tcx>>) {
     match expr {
-        Expression::Block { statements, expr } => {
+        Expression::Block {
+            statements, expr, ..
+        } => {
             for stmt in statements {
                 match stmt {
                     Statement::Declaration { name, .. } => {

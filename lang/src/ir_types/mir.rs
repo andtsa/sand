@@ -72,6 +72,12 @@ pub enum Statement<'tcx> {
 
     /// expression statements with side effects
     Eval { value: RValue<'tcx>, range: Range },
+
+    /// Drop the value held in `place` at scope exit (Memory Step B,
+    /// Calculus §6.11). First-class so MIR passes can reorder / elide it and so
+    /// the `Drop` typeclass can attach here. Lowers to `__drop_in_place` (a
+    /// no-op until Step C gives types `release`).
+    Drop { place: Place, range: Range },
 }
 
 #[derive(Debug, Clone)]

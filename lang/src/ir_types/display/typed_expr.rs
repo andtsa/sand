@@ -323,7 +323,9 @@ impl<'fmt, 'tcx> Iterator for TypedExprFormatter<'fmt, 'tcx> {
                         return Some((method.clone(), Nothing));
                     }
 
-                    Block { statements, expr } => {
+                    Block {
+                        statements, expr, ..
+                    } => {
                         // emission order: { [newline+indent] stmts... [tail_expr] [dedent] }
                         //
                         // note for the consumer: if no tail_expr, the last statement already

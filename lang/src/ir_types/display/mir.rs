@@ -121,6 +121,7 @@ fn fmt_statement<'tcx>(stmt: &Statement<'tcx>, ctx: &CompileCtx<'tcx>) -> String
             format!("{} = {}", fmt_place(dst), fmt_rvalue(value, ctx))
         }
         Statement::Eval { value, .. } => fmt_rvalue(value, ctx).to_string(),
+        Statement::Drop { place, .. } => format!("drop {}", fmt_place(place)),
     }
 }
 

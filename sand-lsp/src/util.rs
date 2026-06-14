@@ -81,7 +81,9 @@ pub(crate) fn find_in_expr<'a, 'tcx>(expr: &'a Expr<'tcx>, pos: Pos) -> Option<&
         Expression::Call { args, .. }
         | Expression::IntrinsicCall { args, .. }
         | Expression::MethodCall { args, .. } => args.iter().find_map(|a| find_in_expr(a, pos)),
-        Expression::Block { statements, expr } => statements
+        Expression::Block {
+            statements, expr, ..
+        } => statements
             .iter()
             .find_map(|s| find_in_stmt(s, pos))
             .or_else(|| expr.as_deref().and_then(|e| find_in_expr(e, pos))),

@@ -83,7 +83,9 @@ fn fix_terminator_ids(term: &mut Terminator, n: usize) {
 
 fn collect_locals<'tcx>(cx: &mut FnCx<'tcx>, expr: &th::Expr<'tcx>) {
     match &expr.expr {
-        th::Expression::Block { statements, expr } => {
+        th::Expression::Block {
+            statements, expr, ..
+        } => {
             for stmt in statements {
                 match stmt {
                     th::Statement::Declaration {

@@ -236,6 +236,9 @@ impl<'ctx> LlvmCodegen<'ctx> {
                 // so dst_ty is irrelevant — use unit as a dummy.
                 self.emit_rvalue(value, fn_ctx.compile_ctx.types.unit, fn_ctx, fns)?;
             }
+            // Drop (Step B) lowers to `__drop_in_place`, which is a no-op until
+            // Step C gives types `release` / a `Drop` instance — so emit nothing.
+            Statement::Drop { .. } => {}
         }
 
         Ok(())

@@ -159,6 +159,14 @@ pub enum Expression<'tcx> {
     Block {
         statements: Vec<Statement<'tcx>>,
         expr: Option<Box<Expr<'tcx>>>,
+        /// Scope-exit drops (Memory Step B, Calculus §6.11): the owned,
+        /// non-`Copy` bindings this block must drop *after* its value
+        /// is computed, in reverse declaration order. Filled by the
+        /// ownership pass (empty until then); also carries an
+        /// `if`/`match` branch's *completing* drops.
+        /// The HIR interpreter ignores it (drops are no-ops until Step C);
+        /// explicate lowers it to first-class MIR `Statement::Drop`.
+        drops: Vec<UniqVar<'tcx>>,
     },
     Constructor {
         enum_ref: EnumRef<'tcx>,

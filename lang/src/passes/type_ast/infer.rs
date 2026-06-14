@@ -1329,6 +1329,8 @@ pub(super) fn infer<'tcx>(
                 expr: typed_hir::Expression::Block {
                     statements: typed_statements,
                     expr: typed_expr,
+                    // Drops are inserted by the ownership pass (Step B).
+                    drops: Vec::new(),
                 },
                 range: expr.range,
                 ty: ret_ty,

@@ -957,6 +957,8 @@ pub(super) fn check<'tcx>(
                 expr: typed_hir::Expression::Block {
                     statements: typed_statements,
                     expr: Some(Box::new(typed_ret)),
+                    // Drops are inserted by the ownership pass (Step B).
+                    drops: Vec::new(),
                 },
                 ty: ret_ty,
                 range: expr.range,

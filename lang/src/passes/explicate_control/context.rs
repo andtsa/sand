@@ -173,6 +173,36 @@ impl<'tcx> FnCx<'tcx> {
         self.new_block(Vec::new(), Terminator::Goto { target })
     }
 
+    /// Lower a block's scope-exit `drops` (Step B) to MIR `Statement::Drop`s,
+    /// one per variable, in the order given (already reverse-declaration
+    /// order).
+    fn drop_stmts(&self, drops: &[UniqVar<'tcx>], range: Range) -> Vec<Statement<'tcx>> {
+        drops
+            .iter()
+            .map(|v| {
+                let local = *self
+                    .local_map
+                    .get(v)
+                    .unwrap_or_else(|| internal_bug!("missing local for dropped variable {v:?}"));
+                Statement::Drop {
+                    place: Place::local(local),
+                    range,
+                }
+            })
+            .collect()
+    }
+
+    /// A continuation that runs `drops` then jumps to `cont` — used to drop a
+    /// block's bindings *after* its value flows to `cont`. Returns `cont`
+    /// unchanged when there is nothing to drop.
+    fn drop_cont(&mut self, drops: &[UniqVar<'tcx>], range: Range, cont: BlockId) -> BlockId {
+        if drops.is_empty() {
+            return cont;
+        }
+        let stmts = self.drop_stmts(drops, range);
+        self.new_block(stmts, Terminator::Goto { target: cont })
+    }
+
     pub(super) fn unit_assign_then_goto(
         &mut self,
         dst: LocalId,
@@ -483,11 +513,43 @@ impl<'tcx> FnCx<'tcx> {
                 self.lower_pred(cond, then_bb, else_bb)
             }
 
-            th::Expression::Block { statements, expr } => {
-                let cont = if let Some(e) = expr {
+            th::Expression::Block {
+                statements,
+                expr: inner,
+                drops,
+            } if drops.is_empty() => {
+                let cont = if let Some(e) = inner {
                     self.lower_tail(e)
                 } else {
                     self.new_block(Vec::new(), Terminator::Return { value: None })
+                };
+                self.lower_statements(statements, cont)
+            }
+
+            // A block with scope-exit drops: the value must be computed *before*
+            // the drops run, and the drops *before* the `Return`. Route the value
+            // through a temp (non-unit) or as an effect (unit), then drop, then
+            // return — so the drops land between value and `Return`.
+            th::Expression::Block {
+                statements,
+                expr: inner,
+                drops,
+            } => {
+                let drop_then_return = |cx: &mut Self, value: Option<Operand>| {
+                    let stmts = cx.drop_stmts(drops, expr.range);
+                    cx.new_block(stmts, Terminator::Return { value })
+                };
+                let cont = match inner {
+                    Some(e) if expr.ty != self.types.unit => {
+                        let tmp = self.fresh_temp("tail_block_tmp", e.ty, e.range);
+                        let ret = drop_then_return(self, Some(Operand::Copy(Self::place(tmp))));
+                        self.lower_assign(e, tmp, ret)
+                    }
+                    Some(e) => {
+                        let ret = drop_then_return(self, None);
+                        self.lower_effect(e, ret)
+                    }
+                    None => drop_then_return(self, None),
                 };
                 self.lower_statements(statements, cont)
             }
@@ -749,11 +811,14 @@ impl<'tcx> FnCx<'tcx> {
             th::Expression::Block {
                 statements,
                 expr: inner_expr,
+                drops,
             } => {
+                // drops run after the block's value is assigned, before `cont`.
+                let after = self.drop_cont(drops, expr.range, cont);
                 let k = if let Some(e) = inner_expr {
-                    self.lower_assign(e, dst, cont)
+                    self.lower_assign(e, dst, after)
                 } else {
-                    self.unit_assign_then_goto(dst, expr.range, cont)
+                    self.unit_assign_then_goto(dst, expr.range, after)
                 };
                 self.lower_statements(statements, k)
             }
@@ -1023,11 +1088,16 @@ impl<'tcx> FnCx<'tcx> {
                 loop_head
             }
 
-            th::Expression::Block { statements, expr } => {
-                let k = if let Some(e) = expr {
-                    self.lower_effect(e, cont)
+            th::Expression::Block {
+                statements,
+                expr: inner,
+                drops,
+            } => {
+                let after = self.drop_cont(drops, expr.range, cont);
+                let k = if let Some(e) = inner {
+                    self.lower_effect(e, after)
                 } else {
-                    cont
+                    after
                 };
                 self.lower_statements(statements, k)
             }
@@ -1107,11 +1177,32 @@ impl<'tcx> FnCx<'tcx> {
                 self.lower_pred(cond, t_bb, f_bb)
             }
 
-            th::Expression::Block { statements, expr } => {
-                let last = expr.as_ref().map(|e| &**e).unwrap_or_else(|| {
+            th::Expression::Block {
+                statements,
+                expr: inner,
+                drops,
+            } => {
+                let last = inner.as_ref().map(|e| &**e).unwrap_or_else(|| {
                     internal_bug!("block in predicate position should have a final expression")
                 });
-                let k = self.lower_pred(last, then_bb, else_bb);
+                let k = if drops.is_empty() {
+                    self.lower_pred(last, then_bb, else_bb)
+                } else {
+                    // Compute the predicate into a temp, run the block's drops,
+                    // then branch — so drops land after the value, before the
+                    // branch on it.
+                    let tmp = self.fresh_temp("pred_block_tmp", last.ty, last.range);
+                    let stmts = self.drop_stmts(drops, expr.range);
+                    let br = self.new_block(
+                        stmts,
+                        Terminator::Branch {
+                            cond: Operand::Copy(Self::place(tmp)),
+                            then_bb,
+                            else_bb,
+                        },
+                    );
+                    self.lower_assign(last, tmp, br)
+                };
                 self.lower_statements(statements, k)
             }
 
