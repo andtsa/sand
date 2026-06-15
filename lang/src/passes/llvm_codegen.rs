@@ -376,43 +376,84 @@ impl<'ctx> LlvmCodegen<'ctx> {
             RValue::Field { base, index } => self.emit_field(base, *index, dst_ty, fn_ctx),
 
             // A closure value (Step 13): the fat pointer `{ fn_ptr, env_ptr }`.
-            // Non-capturing → null environment.
+            // The captures (if any) are packed into a heap-allocated environment
+            // (a single value or a tuple), whose pointer is the env field; an
+            // empty environment uses a null pointer. (The env is not yet freed.)
             RValue::Closure { fn_name, env } => {
-                debug_assert!(env.is_empty(), "closure captures arrive in a later milestone");
+                let cctx = fn_ctx.compile_ctx;
                 let func = fns[fn_name];
                 let fn_ptr = func.as_global_value().as_pointer_value();
                 let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+
+                let env_ptr = if env.is_empty() {
+                    ptr_ty.const_null()
+                } else {
+                    let env_val: llvm::BasicValueEnum = if env.len() == 1 {
+                        self.emit_operand(&env[0], fn_ctx)?
+                    } else {
+                        let field_tys: Vec<_> = env
+                            .iter()
+                            .map(|o| self.llvm_type(cctx, Self::operand_ty(o, fn_ctx)))
+                            .collect();
+                        let struct_ty = self.context.struct_type(&field_tys, false);
+                        let slot = self.builder.build_alloca(struct_ty, "env_tmp")?;
+                        for (i, o) in env.iter().enumerate() {
+                            let v = self.emit_operand(o, fn_ctx)?;
+                            let fp = self.builder.build_struct_gep(
+                                struct_ty,
+                                slot,
+                                i as u32,
+                                "env_field",
+                            )?;
+                            self.builder.build_store(fp, v)?;
+                        }
+                        self.builder.build_load(struct_ty, slot, "env_val")?
+                    };
+                    let size = env_val.get_type().size_of().expect("sized env");
+                    let malloc = self.get_or_declare_malloc();
+                    let raw = self
+                        .builder
+                        .build_call(malloc, &[size.into()], "env_alloc")?
+                        .try_as_basic_value()
+                        .basic()
+                        .unwrap()
+                        .into_pointer_value();
+                    self.builder.build_store(raw, env_val)?;
+                    raw
+                };
+
                 let struct_ty = self.context.struct_type(&[ptr_ty.into(), ptr_ty.into()], false);
                 let s = self
                     .builder
                     .build_insert_value(struct_ty.get_undef(), fn_ptr, 0, "clos_fn")?;
-                let s = self.builder.build_insert_value(
-                    s.into_struct_value(),
-                    ptr_ty.const_null(),
-                    1,
-                    "clos_env",
-                )?;
+                let s = self
+                    .builder
+                    .build_insert_value(s.into_struct_value(), env_ptr, 1, "clos_env")?;
                 Ok(s.into_struct_value().into())
             }
 
-            // Indirect call (Step 13): extract the fn pointer from the closure
-            // fat pointer and call through it. (Captures/env are passed in a
-            // later milestone.)
+            // Indirect call (Step 13): extract the fn pointer + env pointer from
+            // the closure fat pointer and call `fn_ptr(env_ptr, args…)` — the
+            // lifted function takes the env pointer as its leading parameter.
             RValue::CallIndirect { callee, args } => {
+                let cctx = fn_ctx.compile_ctx;
+                let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
                 let closure = self.emit_operand(callee, fn_ctx)?.into_struct_value();
                 let fn_ptr = self
                     .builder
                     .build_extract_value(closure, 0, "fn_ptr")?
                     .into_pointer_value();
-                let arg_vals: Vec<llvm::BasicMetadataValueEnum> = args
-                    .iter()
-                    .map(|a| self.emit_operand(a, fn_ctx).map(Into::into))
-                    .collect::<Result<_, _>>()?;
-                let cctx = fn_ctx.compile_ctx;
-                let arg_types: Vec<inkwell::types::BasicMetadataTypeEnum> = args
-                    .iter()
-                    .map(|a| self.llvm_type(cctx, Self::operand_ty(a, fn_ctx)).into())
-                    .collect();
+                let env_ptr = self
+                    .builder
+                    .build_extract_value(closure, 1, "env_ptr")?
+                    .into_pointer_value();
+
+                let mut arg_vals: Vec<llvm::BasicMetadataValueEnum> = vec![env_ptr.into()];
+                let mut arg_types: Vec<inkwell::types::BasicMetadataTypeEnum> = vec![ptr_ty.into()];
+                for a in args {
+                    arg_vals.push(self.emit_operand(a, fn_ctx)?.into());
+                    arg_types.push(self.llvm_type(cctx, Self::operand_ty(a, fn_ctx)).into());
+                }
                 let fn_type = if matches!(dst_ty.kind(), TyKind::Unit) {
                     self.context.void_type().fn_type(&arg_types, false)
                 } else {
@@ -790,6 +831,15 @@ impl<'ctx> LlvmCodegen<'ctx> {
             .void_type()
             .fn_type(&[self.context.i32_type().into()], false);
         self.module.add_function("exit", fn_ty, None)
+    }
+
+    fn get_or_declare_malloc(&self) -> llvm::FunctionValue<'ctx> {
+        if let Some(f) = self.module.get_function("malloc") {
+            return f;
+        }
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        let fn_ty = ptr_ty.fn_type(&[self.context.i64_type().into()], false);
+        self.module.add_function("malloc", fn_ty, None)
     }
 
     fn get_or_declare_free(&self) -> llvm::FunctionValue<'ctx> {

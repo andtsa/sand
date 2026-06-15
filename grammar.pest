@@ -55,14 +55,18 @@ core_type = {
 // `mut` keyword marks an exclusive (mutable) borrow (Step 9).
 borrow_type = { "&" ~ lifetime? ~ mut_kw? ~ core_type }
 
+// a function arrow, optionally annotated with the calling mode (Calculus §3.1
+// `→[K]`): bare `->` is the *reusable* arrow (≈ Rust `Fn`); `-[Owned]>` is
+// consuming (`FnOnce`), `-[BorrowedMut]>` is mutating (`FnMut`), `-[Borrowed]>`
+// is reusable (the explicit form of `->`).
+arrow_kind = { "Owned" | "BorrowedMut" | "Borrowed" }
+fn_arrow   = { ("-[" ~ arrow_kind ~ "]>") | "->" }
+
 // a function type `A -> B`. Unary and right-associative
 // (`A -> B -> C` is `A -> (B -> C)`); the codomain is a full `type_` so it may
 // itself be a function type. The domain is a `core_type`: a nested arrow in the
-// domain (`(A -> B) -> C`) needs the parenthesised form, a later extension. Bare
-// `->` is the *reusable* arrow (Calculus §3.1's `→[Borrowed]`, ≈ Rust `Fn`); the
-// consuming (`FnOnce`) and mutating (`FnMut`) arrows get distinct syntax when
-// closures land.
-fn_type = { core_type ~ "->" ~ type_ }
+// domain (`(A -> B) -> C`) needs the parenthesised form, a later extension.
+fn_type = { core_type ~ fn_arrow ~ type_ }
 
 // a type, optionally ascribed to a region: `Int`, `Int @ 'r` (Calculus §2.3).
 // the `@ 'r` suffix is parsed here (rather than a left-recursive `region_type`)
@@ -123,8 +127,10 @@ where_constraint = { (lifetime ~ ">=" ~ lifetime) | (identifier ~ ":" ~ identifi
 where_clause     = { "where" ~ where_constraint ~ ("," ~ where_constraint)* }
 
 // enum type declarations
-// a variant is a bare tag (`Red`, nullary) or a tag with a payload type (`Ok(Int)`)
-enum_variant = { identifier ~ ("(" ~ type_ ~ ")")? }
+// a variant is a bare tag (`Red`, nullary) or a tag with a payload (`Ok(Int)`).
+// Multiple comma-separated payload types are sugar for a single tuple payload:
+// `Cons(Int, List)` ≡ `Cons((Int, List))`.
+enum_variant = { identifier ~ ("(" ~ type_ ~ ("," ~ type_)* ~ ")")? }
 // `deriving C1, C2, ...` — request compiler-derived instances (Memory Step C).
 // A general mechanism; in Step C only `HeapedUnique` is a registered derivable.
 deriving_clause = { "deriving" ~ identifier ~ ("," ~ identifier)* }
@@ -132,9 +138,11 @@ type_alias   = { "type" ~ identifier ~ type_params? ~ "=" ~ enum_variant ~ ("|" 
 
 // enum constructors: Light#Red (local), mod::Light#Red (cross-module), or #Red (bare tag, needs check mode)
 // an optional parenthesised argument supplies the variant's payload: `Result#Ok(5)`
-external_constructor_expr = { identifier ~ "::" ~ identifier ~ "#" ~ identifier ~ ("(" ~ expression ~ ")")? }
-constructor_expr          = { identifier ~ "#" ~ identifier ~ ("(" ~ expression ~ ")")? }
-tag_expr                  = { "#" ~ identifier ~ ("(" ~ expression ~ ")")? }
+// A comma-separated payload list is sugar for a single tuple payload:
+// `Result#Ok(a, b)` ≡ `Result#Ok((a, b))`.
+external_constructor_expr = { identifier ~ "::" ~ identifier ~ "#" ~ identifier ~ ("(" ~ expression ~ ("," ~ expression)* ~ ")")? }
+constructor_expr          = { identifier ~ "#" ~ identifier ~ ("(" ~ expression ~ ("," ~ expression)* ~ ")")? }
+tag_expr                  = { "#" ~ identifier ~ ("(" ~ expression ~ ("," ~ expression)* ~ ")")? }
 
 // pattern matching
 // patterns are recursive: a payload-carrying variant or a tuple may itself
@@ -142,8 +150,10 @@ tag_expr                  = { "#" ~ identifier ~ ("(" ~ expression ~ ")")? }
 wildcard_pattern    = { "_" }
 binding_pattern     = { identifier }
 tuple_pattern       = { "(" ~ pattern ~ ("," ~ pattern)+ ~ ")" }
-tag_pattern         = { "#" ~ identifier ~ ("(" ~ pattern ~ ")")? }
-constructor_pattern = { identifier ~ "#" ~ identifier ~ ("(" ~ pattern ~ ")")? }
+// A comma-separated sub-pattern list is sugar for a single tuple sub-pattern:
+// `Cons(x, rest)` ≡ `Cons((x, rest))`.
+tag_pattern         = { "#" ~ identifier ~ ("(" ~ pattern ~ ("," ~ pattern)* ~ ")")? }
+constructor_pattern = { identifier ~ "#" ~ identifier ~ ("(" ~ pattern ~ ("," ~ pattern)* ~ ")")? }
 // literal patterns (refutable; int/bool values in match position)
 // bool_literal_pattern must precede binding_pattern so "true"/"false" are
 // not captured as variable names (they are keywords, but the ordering makes
@@ -179,7 +189,7 @@ tuple_expr = { "(" ~ expression ~ ("," ~ expression)+ ~ ")" }
 // (`fn (x: Int) -> x + 1` has body `x + 1`); a terminator (`,`, `)`, `}`, …)
 // ends it. Currently produces a *reusable* function value (bare `->` arrow).
 lambda_param = { "(" ~ mut_kw? ~ identifier ~ ":" ~ type_ ~ ")" }
-lambda_expr  = { "fn" ~ lambda_param ~ "->" ~ expression }
+lambda_expr  = { "fn" ~ lambda_param ~ fn_arrow ~ expression }
 
 // precedence chaining
 // borrow expression `&e` (shared) or `&mut e` (exclusive) (Calculus §3.2 /
@@ -235,7 +245,9 @@ let_tuple      = { "(" ~ let_tuple_elem ~ ("," ~ let_tuple_elem)+ ~ ")" }
 let_binding_elem  = { identifier | empty_identifier }
 let_binding_tuple = { "(" ~ let_binding_elem ~ ("," ~ let_binding_elem)+ ~ ")" }
 let_destructure   = { let_constructor | let_binding_tuple | let_binding_elem }
-let_constructor   = { identifier ~ "#" ~ identifier ~ ("(" ~ let_destructure ~ ")")? }
+// A comma-separated payload list is sugar for a single tuple sub-pattern:
+// `let Cons(x, rest) = …` ≡ `let Cons((x, rest)) = …`.
+let_constructor   = { identifier ~ "#" ~ identifier ~ ("(" ~ let_destructure ~ ("," ~ let_destructure)* ~ ")")? }
 
 // borrow binding `let &x = e` (shared) or `let &mut x = e` (exclusive)
 // (Calculus §3.2 / §6.4): `x` borrows `e`, so it stays usable and `e` is not

@@ -78,12 +78,13 @@ enum Value<'tcx> {
     /// A reference: a shared handle to the cell it points at. Produced by a
     /// borrow expression, consumed by `*r` reads and `*r = e` writes.
     Ref(Cell<'tcx>),
-    /// A function value / closure (Step 13): the lifted top-level function and
-    /// the captured values (empty in the non-capturing milestone). Calling it
-    /// runs `func` with the captures followed by the argument.
+    /// A function value / closure (Step 13): the lifted top-level function and a
+    /// pointer to its captured environment (a `Ref` to a cell holding the env
+    /// value — `Unit`, the single capture, or a tuple). Calling it runs `func`
+    /// with the env pointer followed by the argument.
     Closure {
         func: FunRef<'tcx>,
-        captures: Vec<Value<'tcx>>,
+        env: Box<Value<'tcx>>,
     },
 }
 
@@ -286,39 +287,46 @@ impl<'tcx> TypedProgram<'tcx> {
                 unreachable!("lambda should have been lifted during monomorphisation")
             }
 
-            // A lifted closure: capture the listed variables' values now.
+            // A lifted closure: capture the listed variables' values into the
+            // environment (Unit / single / tuple), store it in a cell, and keep
+            // a pointer to it (so the lifted function can `__ptr_read` it).
             Expression::Closure { func, captures } => {
-                let captured = captures
+                let mut vals = captures
                     .iter()
-                    .map(|v| {
+                    .map(|(v, _)| {
                         env.get(v)
                             .map(|c| c.borrow().clone())
                             .ok_or_else(|| InterpError::UndefinedVariable(ctx.uniq_variable_name(v)))
                     })
                     .collect::<Result<Vec<_>, _>>()?;
+                let env_value = match vals.len() {
+                    0 => Value::Unit,
+                    1 => vals.pop().unwrap(),
+                    _ => Value::Tuple(vals),
+                };
                 Ok(Value::Closure {
                     func: *func,
-                    captures: captured,
+                    env: Box::new(Value::Ref(cell(env_value))),
                 })
             }
 
             // Indirect call: evaluate the callee to a closure and the argument,
-            // then run the lifted function with the captures followed by the arg.
+            // then run the lifted function with the env pointer followed by the
+            // argument.
             Expression::Apply { func, arg } => {
                 let callee = self.eval_expr(&func.expr, env, ctx, output)?;
                 let arg_val = self.eval_expr(&arg.expr, env, ctx, output)?;
                 match callee {
-                    Value::Closure { func, captures } => {
+                    Value::Closure { func, env: env_ptr } => {
                         let function = &self.functions[&func];
-                        let arg_vals = captures.into_iter().chain(std::iter::once(arg_val));
-                        let call_env = function
+                        let arg_vals = [*env_ptr, arg_val];
+                        let mut call_env = function
                             .parameters
                             .iter()
                             .map(|p| p.name)
                             .zip(arg_vals)
                             .map(|(name, v)| (name, cell(v)))
                             .collect::<Env>();
-                        let mut call_env = call_env;
                         self.eval_expr(&function.body.expr, &mut call_env, ctx, output)
                     }
                     other => Err(InterpError::Runtime(format!(

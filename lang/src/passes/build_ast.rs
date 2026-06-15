@@ -337,7 +337,7 @@ struct Collected<'i, 'run> {
     /// `(enum, variant index, raw payload `type_` pair)` — resolved in phase
     /// 1.5 once every enum skeleton exists. Pairs borrow from the parse
     /// (`'i`).
-    pending_payloads: Vec<(EnumRef<'run>, usize, Pair<'i, Rule>)>,
+    pending_payloads: Vec<(EnumRef<'run>, usize, Vec<Pair<'i, Rule>>)>,
     /// Generic enums, for the phase-1.6 variance check.
     generic_enums: Vec<EnumRef<'run>>,
     /// Typeclass skeletons whose method signatures + superclasses resolve in a
@@ -367,7 +367,7 @@ fn collect_declarations<'i, 'run>(
     default_module: ModuleRef<'run>,
     file: FileRef,
 ) -> Result<Collected<'i, 'run>, AstError> {
-    let mut pending_payloads: Vec<(EnumRef<'run>, usize, Pair<'i, Rule>)> = Vec::new();
+    let mut pending_payloads: Vec<(EnumRef<'run>, usize, Vec<Pair<'i, Rule>>)> = Vec::new();
     let mut generic_enums: Vec<EnumRef<'run>> = Vec::new();
     let mut pending_classes: Vec<PendingClass<'i>> = Vec::new();
     let mut cur_mod = default_module;
@@ -411,7 +411,7 @@ fn collect_enum_skeleton<'i, 'run>(
     ctx: &mut CompileCtx<'run>,
     child: &Pair<'i, Rule>,
     cur_mod: ModuleRef<'run>,
-    pending_payloads: &mut Vec<(EnumRef<'run>, usize, Pair<'i, Rule>)>,
+    pending_payloads: &mut Vec<(EnumRef<'run>, usize, Vec<Pair<'i, Rule>>)>,
     generic_enums: &mut Vec<EnumRef<'run>>,
 ) -> Result<(), AstError> {
     let range = Range::from(child);
@@ -451,7 +451,9 @@ fn collect_enum_skeleton<'i, 'run>(
                     .as_str()
                     .to_string();
                 variant_names.push(v_name);
-                variant_payloads.push(v_inner.next());
+                // Remaining children are the payload type(s); >1 desugar to a
+                // tuple payload when the payloads are resolved.
+                variant_payloads.push(v_inner.collect::<Vec<_>>());
             }
             Rule::deriving_clause => derives = parse_deriving_clause(&pair)?,
             other => {
@@ -477,9 +479,9 @@ fn collect_enum_skeleton<'i, 'run>(
     if is_generic {
         generic_enums.push(er);
     }
-    for (idx, payload_pair) in variant_payloads.into_iter().enumerate() {
-        if let Some(p) = payload_pair {
-            pending_payloads.push((er, idx, p));
+    for (idx, payload_pairs) in variant_payloads.into_iter().enumerate() {
+        if !payload_pairs.is_empty() {
+            pending_payloads.push((er, idx, payload_pairs));
         }
     }
     Ok(())
@@ -559,16 +561,26 @@ fn collect_use<'run>(
 /// borrow in a payload must name a declared region parameter (or `'static`).
 fn resolve_enum_payloads<'i, 'run>(
     ctx: &mut CompileCtx<'run>,
-    pending_payloads: Vec<(EnumRef<'run>, usize, Pair<'i, Rule>)>,
+    pending_payloads: Vec<(EnumRef<'run>, usize, Vec<Pair<'i, Rule>>)>,
 ) -> Result<(), AstError> {
-    for (er, idx, payload_pair) in pending_payloads {
+    for (er, idx, payload_pairs) in pending_payloads {
         let params = ctx.get_enum(er).type_params.clone();
         let region_params = ctx.get_enum(er).region_params.clone();
         ctx.set_build_module(ctx.get_enum(er).src_module);
         ctx.enter_type_param_scope(&params);
         ctx.enter_region_param_scope(&region_params);
-        let payload_range = Range::from(&payload_pair);
-        let payload_ty = build_type(ctx, payload_pair)?;
+        let payload_range = Range::from(&payload_pairs[0]);
+        // Multiple payload types desugar to a single tuple payload:
+        // `Cons(Int, List)` ≡ `Cons((Int, List))`.
+        let payload_ty = if payload_pairs.len() == 1 {
+            build_type(ctx, payload_pairs.into_iter().next().unwrap())?
+        } else {
+            let tys = payload_pairs
+                .into_iter()
+                .map(|p| build_type(ctx, p))
+                .collect::<Result<Vec<_>, _>>()?;
+            ctx.intern_tuple(tys)
+        };
         let mut payload_regions = Vec::new();
         payload_ty.free_regions(&mut payload_regions);
         for r in payload_regions {
@@ -1477,21 +1489,35 @@ fn build_where_clause(
 /// Validate the declared variance of a generic enum's parameters against the
 /// positions they occupy in its variant payloads (Calculus §2.1).
 ///
-/// Every position in the current type grammar (enum payloads, tuples, generic
-/// applications) is a *producer* (covariant) position — there are no consumer
-/// positions until function types arrive. So a parameter that is used is
-/// covariant, and the only unsound declaration is `Contravariant` on a used
-/// parameter. `Covariant` and `Invariant` are always sound, and an unused
-/// (phantom) parameter accepts any declared variance.
+/// Each payload position carries a *polarity*: producer positions (enum
+/// payloads, tuple elements, pointee of a reference/pointer, a function's
+/// *result*) are covariant; a function's *argument* is the first consumer
+/// (contravariant) position in the grammar, so descending into it flips
+/// polarity. Generic applications `F<..>` compose: an argument under a
+/// contravariant parameter of `F` flips, under an invariant one becomes
+/// invariant. A parameter that occurs at both polarities is invariant.
+///
+/// An **explicit** annotation is checked against the inferred polarity:
+/// `+a` requires no contravariant occurrence, `-a` no covariant occurrence,
+/// `∅a` is always sound, and an unused parameter accepts anything. A parameter
+/// with **no** annotation is inferred from its positions and so is never
+/// rejected.
 fn check_variance<'run>(ctx: &CompileCtx<'run>, er: EnumRef<'run>) -> Result<(), AstError> {
     let def = ctx.get_enum(er);
     for param in &def.type_params {
-        let used = def
-            .variants
-            .iter()
-            .filter_map(|v| v.payload.get())
-            .any(|ty| ty_mentions_param(ty, param.id));
-        if used && param.variance == Variance::Contravariant {
+        let mut occ = Occurrence::default();
+        for ty in def.variants.iter().filter_map(|v| v.payload.get()) {
+            param_polarity(ctx, ty, param.id, Sign::Pos, &mut occ);
+        }
+        // An absent annotation is inferred (always sound); only an explicit one
+        // can contradict the positions.
+        let sound = match param.variance {
+            _ if !param.explicit_variance => true,
+            Variance::Invariant => true,
+            Variance::Covariant => !occ.neg,
+            Variance::Contravariant => !occ.pos,
+        };
+        if !sound {
             return Err(AstError::UnsoundVariance {
                 type_name: def.name.clone(),
                 param: param.name.clone(),
@@ -1502,19 +1528,105 @@ fn check_variance<'run>(ctx: &CompileCtx<'run>, er: EnumRef<'run>) -> Result<(),
     Ok(())
 }
 
-/// Whether `ty` mentions the type parameter `id` (directly or nested).
-fn ty_mentions_param(ty: Ty<'_>, id: TypeParamId) -> bool {
+/// The polarities at which a type parameter occurs in a type.
+#[derive(Default, Clone, Copy)]
+struct Occurrence {
+    /// occurs in a covariant (producer) position.
+    pos: bool,
+    /// occurs in a contravariant (consumer) position.
+    neg: bool,
+}
+
+/// Polarity of the position currently being descended into.
+#[derive(Clone, Copy, PartialEq)]
+enum Sign {
+    Pos,
+    Neg,
+    /// invariant — both producer and consumer (e.g. under an invariant
+    /// constructor parameter); an occurrence here counts as both.
+    Inv,
+}
+
+impl Sign {
+    /// Flip producer ↔ consumer (invariant is its own dual).
+    fn flip(self) -> Sign {
+        match self {
+            Sign::Pos => Sign::Neg,
+            Sign::Neg => Sign::Pos,
+            Sign::Inv => Sign::Inv,
+        }
+    }
+
+    /// Compose this outer polarity with the declared `variance` of the
+    /// constructor parameter being descended through.
+    fn compose(self, variance: Variance) -> Sign {
+        match variance {
+            Variance::Covariant => self,
+            Variance::Contravariant => self.flip(),
+            Variance::Invariant => Sign::Inv,
+        }
+    }
+}
+
+/// Accumulate the polarities at which `id` occurs in `ty`, given the polarity
+/// `sign` of `ty`'s own position.
+fn param_polarity<'run>(
+    ctx: &CompileCtx<'run>,
+    ty: Ty<'run>,
+    id: TypeParamId,
+    sign: Sign,
+    occ: &mut Occurrence,
+) {
+    let record = |occ: &mut Occurrence| match sign {
+        Sign::Pos => occ.pos = true,
+        Sign::Neg => occ.neg = true,
+        Sign::Inv => {
+            occ.pos = true;
+            occ.neg = true;
+        }
+    };
     match ty.kind() {
-        TyKind::Param(p) => *p == id,
-        TyKind::ParamApp(p, args) => *p == id || args.iter().any(|a| ty_mentions_param(*a, id)),
-        TyKind::Tuple(elems) => elems.iter().any(|e| ty_mentions_param(*e, id)),
-        TyKind::App(_, args, _) => args.iter().any(|a| ty_mentions_param(*a, id)),
+        TyKind::Param(p) => {
+            if *p == id {
+                record(occ);
+            }
+        }
+        // A higher-kinded use `f<..>`: a `f == id` head occurrence counts at the
+        // current polarity; its arguments' variance is unknown (the bound
+        // constructor is not yet fixed), so they are treated invariantly.
+        TyKind::ParamApp(p, args) => {
+            if *p == id {
+                record(occ);
+            }
+            for a in args.iter() {
+                param_polarity(ctx, *a, id, Sign::Inv, occ);
+            }
+        }
+        TyKind::Tuple(elems) => {
+            for e in elems.iter() {
+                param_polarity(ctx, *e, id, sign, occ);
+            }
+        }
+        // `F<..>`: compose the current polarity with each of `F`'s declared
+        // parameter variances (Calculus §2.1 nested composition).
+        TyKind::App(er, args, _) => {
+            let params = &ctx.get_enum(*er).type_params;
+            for (i, a) in args.iter().enumerate() {
+                let v = params.get(i).map(|p| p.variance).unwrap_or(Variance::Covariant);
+                param_polarity(ctx, *a, id, sign.compose(v), occ);
+            }
+        }
+        // References / pointers are covariant in their pointee.
         TyKind::Region(inner, _)
         | TyKind::Ref(_, inner)
         | TyKind::RefMut(_, inner)
-        | TyKind::Ptr(inner) => ty_mentions_param(*inner, id),
-        TyKind::Fn(a, r, _) => ty_mentions_param(*a, id) || ty_mentions_param(*r, id),
-        _ => false,
+        | TyKind::Ptr(inner) => param_polarity(ctx, *inner, id, sign, occ),
+        // A function is contravariant in its argument, covariant in its result.
+        TyKind::Fn(a, r, _) => {
+            param_polarity(ctx, *a, id, sign.flip(), occ);
+            param_polarity(ctx, *r, id, sign, occ);
+        }
+        _ => {}
     }
 }
 
@@ -1530,11 +1642,13 @@ fn collect_type_params(ctx: &mut CompileCtx<'_>, pair: Pair<Rule>) -> Vec<TypePa
             // type_param = { variance_ann? ~ identifier ~ (":" ~ kind_ann)? }
             let range = Range::from(&tp);
             let mut variance = Variance::Covariant;
+            let mut explicit_variance = false;
             let mut kind = Kind::Owned;
             let mut name = String::new();
             for part in tp.into_inner() {
                 match part.as_rule() {
                     Rule::variance_ann => {
+                        explicit_variance = true;
                         variance = match part.as_str() {
                             "+" => Variance::Covariant,
                             "-" => Variance::Contravariant,
@@ -1550,6 +1664,7 @@ fn collect_type_params(ctx: &mut CompileCtx<'_>, pair: Pair<Rule>) -> Vec<TypePa
                 name,
                 range,
                 variance,
+                explicit_variance,
                 kind,
             }
         })
@@ -1662,17 +1777,34 @@ fn build_type<'run>(ctx: &mut CompileCtx<'run>, pair: Pair<Rule>) -> Result<Ty<'
     Ok(ty)
 }
 
-/// Build a function type `A -> B` (Step 13). Bare `->` is the *reusable* arrow;
-/// `fn_type = { core_type ~ "->" ~ type_ }`, right-associative via the codomain.
+/// Build a function type `A -> B` / `A -[k]> B` (Step 13).
+/// `fn_type = { core_type ~ fn_arrow ~ type_ }`, right-associative via the
+/// codomain.
 fn build_fn_type<'run>(ctx: &mut CompileCtx<'run>, pair: Pair<Rule>) -> Result<Ty<'run>, AstError> {
     assert_eq!(pair.as_rule(), Rule::fn_type);
     let range = Range::from(&pair);
     let mut inner = pair.into_inner();
     let dom_pair = inner.next().missing("function domain type", range)?;
+    let arrow = inner.next().missing("function arrow", range)?;
     let cod_pair = inner.next().missing("function codomain type", range)?;
+    let mode = build_fn_arrow(&arrow);
     let dom = build_core_type(ctx, dom_pair)?;
     let cod = build_type(ctx, cod_pair)?;
-    Ok(ctx.fn_ty(dom, cod, FnMode::Reusable))
+    Ok(ctx.fn_ty(dom, cod, mode))
+}
+
+/// Parse a function arrow's calling mode (Step 13).
+/// `fn_arrow = { ("-[" ~ arrow_kind ~ "]>") | "->" }`.
+fn build_fn_arrow(pair: &Pair<Rule>) -> FnMode {
+    assert_eq!(pair.as_rule(), Rule::fn_arrow);
+    match pair.clone().into_inner().next() {
+        Some(k) if k.as_rule() == Rule::arrow_kind => match k.as_str().trim() {
+            "Owned" => FnMode::Consuming,
+            "BorrowedMut" => FnMode::ReusableMut,
+            _ => FnMode::Reusable,
+        },
+        _ => FnMode::Reusable,
+    }
 }
 
 fn build_core_type<'run>(
@@ -2259,6 +2391,8 @@ fn build_lambda<'run>(
     let range = Range::from(&pair);
     let mut inner = pair.into_inner();
     let param_pair = inner.next().missing("lambda parameter", range)?;
+    let arrow = inner.next().missing("lambda arrow", range)?;
+    let mode = build_fn_arrow(&arrow);
     let body_pair = inner.next().missing("lambda body", range)?;
 
     // lambda_param = { "(" ~ mut_kw? ~ identifier ~ ":" ~ type_ ~ ")" }
@@ -2281,7 +2415,7 @@ fn build_lambda<'run>(
 
     let body = Box::new(build_expr(ctx, body_pair, src)?);
     Ok(Expr {
-        expr: Expression::Lambda { param, body },
+        expr: Expression::Lambda { param, body, mode },
         range,
     })
 }
@@ -2680,11 +2814,7 @@ fn build_primary<'run>(
                 .missing("variant in external constructor", inner_range)?
                 .as_str()
                 .to_string();
-            let payload = parts
-                .next()
-                .map(|p| build_expr(ctx, p, src))
-                .transpose()?
-                .map(Box::new);
+            let payload = build_payload_expr(ctx, parts, src, inner_range)?;
             Ok(Expr {
                 expr: Expression::ExternalConstructor {
                     mod_name,
@@ -2710,11 +2840,7 @@ fn build_primary<'run>(
                 .missing("constructor variant", inner_range)?
                 .as_str()
                 .to_string();
-            let payload = parts
-                .next()
-                .map(|p| build_expr(ctx, p, src))
-                .transpose()?
-                .map(Box::new);
+            let payload = build_payload_expr(ctx, parts, src, inner_range)?;
             Ok(Expr {
                 expr: Expression::Constructor {
                     type_name,
@@ -2745,12 +2871,8 @@ fn build_primary<'run>(
                 .missing("tag variant", inner_range)?
                 .as_str()
                 .to_string();
-            // optional payload expression
-            let payload = children
-                .next()
-                .map(|p| build_expr(ctx, p, src))
-                .transpose()?
-                .map(Box::new);
+            // optional payload expression(s) — >1 desugar to a tuple payload.
+            let payload = build_payload_expr(ctx, children, src, inner_range)?;
             Ok(Expr {
                 expr: Expression::Tag { variant, payload },
                 range: inner_range,
@@ -2908,11 +3030,16 @@ fn build_let_constructor<'run>(
         .missing("let_constructor variant name", range)?
         .as_str()
         .to_string();
-    let payload = parts
-        .next()
+    // Multiple sub-patterns desugar to a single tuple sub-pattern:
+    // `let Cons(x, rest) = …` ≡ `let Cons((x, rest)) = …`.
+    let mut subs = parts
         .map(|p| build_let_destructure(ctx, p))
-        .transpose()?
-        .map(Box::new);
+        .collect::<Result<Vec<_>, _>>()?;
+    let payload = match subs.len() {
+        0 => None,
+        1 => Some(Box::new(subs.pop().unwrap())),
+        _ => Some(Box::new(HirPattern::Tuple(subs))),
+    };
     Ok(HirPattern::Constructor {
         type_name,
         variant,
@@ -2995,6 +3122,44 @@ fn build_let_destructure<'run>(
     }
 }
 
+/// Build a constructor/tag payload from its (zero or more) argument expressions.
+/// Multiple arguments desugar to a single tuple payload: `Ok(a, b)` ≡ `Ok((a, b))`.
+fn build_payload_expr<'i, 'run>(
+    ctx: &mut CompileCtx<'run>,
+    parts: impl Iterator<Item = Pair<'i, Rule>>,
+    src: &str,
+    range: Range,
+) -> Result<Option<Box<Expr<'run>>>, AstError> {
+    let mut exprs = parts
+        .map(|p| build_expr(ctx, p, src))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(match exprs.len() {
+        0 => None,
+        1 => Some(Box::new(exprs.pop().unwrap())),
+        _ => Some(Box::new(Expr {
+            expr: Expression::Tuple(exprs),
+            range,
+        })),
+    })
+}
+
+/// Build a constructor/tag payload sub-pattern from its (zero or more) argument
+/// patterns. Multiple arguments desugar to a single tuple sub-pattern:
+/// `Cons(x, rest)` ≡ `Cons((x, rest))`.
+fn build_payload_pattern<'i, 'run>(
+    ctx: &mut CompileCtx<'run>,
+    parts: impl Iterator<Item = Pair<'i, Rule>>,
+) -> Result<Option<Box<HirPattern<'run>>>, AstError> {
+    let mut pats = parts
+        .map(|p| build_pattern(ctx, p))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(match pats.len() {
+        0 => None,
+        1 => Some(Box::new(pats.pop().unwrap())),
+        _ => Some(Box::new(HirPattern::Tuple(pats))),
+    })
+}
+
 fn build_pattern<'run>(
     ctx: &mut CompileCtx<'run>,
     pair: Pair<Rule>,
@@ -3017,11 +3182,7 @@ fn build_pattern<'run>(
                 .missing("constructor variant name", range)?
                 .as_str()
                 .to_string();
-            let payload = parts
-                .next()
-                .map(|p| build_pattern(ctx, p))
-                .transpose()?
-                .map(Box::new);
+            let payload = build_payload_pattern(ctx, parts)?;
             Ok(HirPattern::Constructor {
                 type_name,
                 variant,
@@ -3036,11 +3197,7 @@ fn build_pattern<'run>(
                 .missing("tag pattern variant", range)?
                 .as_str()
                 .to_string();
-            let payload = parts
-                .next()
-                .map(|p| build_pattern(ctx, p))
-                .transpose()?
-                .map(Box::new);
+            let payload = build_payload_pattern(ctx, parts)?;
             Ok(HirPattern::Tag { variant, payload })
         }
         Rule::tuple_pattern => {

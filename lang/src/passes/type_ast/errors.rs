@@ -141,14 +141,6 @@ pub enum AstTypeError<'tcx> {
     },
     #[error("pattern type error at {range}: {message}")]
     PatternTypeMismatch { message: String, range: Range },
-    #[error(
-        "literal pattern '{enum_name}::{variant}' at {range} cannot appear in a nested (payload/tuple) position. enum variant patterns, bindings, wildcards, and tuple-destructuring are all supported in nested position, but integer and boolean literals are not"
-    )]
-    RefutableNestedPattern {
-        enum_name: String,
-        variant: String,
-        range: Range,
-    },
 
     // ── let-pattern errors ──────────────────────────────────────
     #[error(

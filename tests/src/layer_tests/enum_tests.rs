@@ -567,3 +567,57 @@ fn unknown_type_in_external_constructor_is_error() {
          def main(): Int := { let _x = colors::Bogus#Red; 0 }",
     );
 }
+
+// ── Multi-payload constructors: `C(a, b)` is sugar for a single tuple payload
+// `C((a, b))`, in declarations, constructor expressions, and patterns. ─────────
+
+#[test]
+fn multi_payload_constructor_and_pattern() {
+    let val = run_mir(
+        "type Pair = MkPair(Int, Int)
+         def main(): Int :=
+             match Pair#MkPair(10, 20) {
+                 #MkPair(a, b) => a + b,
+             }",
+    );
+    assert_eq!(val, MirValue::Int(30));
+}
+
+#[test]
+fn multi_payload_recursive_enum() {
+    let (hir, mir) = run_hir_and_mir(
+        "type List = Empty | Cons(Int, List) deriving Heaped
+         def total(l: List): Int := match l {
+             #Cons(x, rest) => x + total(rest),
+             #Empty => 0,
+         }
+         def main(): Int := total(#Cons(1, #Cons(2, #Cons(3, #Empty))))",
+    );
+    assert_eq!(hir, mir);
+    assert_eq!(hir, lang::ir_types::typed_hir::Expression::Int(6));
+}
+
+#[test]
+fn multi_payload_equivalent_to_explicit_tuple() {
+    // The single-tuple-payload spelling `C((a, b))` and the multi-payload
+    // spelling `C(a, b)` build the same type and run identically.
+    let sugar = run_mir(
+        "type P = Mk(Int, Int)
+         def main(): Int := match P#Mk(3, 4) { #Mk(a, b) => a * b }",
+    );
+    let explicit = run_mir(
+        "type P = Mk((Int, Int))
+         def main(): Int := match P#Mk((3, 4)) { #Mk((a, b)) => a * b }",
+    );
+    assert_eq!(sugar, explicit);
+    assert_eq!(sugar, MirValue::Int(12));
+}
+
+#[test]
+fn three_payload_constructor() {
+    let val = run_mir(
+        "type Triple = T(Int, Int, Int)
+         def main(): Int := match Triple#T(1, 2, 3) { #T(a, b, c) => a + b + c }",
+    );
+    assert_eq!(val, MirValue::Int(6));
+}

@@ -1323,10 +1323,49 @@ producing `Box<T> @ 'static`.
 > MIR lowering + codegen are stubbed (`internal_bug`, unreachable from
 > `run_hir`); tests use `run_hir` (`tests/layer_tests/lambda_tests.rs`).
 >
-> **Remaining milestones:** 2b — lift lambdas to top-level functions → MIR
-> (`RValue` closure + indirect call) + fat-pointer codegen → `run_hir_and_mir` +
-> compiled; then capture analysis (by move, then borrow), borrowing/consuming
-> arrows, the variance follow-up, and finally `Functor`/`Applicative`/`Monad`.
+> **Milestone 3 (capturing closures + consuming/mutating arrows) — done.** 743
+> tests, clippy clean. **Captures by move:** `infer` collects the body's
+> referenced outer-env vars (via `analysis::annotate::collect_dependencies`
+> filtered to the enclosing scope) into `Lambda.captures: Vec<(UniqVar, Ty)>`;
+> mono heap-allocates the environment (`malloc`, **leaked** — documented) as
+> `Unit`/single/tuple, the lifted fn unpacks it from its leading `env_ptr` arg via
+> `__ptr_read` + `LetTuple`, and ownership moves each non-`Copy` capture into the
+> closure and excludes it from the body's drops. Escaping closures work (env
+> outlives the defining frame). **Calling modes:** the `-[k]>` arrow syntax
+> (`arrow_kind = Owned | BorrowedMut | Borrowed`) selects the `FnMode`
+> (`Owned`→`Consuming`, `BorrowedMut`→`ReusableMut`, else `Reusable`); ownership
+> consumes the callee on `Apply` **only** when its mode is `Consuming`, so a
+> reusable/mutating closure is callable repeatedly while a consuming one is
+> once-only (a second call is a use-after-move). **Subsumption:**
+> `FnMode::usable_as` (`Reusable <: ReusableMut <: Consuming`, mirroring
+> `Fn ⊆ FnMut ⊆ FnOnce`) is applied in `eq_modulo_regions` (actual `<:` expected)
+> and `unify` (supplied `<:` declared), so a reusable lambda passes where a
+> consuming arrow is expected. Tests in `lambda_tests.rs`
+> (callable-twice / once-only / consuming-twice-rejected / subsumption).
+>
+> **Milestone 4 (variance follow-up — Step 5's deferred half) — done.** 745
+> tests, clippy clean. Function arrows are the first *consumer* positions, so
+> `check_variance` does real polarity analysis (`param_polarity`): a function
+> argument flips polarity, its result keeps it, and generic applications `F<..>`
+> compose the outer polarity with `F`'s declared per-param variance (a param at
+> both polarities is invariant). Explicit `+a`/`-a` is validated against the
+> inferred polarity; an absent annotation is inferred and never rejected
+> (`TypeParam.explicit_variance`). Tests in `generics_tests.rs` (contravariant arg,
+> covariant-on-arg unsound, both-positions → invariant-only, nested composition,
+> double-contravariance cancels).
+>
+> **Milestone 5 (`Functor`/`Applicative`/`Monad`) — done.** 752 tests, clippy
+> clean. The classic HKT hierarchy now lives in `core.sand` (`fmap`/`pure`/`ap`/
+> `bind`), expressible because Step 11 gave HKT params and Step 13 gave lambda
+> values. `pure<A>(x: A): F<A>` has no `F<_>` argument, so its instance is solved
+> by **return-type-driven dispatch**: `check` threads the expected type into
+> `infer_method_call`, which seeds the receiver from the method's return type.
+> `examples/monad.sand` runs the `Option` instances through codegen;
+> `hkt_tests.rs` checks HIR/MIR agreement. **Step 13 is complete.**
+>
+> Borrow-mode *capture* (vs. the
+> current move-only) and the borrowing arrow's region (`'r`) stay deferred —
+> nothing escape-checks without stack closures (see ledger known-limitations).
 
 **Goal**: Add lambda expressions as values. Functions become first-class
 — they can be passed as arguments, stored in data structures, and

@@ -13,6 +13,77 @@ use crate::lang::ops::Uop;
 use crate::lang::types::CommonTypes;
 use crate::lang::types::Kind;
 use crate::lang::types::Ty;
+use crate::lang::types::TyKind;
+
+/// One cell of the pattern matrix used by the Maranget decision-tree compiler
+/// ([`FnCx::compile_match_matrix`]). A `Wild` is a synthesised wildcard produced
+/// when a wildcard row is specialised against a constructor (it has no backing
+/// pattern node); `Pat` borrows a real pattern from an arm.
+#[derive(Clone, Copy)]
+enum Cell<'a, 'tcx> {
+    Wild,
+    Pat(&'a th::MatchPattern<'tcx>),
+}
+
+impl<'a, 'tcx> Cell<'a, 'tcx> {
+    /// A cell that imposes no test and so cannot fail to match — a synthesised
+    /// wildcard, a source `_`, or a variable binding (binding extraction happens
+    /// separately at the matched arm, walking the original pattern).
+    fn is_wild(self) -> bool {
+        matches!(
+            self,
+            Cell::Wild
+                | Cell::Pat(th::MatchPattern::Wildcard | th::MatchPattern::Binding { .. })
+        )
+    }
+}
+
+/// One row of the pattern matrix: a pattern cell per current occurrence column,
+/// tagged with the source arm it came from (so a matched leaf routes to that
+/// arm's already-built entry block).
+struct Row<'a, 'tcx> {
+    cells: Vec<Cell<'a, 'tcx>>,
+    arm: usize,
+}
+
+/// `v` with element `idx` replaced by the elements of `replacement`
+/// (the matrix specialisation operation: one column becomes a constructor's
+/// sub-columns).
+fn splice<T: Clone>(v: &[T], idx: usize, replacement: &[T]) -> Vec<T> {
+    let mut out = Vec::with_capacity(v.len() + replacement.len());
+    out.extend_from_slice(&v[..idx]);
+    out.extend_from_slice(replacement);
+    out.extend_from_slice(&v[idx + 1..]);
+    out
+}
+
+/// `v` with element `idx` removed (the default-matrix column drop).
+fn remove<T: Clone>(v: &[T], idx: usize) -> Vec<T> {
+    let mut out = Vec::with_capacity(v.len() - 1);
+    out.extend_from_slice(&v[..idx]);
+    out.extend_from_slice(&v[idx + 1..]);
+    out
+}
+
+/// Specialise a tuple column's cell into `arity` sub-cells: a tuple pattern
+/// contributes its element patterns, a wildcard/binding contributes wildcards.
+fn expand_tuple_cell<'a, 'tcx>(cell: Cell<'a, 'tcx>, arity: usize) -> Vec<Cell<'a, 'tcx>> {
+    match cell {
+        Cell::Pat(th::MatchPattern::Tuple { elems, .. }) => {
+            elems.iter().map(Cell::Pat).collect()
+        }
+        _ => vec![Cell::Wild; arity],
+    }
+}
+
+/// Whether a literal cell matches the constant `k`.
+fn cell_matches_const(cell: Cell<'_, '_>, k: &Constant) -> bool {
+    match cell {
+        Cell::Pat(th::MatchPattern::IntLit(n)) => *k == Constant::Int(*n),
+        Cell::Pat(th::MatchPattern::BoolLit(b)) => *k == Constant::Bool(*b),
+        _ => false,
+    }
+}
 
 pub(super) struct FnCx<'tcx> {
     #[allow(dead_code)]
@@ -327,174 +398,9 @@ impl<'tcx> FnCx<'tcx> {
                 // nullary inner variant — no payload, so nothing to bind.
                 // The discriminant check was done in the dispatch chain.
             }
-            th::MatchPattern::IntLit(_) | th::MatchPattern::BoolLit(_) => internal_bug!(
-                "nested IntLit/BoolLit pattern reached MIR lowering \
-                 (RefutableNestedPattern should have rejected this at typecheck)"
-            ),
-        }
-    }
-
-    /// Returns true if `pattern` requires a runtime check (i.e. is refutable).
-    /// Wildcard, Binding, and Tuple are irrefutable; Variant, IntLit, BoolLit
-    /// are refutable.
-    fn pattern_is_refutable(pattern: &th::MatchPattern) -> bool {
-        matches!(
-            pattern,
-            th::MatchPattern::Variant { .. }
-                | th::MatchPattern::IntLit(_)
-                | th::MatchPattern::BoolLit(_)
-        )
-    }
-
-    /// Build the check blocks for a single arm's pattern, emitting as many
-    /// basic blocks as there are nested refutable layers.
-    ///
-    /// - `value_tmp`: the `LocalId` holding the value to match against
-    ///   `pattern`.
-    /// - `arm_bb`: destination when *all* checks in the chain pass.
-    /// - `fallthrough_bb`: destination when *any* check in the chain fails.
-    ///
-    /// Returns the entry block of the check chain (the outermost check for
-    /// refutable patterns, or `arm_bb` directly for irrefutable ones).
-    ///
-    /// For `Variant { payload: Some((payload_ty, inner_pat)) }` where
-    /// `inner_pat` is also refutable, the method emits:
-    ///
-    /// ```text
-    /// outer_check_bb:
-    ///   disc_tmp   = Field(value_tmp, 0)
-    ///   cmp_tmp    = (disc_tmp == variant_idx)
-    ///   Branch(cmp_tmp → extract_bb, else → fallthrough_bb)
-    ///
-    /// extract_bb:
-    ///   payload_tmp = Field(value_tmp, 1)
-    ///   Goto inner_check_entry
-    ///
-    /// inner_check_entry …  (recurse)
-    /// ```
-    fn build_arm_check_chain(
-        &mut self,
-        pattern: &th::MatchPattern<'tcx>,
-        value_tmp: LocalId,
-        arm_bb: BlockId,
-        fallthrough_bb: BlockId,
-        range: Range,
-    ) -> BlockId {
-        match pattern {
-            // Irrefutable patterns need no check — jump straight to the arm.
-            th::MatchPattern::Wildcard
-            | th::MatchPattern::Binding { .. }
-            | th::MatchPattern::Tuple { .. } => arm_bb,
-
-            th::MatchPattern::IntLit(n) => {
-                let cmp_tmp = self.fresh_temp("match_int_cmp", self.types.bool, range);
-                self.new_block(
-                    vec![self.assign_stmt(
-                        cmp_tmp,
-                        RValue::BinaryOp {
-                            op: Bop::Comp(CompOp::Eq),
-                            left: Operand::Copy(Self::place(value_tmp)),
-                            right: Operand::Const(Constant::Int(*n)),
-                        },
-                        range,
-                    )],
-                    Terminator::Branch {
-                        cond: Operand::Copy(Self::place(cmp_tmp)),
-                        then_bb: arm_bb,
-                        else_bb: fallthrough_bb,
-                    },
-                )
-            }
-
-            th::MatchPattern::BoolLit(b) => {
-                let cmp_tmp = self.fresh_temp("match_bool_cmp", self.types.bool, range);
-                self.new_block(
-                    vec![self.assign_stmt(
-                        cmp_tmp,
-                        RValue::BinaryOp {
-                            op: Bop::Comp(CompOp::Eq),
-                            left: Operand::Copy(Self::place(value_tmp)),
-                            right: Operand::Const(Constant::Bool(*b)),
-                        },
-                        range,
-                    )],
-                    Terminator::Branch {
-                        cond: Operand::Copy(Self::place(cmp_tmp)),
-                        then_bb: arm_bb,
-                        else_bb: fallthrough_bb,
-                    },
-                )
-            }
-
-            th::MatchPattern::Variant {
-                variant_idx,
-                payload,
-                ..
-            } => {
-                // Determine where to go when the outer disc check passes.
-                // If the payload itself contains a refutable sub-pattern, we
-                // need to extract the payload into a temp and continue checking
-                // it before reaching arm_bb.
-                let inner_target = match payload {
-                    Some((payload_ty, inner_pat)) if Self::pattern_is_refutable(inner_pat) => {
-                        // Allocate a local for the inner enum (the payload).
-                        let payload_tmp = self.fresh_temp("check_payload", *payload_ty, range);
-                        // Recursively build the check chain for the inner pattern.
-                        let inner_check_entry = self.build_arm_check_chain(
-                            inner_pat,
-                            payload_tmp,
-                            arm_bb,
-                            fallthrough_bb,
-                            range,
-                        );
-                        // Build an extraction block: payload_tmp = Field(value_tmp, 1);
-                        // then jump into the inner check chain.
-                        self.new_block(
-                            vec![self.assign_stmt(
-                                payload_tmp,
-                                RValue::Field {
-                                    base: Operand::Copy(Self::place(value_tmp)),
-                                    index: 1,
-                                },
-                                range,
-                            )],
-                            Terminator::Goto {
-                                target: inner_check_entry,
-                            },
-                        )
-                    }
-                    _ => arm_bb,
-                };
-
-                // Build the outer discriminant check.
-                let disc_tmp = self.fresh_temp("match_disc", self.types.int, range);
-                let cmp_tmp = self.fresh_temp("match_cmp", self.types.bool, range);
-                self.new_block(
-                    vec![
-                        self.assign_stmt(
-                            disc_tmp,
-                            RValue::Field {
-                                base: Operand::Copy(Self::place(value_tmp)),
-                                index: 0,
-                            },
-                            range,
-                        ),
-                        self.assign_stmt(
-                            cmp_tmp,
-                            RValue::BinaryOp {
-                                op: Bop::Comp(CompOp::Eq),
-                                left: Operand::Copy(Self::place(disc_tmp)),
-                                right: Operand::Const(Constant::Int(*variant_idx as i64)),
-                            },
-                            range,
-                        ),
-                    ],
-                    Terminator::Branch {
-                        cond: Operand::Copy(Self::place(cmp_tmp)),
-                        then_bb: inner_target,
-                        else_bb: fallthrough_bb,
-                    },
-                )
+            th::MatchPattern::IntLit(_) | th::MatchPattern::BoolLit(_) => {
+                // A nested literal binds nothing; its equality test is emitted by
+                // the decision tree (which extracts this sub-occurrence itself).
             }
         }
     }
@@ -962,14 +868,15 @@ impl<'tcx> FnCx<'tcx> {
             }
 
             // A lifted closure value (Step 13): a fat pointer to the lifted
-            // function. Non-capturing milestone → empty environment.
+            // function plus its captured operands (the enclosing locals it
+            // closes over), packed into the environment.
             th::Expression::Closure { func, captures } => {
-                debug_assert!(captures.is_empty(), "closure captures arrive in a later milestone");
+                let env = captures.iter().map(|(v, _)| self.var_operand(v)).collect();
                 let stmt = self.assign_stmt(
                     dst,
                     RValue::Closure {
                         fn_name: *func,
-                        env: Vec::new(),
+                        env,
                     },
                     expr.range,
                 );
@@ -1060,6 +967,10 @@ impl<'tcx> FnCx<'tcx> {
                 // and chain extraction -> body. arms whose pattern binds
                 // nothing (`Wildcard`, or a `Variant`/`Tuple` with only
                 // wildcards/no payload) skip the extraction block entirely.
+                //
+                // Binding extraction always walks the *original* arm pattern from
+                // the scrutinee, so it is independent of how the decision tree
+                // routes control: the tree only decides *which* arm matches first.
                 let arm_bbs: Vec<BlockId> = arms
                     .iter()
                     .map(|arm| {
@@ -1079,39 +990,331 @@ impl<'tcx> FnCx<'tcx> {
                     })
                     .collect();
 
-                // build the dispatch chain backwards.
-                // after the last comparison falls through -> unreachable (requiring exhaustive
-                // match)
-                let mut fallthrough_bb = self.new_block(vec![], Terminator::Unreachable);
-
-                for (arm, arm_bb) in arms.iter().zip(arm_bbs.iter()).rev() {
-                    match &arm.pattern {
-                        th::MatchPattern::Wildcard
-                        | th::MatchPattern::Binding { .. }
-                        | th::MatchPattern::Tuple { .. } => {
-                            // irrefutable — unconditional fall-through to this arm
-                            fallthrough_bb = *arm_bb;
-                        }
-                        _ => {
-                            // refutable pattern: delegate to the unified check-chain
-                            // builder which handles Variant (with optional nested
-                            // refutable payloads), IntLit, and BoolLit uniformly.
-                            let check_entry = self.build_arm_check_chain(
-                                &arm.pattern,
-                                scrut_tmp,
-                                *arm_bb,
-                                fallthrough_bb,
-                                arm.range,
-                            );
-                            fallthrough_bb = check_entry;
-                        }
-                    }
-                }
+                // Compile the arms into a Maranget decision tree: a single shared
+                // block per occurrence/constructor test, falling through to a lone
+                // unreachable block (the match is exhaustive).
+                let fail_bb = self.new_block(vec![], Terminator::Unreachable);
+                let rows: Vec<Row> = arms
+                    .iter()
+                    .enumerate()
+                    .map(|(i, arm)| Row {
+                        cells: vec![Cell::Pat(&arm.pattern)],
+                        arm: i,
+                    })
+                    .collect();
+                let occ = vec![(scrut_tmp, scrutinee.ty)];
+                let fallthrough_bb =
+                    self.compile_match_matrix(&occ, &rows, &arm_bbs, fail_bb, scrutinee.range);
 
                 // lower the scrutinee, then jump into the dispatch chain
                 self.lower_assign(scrutinee, scrut_tmp, fallthrough_bb)
             }
         }
+    }
+
+    /// Compile a pattern matrix into a decision tree (Maranget, *Compiling
+    /// Pattern Matching to Good Decision Trees*, ML'08).
+    ///
+    /// `occ` are the occurrences — the temps holding the sub-values currently
+    /// under scrutiny, one per matrix column — paired with their types. `rows`
+    /// is the matrix: each row is one source arm's pattern cells over those
+    /// columns. Returns the entry block that routes control to the first
+    /// matching arm's `arm_bbs` entry, or to `fail_bb` if nothing matches.
+    ///
+    /// At each step it selects the first column where the *first* row is
+    /// refutable (guaranteeing progress on that row), switches on the
+    /// constructor there once, and recurses into the specialised sub-matrices —
+    /// so each occurrence is tested at most once along any path and common
+    /// sub-trees are shared, unlike a per-arm backtracking chain. Variable
+    /// bindings are *not* handled here: they are extracted at the matched arm by
+    /// walking the original pattern from the scrutinee (see the `Match` arm), so
+    /// a binding cell is treated exactly like a wildcard for dispatch.
+    fn compile_match_matrix(
+        &mut self,
+        occ: &[(LocalId, Ty<'tcx>)],
+        rows: &[Row<'_, 'tcx>],
+        arm_bbs: &[BlockId],
+        fail_bb: BlockId,
+        range: Range,
+    ) -> BlockId {
+        // No rows left: nothing can match here.
+        let Some(first) = rows.first() else {
+            return fail_bb;
+        };
+        // The first row imposes no remaining test → it matches unconditionally.
+        if first.cells.iter().all(|c| c.is_wild()) {
+            return arm_bbs[first.arm];
+        }
+        // Otherwise switch on the first column where the first row is refutable.
+        let col = first.cells.iter().position(|c| !c.is_wild()).unwrap();
+        // Sub-occurrence types come from the constructor patterns (or the tuple
+        // type), so the occurrence's own type is not needed here — only its local.
+        let occ_local = occ[col].0;
+
+        match first.cells[col] {
+            // unreachable: `is_wild` excluded these, and a `Pat` at `col` must
+            // exist (we found a non-wild cell there).
+            Cell::Wild
+            | Cell::Pat(th::MatchPattern::Wildcard | th::MatchPattern::Binding { .. }) => {
+                internal_bug!("selected matrix column is wildcard")
+            }
+
+            // A tuple has exactly one constructor, so it never branches: expand
+            // the column into one sub-column per element and recurse.
+            Cell::Pat(th::MatchPattern::Tuple { ty: tup_ty, elems }) => {
+                let arity = elems.len();
+                let elem_tys: Vec<Ty<'tcx>> = match tup_ty.kind() {
+                    TyKind::Tuple(es) => es.to_vec(),
+                    _ => internal_bug!("tuple pattern with non-tuple type {tup_ty}"),
+                };
+                let sub_occ: Vec<(LocalId, Ty<'tcx>)> = elem_tys
+                    .iter()
+                    .map(|t| (self.fresh_temp("match_tuple_elem", *t, range), *t))
+                    .collect();
+                let new_occ = splice(occ, col, &sub_occ);
+                let new_rows: Vec<Row> = rows
+                    .iter()
+                    .map(|r| Row {
+                        cells: splice(&r.cells, col, &expand_tuple_cell(r.cells[col], arity)),
+                        arm: r.arm,
+                    })
+                    .collect();
+                let body = self.compile_match_matrix(&new_occ, &new_rows, arm_bbs, fail_bb, range);
+                // Materialise the element temps, then continue.
+                let stmts = sub_occ
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (tmp, _))| {
+                        self.assign_stmt(
+                            *tmp,
+                            RValue::Field {
+                                base: Operand::Copy(Self::place(occ_local)),
+                                index: i,
+                            },
+                            range,
+                        )
+                    })
+                    .collect();
+                self.new_block(stmts, Terminator::Goto { target: body })
+            }
+
+            // An enum column: switch on the discriminant.
+            Cell::Pat(th::MatchPattern::Variant { .. }) => {
+                // Constructors present in this column, in first-appearance order.
+                let mut ctors: Vec<(usize, Option<Ty<'tcx>>)> = Vec::new();
+                for r in rows {
+                    if let Cell::Pat(th::MatchPattern::Variant {
+                        variant_idx,
+                        payload,
+                        ..
+                    }) = r.cells[col]
+                        && !ctors.iter().any(|(v, _)| v == variant_idx)
+                    {
+                        ctors.push((*variant_idx, payload.as_ref().map(|(t, _)| *t)));
+                    }
+                }
+
+                // Default sub-matrix: rows whose column is a wildcard (reached
+                // when the discriminant is none of the tested constructors).
+                let default_bb = {
+                    let default_rows: Vec<Row> = rows
+                        .iter()
+                        .filter(|r| r.cells[col].is_wild())
+                        .map(|r| Row {
+                            cells: remove(&r.cells, col),
+                            arm: r.arm,
+                        })
+                        .collect();
+                    let default_occ = remove(occ, col);
+                    if default_rows.is_empty() {
+                        fail_bb
+                    } else {
+                        self.compile_match_matrix(
+                            &default_occ,
+                            &default_rows,
+                            arm_bbs,
+                            fail_bb,
+                            range,
+                        )
+                    }
+                };
+
+                // One specialised sub-tree per constructor.
+                let ctor_bbs: Vec<BlockId> = ctors
+                    .iter()
+                    .map(|(vi, payload_ty)| {
+                        self.specialize_variant(
+                            occ, rows, col, occ_local, *vi, *payload_ty, arm_bbs, fail_bb, range,
+                        )
+                    })
+                    .collect();
+
+                // Read the discriminant once, then a chain of equality tests.
+                let disc = self.fresh_temp("match_disc", self.types.int, range);
+                let mut else_bb = default_bb;
+                for ((vi, _), target) in ctors.iter().zip(&ctor_bbs).rev() {
+                    else_bb = self.eq_branch(
+                        disc,
+                        Constant::Int(*vi as i64),
+                        *target,
+                        else_bb,
+                        range,
+                    );
+                }
+                self.new_block(
+                    vec![self.assign_stmt(
+                        disc,
+                        RValue::Field {
+                            base: Operand::Copy(Self::place(occ_local)),
+                            index: 0,
+                        },
+                        range,
+                    )],
+                    Terminator::Goto { target: else_bb },
+                )
+            }
+
+            // Literal columns: compare the occurrence value directly. Literals
+            // carry no payload, so the column is simply dropped on a match.
+            Cell::Pat(th::MatchPattern::IntLit(_)) | Cell::Pat(th::MatchPattern::BoolLit(_)) => {
+                let mut consts: Vec<Constant> = Vec::new();
+                for r in rows {
+                    let k = match r.cells[col] {
+                        Cell::Pat(th::MatchPattern::IntLit(n)) => Some(Constant::Int(*n)),
+                        Cell::Pat(th::MatchPattern::BoolLit(b)) => Some(Constant::Bool(*b)),
+                        _ => None,
+                    };
+                    if let Some(k) = k
+                        && !consts.contains(&k)
+                    {
+                        consts.push(k);
+                    }
+                }
+
+                let default_rows: Vec<Row> = rows
+                    .iter()
+                    .filter(|r| r.cells[col].is_wild())
+                    .map(|r| Row {
+                        cells: remove(&r.cells, col),
+                        arm: r.arm,
+                    })
+                    .collect();
+                let default_occ = remove(occ, col);
+                let default_bb = if default_rows.is_empty() {
+                    fail_bb
+                } else {
+                    self.compile_match_matrix(&default_occ, &default_rows, arm_bbs, fail_bb, range)
+                };
+
+                let mut else_bb = default_bb;
+                for k in consts.iter().rev() {
+                    // Rows matching this literal (or wildcard), column dropped.
+                    let lit_rows: Vec<Row> = rows
+                        .iter()
+                        .filter(|r| cell_matches_const(r.cells[col], k) || r.cells[col].is_wild())
+                        .map(|r| Row {
+                            cells: remove(&r.cells, col),
+                            arm: r.arm,
+                        })
+                        .collect();
+                    let lit_occ = remove(occ, col);
+                    let target =
+                        self.compile_match_matrix(&lit_occ, &lit_rows, arm_bbs, fail_bb, range);
+                    else_bb = self.eq_branch(occ_local, k.clone(), target, else_bb, range);
+                }
+                else_bb
+            }
+        }
+    }
+
+    /// Build the specialised sub-tree for one enum constructor `vi` of the column
+    /// `col` (occurrence `occ_local`): extract the payload (if any) into a fresh
+    /// occurrence and recurse on the rows that match `vi` or are wildcards.
+    #[allow(clippy::too_many_arguments)]
+    fn specialize_variant(
+        &mut self,
+        occ: &[(LocalId, Ty<'tcx>)],
+        rows: &[Row<'_, 'tcx>],
+        col: usize,
+        occ_local: LocalId,
+        vi: usize,
+        payload_ty: Option<Ty<'tcx>>,
+        arm_bbs: &[BlockId],
+        fail_bb: BlockId,
+        range: Range,
+    ) -> BlockId {
+        let arity = if payload_ty.is_some() { 1 } else { 0 };
+        let payload_tmp = payload_ty.map(|t| (self.fresh_temp("match_payload", t, range), t));
+        let sub_occ: Vec<(LocalId, Ty<'tcx>)> = payload_tmp.into_iter().collect();
+        let new_occ = splice(occ, col, &sub_occ);
+
+        let new_rows: Vec<Row> = rows
+            .iter()
+            .filter_map(|r| {
+                let sub = match r.cells[col] {
+                    Cell::Pat(th::MatchPattern::Variant {
+                        variant_idx,
+                        payload,
+                        ..
+                    }) if *variant_idx == vi => match payload {
+                        Some((_, inner)) => vec![Cell::Pat(inner.as_ref())],
+                        None => vec![],
+                    },
+                    c if c.is_wild() => vec![Cell::Wild; arity],
+                    // a different constructor: this row cannot match `vi`.
+                    _ => return None,
+                };
+                Some(Row {
+                    cells: splice(&r.cells, col, &sub),
+                    arm: r.arm,
+                })
+            })
+            .collect();
+
+        let body = self.compile_match_matrix(&new_occ, &new_rows, arm_bbs, fail_bb, range);
+        match payload_tmp {
+            Some((tmp, _)) => self.new_block(
+                vec![self.assign_stmt(
+                    tmp,
+                    RValue::Field {
+                        base: Operand::Copy(Self::place(occ_local)),
+                        index: 1,
+                    },
+                    range,
+                )],
+                Terminator::Goto { target: body },
+            ),
+            None => body,
+        }
+    }
+
+    /// A block testing `lhs == k`, branching to `then_bb` on equality and
+    /// `else_bb` otherwise. Returns the new block's id.
+    fn eq_branch(
+        &mut self,
+        lhs: LocalId,
+        k: Constant,
+        then_bb: BlockId,
+        else_bb: BlockId,
+        range: Range,
+    ) -> BlockId {
+        let cmp = self.fresh_temp("match_cmp", self.types.bool, range);
+        self.new_block(
+            vec![self.assign_stmt(
+                cmp,
+                RValue::BinaryOp {
+                    op: Bop::Comp(CompOp::Eq),
+                    left: Operand::Copy(Self::place(lhs)),
+                    right: Operand::Const(k),
+                },
+                range,
+            )],
+            Terminator::Branch {
+                cond: Operand::Copy(Self::place(cmp)),
+                then_bb,
+                else_bb,
+            },
+        )
     }
 
     pub(super) fn lower_effect(&mut self, expr: &th::Expr<'tcx>, cont: BlockId) -> BlockId {

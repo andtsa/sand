@@ -270,7 +270,7 @@ fn uniquify_expr<'tcx>(
 
         // A lambda introduces a fresh scope binding its parameter (Step 13),
         // like a one-parameter function body.
-        Expression::Lambda { param, body } => {
+        Expression::Lambda { param, body, mode } => {
             u.enter_scope();
             let new_name = u.bind_var(&param.name);
             let new_body = uniquify_expr(body, u)?;
@@ -284,6 +284,7 @@ fn uniquify_expr<'tcx>(
                         is_mutable: param.is_mutable,
                     },
                     body: Box::new(new_body),
+                    mode: *mode,
                 },
                 range: e.range,
             })

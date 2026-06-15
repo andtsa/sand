@@ -229,9 +229,10 @@ impl<'tcx> Expr<'tcx> {
             Expression::Tuple(elems) => {
                 Expression::Tuple(elems.iter().map(&mut f).collect::<Result<_, _>>()?)
             }
-            Expression::Lambda { param, body } => Expression::Lambda {
+            Expression::Lambda { param, body, mode } => Expression::Lambda {
                 param: param.clone(),
                 body: Box::new(f(body)?),
+                mode: *mode,
             },
             Expression::Apply { func, arg } => Expression::Apply {
                 func: Box::new(f(func)?),
@@ -321,10 +322,12 @@ pub enum Expression<'tcx> {
     },
     Tuple(Vec<Expr<'tcx>>),
     /// A lambda `fn (x: T) -> e` (Step 13). The parameter mirrors a function
-    /// parameter (name + declared type); the body is a full expression.
+    /// parameter (name + declared type); the body is a full expression. `mode`
+    /// is the arrow's calling mode (`->` = reusable; `-[k]>` variants).
     Lambda {
         param: Parameter<'tcx>,
         body: Box<Expr<'tcx>>,
+        mode: crate::lang::types::FnMode,
     },
     /// Application of a function *value* (indirect call): `f(arg)` where `f` is a
     /// bound local rather than a named function (Step 13). Produced by uniquify

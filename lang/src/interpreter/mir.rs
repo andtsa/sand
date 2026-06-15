@@ -51,11 +51,13 @@ pub enum MirValue<'tcx> {
     /// A reference: a shared handle to the cell it points at. Produced by
     /// [`RValue::Ref`], consumed by reads/writes through a `[Deref]` place.
     Ref(Cell<'tcx>),
-    /// A closure value (Step 13): the lifted function and its captured values
-    /// (empty in the non-capturing milestone). Consumed by `CallIndirect`.
+    /// A closure value (Step 13): the lifted function and a pointer to its
+    /// captured environment (a `Ref` to a cell holding the env value — `Unit`,
+    /// the single capture, or a tuple). Consumed by `CallIndirect`, which passes
+    /// the env pointer as the lifted function's leading argument.
     Closure {
         fn_name: crate::compiler::structure::FunRef<'tcx>,
-        env: Vec<MirValue<'tcx>>,
+        env: Box<MirValue<'tcx>>,
     },
 }
 
@@ -263,25 +265,33 @@ fn eval_rvalue<'tcx>(
             eval_intrinsic(*fn_name, arg_vals, ctx)
         }
 
-        // A closure value (Step 13): the lifted function + captured operands.
+        // A closure value (Step 13): pack the captured operands into the env
+        // value (Unit / single / tuple), store it in a fresh cell, and keep a
+        // pointer to it (so the lifted function can `__ptr_read` it).
         RValue::Closure { fn_name, env } => {
-            let env = env
+            let mut vals = env
                 .iter()
                 .map(|o| eval_operand(o, locals))
                 .collect::<Result<Vec<_>, _>>()?;
+            let env_value = match vals.len() {
+                0 => MirValue::Unit,
+                1 => vals.pop().unwrap(),
+                _ => MirValue::Tuple(vals),
+            };
+            let env_ptr = MirValue::Ref(Rc::new(RefCell::new(Some(env_value))));
             Ok(MirValue::Closure {
                 fn_name: *fn_name,
-                env,
+                env: Box::new(env_ptr),
             })
         }
 
         // Indirect call (Step 13): evaluate the callee to a closure, then call
-        // its lifted function with the captures followed by the arguments.
+        // its lifted function with the env pointer followed by the arguments.
         RValue::CallIndirect { callee, args } => {
             let MirValue::Closure { fn_name, env } = eval_operand(callee, locals)? else {
                 internal_bug!("indirect call of a non-closure value")
             };
-            let mut arg_vals = env;
+            let mut arg_vals = vec![*env];
             for a in args {
                 arg_vals.push(eval_operand(a, locals)?);
             }

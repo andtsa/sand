@@ -42,6 +42,32 @@ impl Copy for Bool { }
 impl Clone for Unit { def clone(x: &Unit): Unit := *x }
 impl Copy for Unit { }
 
+// ── Functor / Applicative / Monad (Step 13) ─────────────────────────────────
+//
+// The classic higher-kinded hierarchy, now expressible: the type parameter `F`
+// has kind `Owned -> Owned` (HKT, Step 11) and the methods take/return function
+// values (lambdas, Step 13). Instances are given per type constructor (e.g.
+// `impl Functor for Option`) — see `examples/monad.sand`.
+
+// A `Functor` lets you map a function over the contents of an `F<A>`.
+typeclass Functor<F : Owned -> Owned> {
+    def fmap<A, B>(x: F<A>, f: A -> B): F<B>
+}
+
+// An `Applicative` can lift a plain value into `F` (`pure`) and apply a wrapped
+// function to a wrapped argument (`ap`). `pure`'s instance is recovered from the
+// expected type at the call site (it has no `F<_>` argument to dispatch on).
+typeclass Applicative<F : Owned -> Owned> requires Functor {
+    def pure<A>(x: A): F<A>
+    def ap<A, B>(f: F<A -> B>, x: F<A>): F<B>
+}
+
+// A `Monad` sequences computations: `bind` feeds the contents of an `F<A>` into
+// a function producing the next `F<B>`.
+typeclass Monad<F : Owned -> Owned> requires Applicative {
+    def bind<A, B>(x: F<A>, f: A -> F<B>): F<B>
+}
+
 // ── Heaped: the `Unique` (Box-like) allocation strategy (Memory Step C) ──────
 //
 // The compiler-internal strategy backing `deriving Heaped`. A `Unique<T>` is a

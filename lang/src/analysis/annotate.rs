@@ -120,7 +120,7 @@ pub fn collect_dependencies<'tcx>(
             collect_dependencies(&arg.expr, dependencies);
         }
         Expression::Closure { captures, .. } => {
-            for c in captures {
+            for (c, _) in captures {
                 dependencies.insert(*c);
             }
         }

@@ -19,6 +19,10 @@ pub struct TypeParam {
     pub name: String,
     pub range: Range,
     pub variance: Variance,
+    /// Whether `variance` was written explicitly (`+a`/`-a`/`∅a`) rather than
+    /// defaulted. An absent annotation is *inferred* from payload positions at
+    /// the variance check (Calculus §2.1) and so is never rejected as unsound.
+    pub explicit_variance: bool,
     pub kind: Kind,
 }
 
@@ -28,6 +32,7 @@ pub struct TypeParamSpec {
     pub name: String,
     pub range: Range,
     pub variance: Variance,
+    pub explicit_variance: bool,
     pub kind: Kind,
 }
 

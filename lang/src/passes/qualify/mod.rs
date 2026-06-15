@@ -590,9 +590,10 @@ fn qualify_expr<'tcx>(
                 }
             }
         }
-        hhir::Expression::Lambda { param, body } => qhir::Expression::Lambda {
+        hhir::Expression::Lambda { param, body, mode } => qhir::Expression::Lambda {
             param: qualify_parameter(q, param),
             body: Box::new(qualify_expr(q, module_name, *body)?),
+            mode,
         },
         hhir::Expression::Apply { func, arg } => qhir::Expression::Apply {
             func: Box::new(qualify_expr(q, module_name, *func)?),

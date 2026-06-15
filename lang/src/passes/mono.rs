@@ -12,6 +12,9 @@ use crate::compiler::context::CompileCtx;
 use crate::compiler::structure::FunRef;
 use crate::compiler::structure::Map;
 use crate::compiler::structure::ModuleRef;
+use crate::compiler::structure::UniqVar;
+use crate::compiler::structure::VarDeclType;
+use crate::lang::types::Kind;
 use crate::internal_bug;
 use crate::ir_types::typed_hir::Expr;
 use crate::ir_types::typed_hir::Expression;
@@ -349,43 +352,136 @@ impl<'tcx> Mono<'tcx> {
                     .map(|e| self.rewrite_expr(ctx, e, mapping))
                     .collect(),
             ),
-            // Lambda lifting (Step 13, milestone 2b): hoist the (monomorphised)
-            // body into a fresh top-level function and replace the lambda with a
-            // `Closure` referencing it. The body is rewritten first so any inner
-            // lambdas are lifted too. Captures are empty (non-capturing
-            // milestone). Runs on every backend path (both interpreters and
-            // codegen see lifted closures).
-            Expression::Lambda { param, body, .. } => {
+            // Lambda lifting (Step 13): hoist the (monomorphised) body into a
+            // fresh top-level function `λ(env: Ptr<EnvTy>, x): R` and replace the
+            // lambda with a `Closure` referencing it. The body is rewritten first
+            // so inner lambdas lift too. The lifted function unpacks its captures
+            // from the env pointer via a prelude; the call site passes the env
+            // pointer uniformly (null for a non-capturing lambda), so the LLVM
+            // signature `(ptr, arg) -> ret` is the same regardless of captures.
+            Expression::Lambda {
+                param,
+                body,
+                captures,
+            } => {
+                let range = param.range;
                 let mono_param = Parameter {
                     name: param.name,
                     ty: self.mono_ty(ctx, param.ty, mapping),
-                    range: param.range,
+                    range,
                     is_mutable: param.is_mutable,
                 };
+                let mono_captures: Vec<(UniqVar<'tcx>, Ty<'tcx>)> =
+                    captures
+                        .iter()
+                        .map(|(v, t)| (*v, self.mono_ty(ctx, *t, mapping)))
+                        .collect();
                 let mono_body = self.rewrite_expr(ctx, body, mapping);
                 let ret_type = mono_body.ty;
+
+                // env type: Unit (no captures) / the single type / a tuple.
+                let env_ty = match mono_captures.as_slice() {
+                    [] => ctx.types.unit,
+                    [(_, t)] => *t,
+                    many => ctx.intern_tuple(many.iter().map(|(_, t)| *t).collect()),
+                };
+                let env_param_var =
+                    ctx.fresh_synthetic_var("env", range, VarDeclType::Parameter);
+                let env_ptr_ty = ctx.ptr_ty(env_ty);
+                let env_param = Parameter {
+                    name: env_param_var,
+                    ty: env_ptr_ty,
+                    range,
+                    is_mutable: false,
+                };
+
+                // unpack the captures from the env pointer, then run the body.
+                let lifted_body = if mono_captures.is_empty() {
+                    mono_body
+                } else {
+                    let read = Expr {
+                        expr: Expression::IntrinsicCall {
+                            fn_name: crate::lang::intrinsics::Intrinsic::PtrRead,
+                            args: vec![Expr {
+                                expr: Expression::Var(env_param_var),
+                                ty: env_ptr_ty,
+                                kind: Kind::Owned,
+                                range,
+                            }],
+                            type_args: Vec::new(),
+                        },
+                        ty: env_ty,
+                        kind: Kind::Owned,
+                        range,
+                    };
+                    let mut statements = Vec::new();
+                    if let [(c, cty)] = mono_captures.as_slice() {
+                        statements.push(Statement::Declaration {
+                            name: *c,
+                            range,
+                            ty: *cty,
+                            val: read,
+                        });
+                    } else {
+                        let et = ctx.fresh_synthetic_var(
+                            "env_tuple",
+                            range,
+                            VarDeclType::Declaration,
+                        );
+                        statements.push(Statement::Declaration {
+                            name: et,
+                            range,
+                            ty: env_ty,
+                            val: read,
+                        });
+                        statements.push(Statement::LetTuple {
+                            elems: mono_captures
+                                .iter()
+                                .map(|(c, cty)| (*c, *cty, false, range))
+                                .collect(),
+                            range,
+                            val: Expr {
+                                expr: Expression::Var(et),
+                                ty: env_ty,
+                                kind: Kind::Owned,
+                                range,
+                            },
+                        });
+                    }
+                    Expr {
+                        expr: Expression::Block {
+                            statements,
+                            expr: Some(Box::new(mono_body)),
+                            drops: Vec::new(),
+                        },
+                        ty: ret_type,
+                        kind: Kind::Owned,
+                        range,
+                    }
+                };
+
                 let module = self.cur_module.expect("lambda outside a function body");
                 self.lambda_counter += 1;
                 let name = format!("$lambda{}", self.lambda_counter);
-                let fr = ctx.register_mono_function(name, module, param.range);
+                let fr = ctx.register_mono_function(name, module, range);
                 self.output.insert(
                     fr,
                     TypedFunction {
                         name: fr,
-                        range: param.range,
+                        range,
                         type_params: Vec::new(),
                         region_params: Vec::new(),
                         where_constraints: Vec::new(),
                         type_constraints: Vec::new(),
-                        parameters: vec![mono_param],
+                        parameters: vec![env_param, mono_param],
                         ret_type,
-                        body: mono_body,
+                        body: lifted_body,
                         src_module: module,
                     },
                 );
                 Expression::Closure {
                     func: fr,
-                    captures: Vec::new(),
+                    captures: mono_captures,
                 }
             }
             Expression::Apply { func, arg } => Expression::Apply {

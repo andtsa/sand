@@ -167,10 +167,12 @@ pub enum Expression<'tcx> {
     },
     Tuple(Vec<Expr<'tcx>>),
     /// A lambda `fn (x: T) -> e` (Step 13). The parameter is uniquified; the
-    /// body is resolved in a scope extended with it.
+    /// body is resolved in a scope extended with it. `mode` is the arrow's
+    /// calling mode.
     Lambda {
         param: Parameter<'tcx>,
         body: Box<Expr<'tcx>>,
+        mode: crate::lang::types::FnMode,
     },
     /// Application of a function *value* (indirect call): `f(arg)` where `f`
     /// resolved to a local of function type rather than a named function

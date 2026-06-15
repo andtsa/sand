@@ -414,26 +414,6 @@ pub fn type_error_to_diagnostic<'tcx>(
                 },
             );
         }
-        RefutableNestedPattern {
-            enum_name,
-            variant,
-            range,
-        } => {
-            diagnostics.add_one(
-                file,
-                SandDiagnostic {
-                    severity: DiagnosticSeverity::Error,
-                    message: format!(
-                        "literal pattern '{variant}' (of type '{enum_name}') cannot appear in a nested pattern position; enum variant patterns ('E#Variant(...)'), bindings ('x'), wildcards ('_'), and tuple-destructuring ('(a, b)') are permitted inside a payload or tuple element, but integer and boolean literals are not"
-                    ),
-                    range: *range,
-                    related: vec![],
-                    file: Some(file),
-                    ..Default::default()
-                },
-            );
-        }
-
         LetPatternElseMissing { range } => {
             diagnostics.add_one(
                 file,
