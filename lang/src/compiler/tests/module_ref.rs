@@ -7,11 +7,6 @@ use crate::compiler::context::CompileCtx;
 use crate::compiler::structure::FileRef;
 use crate::compiler::structure::Map;
 
-/// [BUG] `create_dummy_module` checks `self.default_module` as its
-/// "already-called" guard, but `register_module` never sets
-/// `self.default_module`.  The guard is always false, so the function
-/// can be called repeatedly, creating multiple modules named "mAin"
-/// under the same FileRef.  The second call should return Err.
 #[test]
 fn create_dummy_module_is_idempotent() {
     let mut ctx = CompileCtx::initial();
@@ -28,9 +23,6 @@ fn create_dummy_module_is_idempotent() {
     );
 }
 
-/// Calling `create_dummy_module` twice with the same FileRef and
-/// then compiling any source will produce a `DuplicateModule` error
-/// because two modules now share the name "mAin".
 #[test]
 fn duplicate_dummy_modules_cause_compile_error() {
     let mut ctx = CompileCtx::initial();
@@ -54,8 +46,6 @@ fn duplicate_dummy_modules_cause_compile_error() {
     );
 }
 
-/// [GUARD] register_module with distinct names should produce distinct
-/// refs.
 #[test]
 fn register_distinct_modules_produces_distinct_refs() {
     let mut ctx = CompileCtx::initial();
@@ -65,7 +55,6 @@ fn register_distinct_modules_produces_distinct_refs() {
     assert_ne!(m1, m2);
 }
 
-/// [GUARD] file_of_module round-trips correctly.
 #[test]
 fn file_of_module_round_trips() {
     let mut ctx = CompileCtx::initial();

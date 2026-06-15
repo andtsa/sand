@@ -1,8 +1,8 @@
-//! Step 4 the `{Owned, Never}` kind system and divergence.
+//! The `{Owned, Never}` kind system and divergence.
 //!
 //! Every ordinary value is `Owned`; a statically-infinite loop (`while true`,
 //! the language has no `break`) is `Never`, the uninhabited kind, and so
-//! inhabits any type (Calculus §6.1, `Never <: k`).
+//! inhabits any type (Calculus: Subsumption, `Never <: k`).
 
 use lang::ir_types::typed_hir::Expression;
 use lang::lang::types::Kind;
@@ -21,7 +21,7 @@ fn run_both(src: &str) -> Expression<'static> {
     hir
 }
 
-// ── kind lattice (Calculus §1.2 / §1.4)
+// ── kind lattice (Calculus: Kinds)
 // ───────────────────────────────────────
 
 #[test]

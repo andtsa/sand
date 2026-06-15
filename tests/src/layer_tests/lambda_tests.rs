@@ -1,4 +1,4 @@
-//! Step 13 (milestone 2) — lambda values + indirect calls. A `fn (x: T) -> e`
+//! Lambda values + indirect calls. A `fn (x: T) -> e`
 //! evaluates to a closure (lifted to a top-level function during
 //! monomorphisation); calling a local of function type (`g(arg)`) applies it.
 //! Non-capturing only: a lambda body that references an enclosing variable is
@@ -94,7 +94,8 @@ fn lambda_typechecks_as_a_value() {
     std::mem::forget(ctx);
 }
 
-// ── calling modes: `->` (reusable), `-[Owned]>` (consuming), `-[BorrowedMut]>` ──
+// ── calling modes: `->` (reusable), `-[Owned]>` (consuming), `-[BorrowedMut]>`
+// ──
 
 #[test]
 fn reusable_closure_is_callable_repeatedly() {

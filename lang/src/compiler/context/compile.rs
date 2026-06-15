@@ -5,15 +5,17 @@ use std::cell::Cell;
 use pest::iterators::Pair;
 use thiserror::Error;
 
+use crate::compiler::context::arenas::Arenas;
 use crate::compiler::diagnostics::SandDiagnostic;
+use crate::compiler::structure::AdtDef;
 use crate::compiler::structure::CodeModule;
-use crate::compiler::structure::EnumDef;
 use crate::compiler::structure::EnumVariant;
 use crate::compiler::structure::FileRef;
 use crate::compiler::structure::FunRef;
 use crate::compiler::structure::FunSig;
 use crate::compiler::structure::ImplDef;
 use crate::compiler::structure::Map;
+use crate::compiler::structure::ModuleImports;
 use crate::compiler::structure::ModuleInfo;
 use crate::compiler::structure::ModuleRef;
 use crate::compiler::structure::OriginalFun;
@@ -23,6 +25,7 @@ use crate::compiler::structure::Range;
 use crate::compiler::structure::RegionParam;
 use crate::compiler::structure::RegionParamSpec;
 use crate::compiler::structure::Set;
+use crate::compiler::structure::TypeConstraint;
 use crate::compiler::structure::TypeHead;
 use crate::compiler::structure::TypeParam;
 use crate::compiler::structure::TypeParamSpec;
@@ -33,7 +36,7 @@ use crate::compiler::structure::VarName;
 use crate::internal_bug;
 use crate::ir_types::hhir::HirVar;
 use crate::lang::types::CommonTypes;
-use crate::lang::types::EnumRef;
+use crate::lang::types::AdtRef;
 use crate::lang::types::FnMode;
 use crate::lang::types::Kind;
 use crate::lang::types::KindId;
@@ -48,97 +51,6 @@ use crate::passes::parse::Rule;
 /// This should not be used and is intentionally misspelled to be easily
 /// detectable.
 const DEFAULT_MODULE_NAME: &str = "mAin";
-
-/// A module's `use` imports (Step M). Source modules are kept by name and
-/// resolved to a [`ModuleRef`] lazily at name-resolution time.
-#[derive(Default)]
-struct ModuleImports {
-    /// `use src::name` — imported item name → source module name.
-    explicit: std::collections::BTreeMap<String, String>,
-    /// `use src::*` — glob-imported source module names.
-    globs: Vec<String>,
-}
-
-// ============================= Arena =========================================
-
-/// Backing store for all arena-allocated compiler data.
-///
-/// this is opaque by design, since only [`CompileCtx`] internals allocate
-/// through it. to swap the allocators we only need to change this struct and
-/// its methods.
-///
-/// `bump` holds `Copy`, destructor-free type data ([`TyKind`]). The
-/// [`typed_arena::Arena`]s hold owning data ([`OriginalFun`], [`CodeModule`],
-/// [`EnumDef`], [`OriginalVar`]) whose `String`/`Vec` fields must have their
-/// destructors run when the arena is dropped, since `bumpalo` would leak them.
-struct Arenas {
-    bump: bumpalo::Bump,
-    functions: typed_arena::Arena<OriginalFun<'static>>,
-    modules: typed_arena::Arena<CodeModule>,
-    enums: typed_arena::Arena<EnumDef<'static>>,
-    variables: typed_arena::Arena<OriginalVar>,
-}
-
-/// Safety: after the initial compilation phase, the arena is never mutated
-/// again; only existing allocations are read. `bumpalo::Bump` and
-/// `typed_arena::Arena` both use `Cell<>` internally, which makes them `!Sync`
-/// to prevent concurrent *writes*, but since the LSP and other multi-threaded
-/// users only read after compilation, sharing `Arenas` across threads is sound.
-///
-/// todo: create a new struct `RoArena` that takes ownership of the inner arenas
-/// after compilation has finished, and implement send + sync on that
-unsafe impl Send for Arenas {}
-unsafe impl Sync for Arenas {}
-
-impl Arenas {
-    fn new() -> Self {
-        Self {
-            bump: bumpalo::Bump::new(),
-            functions: typed_arena::Arena::new(),
-            modules: typed_arena::Arena::new(),
-            enums: typed_arena::Arena::new(),
-            variables: typed_arena::Arena::new(),
-        }
-    }
-
-    fn alloc_ty<'tcx>(&'tcx self, kind: TyKind<'tcx>) -> &'tcx TyKind<'tcx> {
-        self.bump.alloc(kind)
-    }
-
-    fn alloc_ty_slice<'tcx>(&'tcx self, tys: &[Ty<'tcx>]) -> &'tcx [Ty<'tcx>] {
-        self.bump.alloc_slice_copy(tys)
-    }
-
-    fn alloc_region_slice(&self, regions: &[Region]) -> &[Region] {
-        self.bump.alloc_slice_copy(regions)
-    }
-
-    // The `typed_arena` allocators are invariant in their element lifetime, so
-    // we store them as `'static` and transmute the borrow to `'tcx` on the way
-    // out. This is sound: the returned reference cannot outlive `&'tcx self`,
-    // and every `'tcx` value stored inside (e.g. `ModuleRef<'tcx>`) is itself
-    // an arena reference with the same provenance.
-
-    fn alloc_function<'tcx>(&'tcx self, f: OriginalFun<'tcx>) -> &'tcx OriginalFun<'tcx> {
-        let f: OriginalFun<'static> = unsafe { std::mem::transmute(f) };
-        let r: &'tcx OriginalFun<'static> = self.functions.alloc(f);
-        unsafe { std::mem::transmute(r) }
-    }
-
-    fn alloc_module(&self, m: CodeModule) -> &CodeModule {
-        self.modules.alloc(m)
-    }
-
-    fn alloc_enum<'tcx>(&'tcx self, e: EnumDef<'tcx>) -> &'tcx EnumDef<'tcx> {
-        let e: EnumDef<'static> = unsafe { std::mem::transmute(e) };
-        let r: &'tcx EnumDef<'static> = self.enums.alloc(e);
-        unsafe { std::mem::transmute(r) }
-    }
-
-    fn alloc_variable(&self, v: OriginalVar) -> &OriginalVar {
-        self.variables.alloc(v)
-    }
-}
 
 // ============================= Context =======================================
 
@@ -157,7 +69,7 @@ pub struct CompileCtx<'tcx> {
     tuple_interner: Map<Vec<Ty<'tcx>>, Ty<'tcx>>,
     /// Interner for generic enum instantiations, keyed by base enum + type args
     /// + region args (so `Holder<'a>` and `Holder<'b>` are distinct types).
-    app_interner: Map<(EnumRef<'tcx>, Vec<Ty<'tcx>>, Vec<Region>), Ty<'tcx>>,
+    app_interner: Map<(AdtRef<'tcx>, Vec<Ty<'tcx>>, Vec<Region>), Ty<'tcx>>,
     /// Interner for region-ascribed types `T @ 'r`, keyed by inner type +
     /// region.
     region_ty_interner: Map<(Ty<'tcx>, Region), Ty<'tcx>>,
@@ -185,7 +97,7 @@ pub struct CompileCtx<'tcx> {
     /// check.
     anon_region_var: Option<RegionVar>,
     /// Stack of region variables for the lexically-nested scopes (the function,
-    /// then each enclosing block) currently being type-checked (Step 8b). Used
+    /// then each enclosing block) currently being type-checked. Used
     /// by the borrow escape check to compare lifetimes by nesting depth.
     region_scope_stack: Vec<RegionVar>,
     /// Nesting depth of each lexical scope region (0 = function scope, deeper =
@@ -198,8 +110,8 @@ pub struct CompileCtx<'tcx> {
     /// constraint with its own). Set by `infer_function`, restored on exit.
     cur_where_constraints: Vec<RegionConstraint>,
     /// The `where T : C` typeclass constraints of the function currently being
-    /// checked — assumed while resolving method calls on its type parameters.
-    cur_type_constraints: Vec<crate::compiler::structure::TypeConstraint>,
+    /// checked, assumed while resolving method calls on its type parameters.
+    cur_type_constraints: Vec<TypeConstraint>,
 
     // type parameters
     /// Number of type parameters allocated so far.
@@ -229,7 +141,7 @@ pub struct CompileCtx<'tcx> {
     global_functions: Vec<FunRef<'tcx>>,
     function_signatures: Map<FunRef<'tcx>, FunSig<'tcx>>,
     pub entrypoint: Option<FunRef<'tcx>>,
-    /// External (FFI) functions (Memory Step A): a bodyless `extern def` bound
+    /// External (FFI) functions: a bodyless `extern def` bound
     /// to a C symbol. Registered with a real `FunRef`+`FunSig` (so calls
     /// resolve through the normal path) but no body in any IR; codegen
     /// declares the symbol, the interpreter dispatches to a built-in. Maps
@@ -237,14 +149,14 @@ pub struct CompileCtx<'tcx> {
     extern_funcs: Map<FunRef<'tcx>, (ModuleRef<'tcx>, String)>,
 
     // enums
-    enum_defs: Vec<EnumRef<'tcx>>,
-    enum_names: Map<String, EnumRef<'tcx>>,
+    enum_defs: Vec<AdtRef<'tcx>>,
+    enum_names: Map<String, AdtRef<'tcx>>,
     /// Interner for ad-hoc tag-union types, keyed by sorted tag list.
-    anon_tag_types: Map<Vec<String>, EnumRef<'tcx>>,
+    anon_tag_types: Map<Vec<String>, AdtRef<'tcx>>,
     /// The module currently being built (set in `build_function`).
     cur_build_module: Option<ModuleRef<'tcx>>,
 
-    // typeclasses (Step 10)
+    // typeclasses
     /// All registered typeclasses, indexed by `TypeclassRef`.
     typeclasses: Vec<TypeclassDef<'tcx>>,
     /// Class name -> ref. Global for now (class names are unique program-wide);
@@ -259,22 +171,21 @@ pub struct CompileCtx<'tcx> {
     /// when `core.sand` registers them), used to drive implicit-copy.
     copy_class: Option<TypeclassRef>,
     clone_class: Option<TypeclassRef>,
-    /// The `Heaped` lang-item class (Memory Step A registration hook). The
-    /// class itself is declared in `core.sand` at Step C; this slot stays
-    /// `None` until then, but the by-name registration is reserved here so
-    /// the compiler can emit `alloc`/`borrow`/`release` calls once it
-    /// exists.
+    /// The `Heaped` lang-item class (a registration hook). The class itself is
+    /// declared in `core.sand`; this slot stays `None` until then, but the
+    /// by-name registration is reserved here so the compiler can emit
+    /// `alloc`/`borrow`/`release` calls once it exists.
     heaped_class: Option<TypeclassRef>,
-    /// Concrete `Unique<…>` enum instances (Memory Step C.5). Monomorphisation
+    /// Concrete `Unique<...>` enum instances. Monomorphisation
     /// erases the generic `Unique<T>` into an ordinary specialised enum, but
     /// codegen still needs to know "this enum is a heap handle" to emit a
     /// `free` when one is dropped. `request_enum` records each specialisation
     /// of the `Unique` lang-item here.
-    unique_instances: Set<EnumRef<'tcx>>,
+    unique_instances: Set<AdtRef<'tcx>>,
 
     // modules
     project_modules: Vec<ModuleRef<'tcx>>,
-    /// Per-module `use` imports (Step M): for an importing module, the explicit
+    /// Per-module `use` imports: for an importing module, the explicit
     /// `use src::name` brings `name` into its unqualified scope, and `use
     /// src::*` glob-imports `src`. Source modules are stored by name and
     /// resolved lazily (every module is registered before resolution runs).
@@ -469,7 +380,7 @@ impl<'tcx> CompileCtx<'tcx> {
     /// distinct types.
     pub fn intern_app(
         &mut self,
-        er: EnumRef<'tcx>,
+        er: AdtRef<'tcx>,
         args: Vec<Ty<'tcx>>,
         regions: Vec<Region>,
     ) -> Ty<'tcx> {
@@ -488,7 +399,7 @@ impl<'tcx> CompileCtx<'tcx> {
 
     /// # get the _kind of a type_
     /// returns the default kind for a value of that type
-    /// (see Calculus§5 kinding judgment).
+    /// (see the Calculus kinding rules).
     /// A shared reference `&'r T` has kind `Borrowed` (`K-Borrow`); an
     /// exclusive reference `&'r mut T` has kind `BorrowedMut`
     /// (`K-BorrowMut`); everything else is `Owned`. The region lives on the
@@ -515,7 +426,7 @@ impl<'tcx> CompileCtx<'tcx> {
         self.cur_regions.get(name).map(|&rv| Region::Var(rv))
     }
 
-    /// Intern a region-ascribed type `inner @ region` (Calculus §2.3).
+    /// Intern a region-ascribed type `inner @ region` (Calculus: Types).
     pub fn region_ty(&mut self, inner: Ty<'tcx>, region: Region) -> Ty<'tcx> {
         let key = (inner, region);
         if let Some(&ty) = self.region_ty_interner.get(&key) {
@@ -527,17 +438,18 @@ impl<'tcx> CompileCtx<'tcx> {
         ty
     }
 
-    /// Intern a shared reference type `&region inner` (Calculus §2.3).
+    /// Intern a shared reference type `&region inner` (Calculus: Types).
     pub fn ref_ty(&mut self, region: Region, inner: Ty<'tcx>) -> Ty<'tcx> {
         self.intern_ty(TyKind::Ref(region, inner))
     }
 
-    /// Intern an exclusive reference type `&region mut inner` (Calculus §2.3).
+    /// Intern an exclusive reference type `&region mut inner` (Calculus:
+    /// Types).
     pub fn ref_mut_ty(&mut self, region: Region, inner: Ty<'tcx>) -> Ty<'tcx> {
         self.intern_ty(TyKind::RefMut(region, inner))
     }
 
-    /// Intern a raw pointer type `Ptr<inner>` (Memory Step A). Unlike a
+    /// Intern a raw pointer type `Ptr<inner>`. Unlike a
     /// reference, it carries no region and survives monomorphisation.
     pub fn ptr_ty(&mut self, inner: Ty<'tcx>) -> Ty<'tcx> {
         self.intern_ty(TyKind::Ptr(inner))
@@ -595,8 +507,8 @@ impl<'tcx> CompileCtx<'tcx> {
 
     /// Canonicalise the region of every reference (`&'r T`, `&'r mut T`) in
     /// `ty` to the shared anonymous region. Reference types carry no
-    /// *type-level* region constraints — region safety is the lexical
-    /// escape check, which reads the borrow's `Kind`, not its type — so at
+    /// *type-level* region constraints: region safety is the lexical
+    /// escape check, which reads the borrow's `Kind`, not its type, so at
     /// a call boundary a `&'r T` parameter accepts any `&_ T` argument
     /// (regions are inferred away). This is the type-checker's region
     /// inference; `T @ 'r` ascriptions keep their own region but their
@@ -697,7 +609,8 @@ impl<'tcx> CompileCtx<'tcx> {
         }
     }
 
-    /// The result region of a call (Calculus §6.3, item 8): the greatest lower
+    /// The result region of a call (Calculus: Region Substitution at Call
+    /// Sites): the greatest lower
     /// bound (shortest-lived) of the argument regions, so the result cannot
     /// outlive any borrowed argument. Argument regions live at the call site,
     /// so the GLB is well-defined; mutually-incomparable regions fall back
@@ -727,7 +640,7 @@ impl<'tcx> CompileCtx<'tcx> {
     /// Infer the region substitution for a call: map each callee region
     /// parameter (and the shared elided/anon region) to the **meet** of the
     /// actual argument regions it aligns with. This is the region analogue of
-    /// type-parameter [`unify`](crate::passes::type_ast::generics::unify) — the
+    /// type-parameter [`unify`](crate::passes::type_ast::generics::unify): the
     /// declared parameter types are walked in parallel with the actual argument
     /// types and each solved region collects the actual regions in its
     /// position; a region bound from several arguments meets them (so the
@@ -869,8 +782,7 @@ impl<'tcx> CompileCtx<'tcx> {
 
     /// The shared anonymous region used for elided borrows (`&e`, `&T` with no
     /// explicit lifetime). All elided borrows share one region for now, so that
-    /// an elided `&T` type and an elided `&e` value compare equal. Per-borrow
-    /// fresh regions and the escape check arrive with the solver in Step 8b.
+    /// an elided `&T` type and an elided `&e` value compare equal.
     pub fn anon_region(&mut self) -> Region {
         if let Some(rv) = self.anon_region_var {
             return Region::Var(rv);
@@ -881,7 +793,7 @@ impl<'tcx> CompileCtx<'tcx> {
         Region::Var(rv)
     }
 
-    // ---- lexical region scopes + the outlives solver (Step 8b) --------------
+    // ---- lexical region scopes + the outlives solver ------------------------
 
     /// Enter a fresh lexical region scope (a function body or a block),
     /// returning its region. Each scope nests one level deeper than its parent.
@@ -921,17 +833,17 @@ impl<'tcx> CompileCtx<'tcx> {
     }
 
     /// Whether `r` is a real lexical scope region (allocated by
-    /// [`Self::enter_region_scope`]) — i.e. a *local* region (the function
-    /// frame or a block) — as opposed to a *region parameter*, the
+    /// [`Self::enter_region_scope`]): i.e. a *local* region (the function
+    /// frame or a block), as opposed to a *region parameter*, the
     /// elided-borrow region, or `'static` (all of which outlive the frame).
     /// Used by the function-return escape check: only non-scope (outer)
-    /// regions may be named by a returned value's type (Calculus §6.3,
-    /// frame boundary).
+    /// regions may be named by a returned value's type (Calculus: The Escape
+    /// Check, frame boundary).
     pub fn is_scope_region(&self, r: Region) -> bool {
         matches!(r, Region::Var(rv) if self.region_depths.contains_key(&rv))
     }
 
-    /// Does `longer` outlive `shorter` (`longer ≥ shorter`; Calculus §1.1)?
+    /// Does `longer` outlive `shorter` (`longer ≥ shorter`; Calculus: Regions)?
     ///
     /// `'static` outlives everything and every region outlives itself; a
     /// shallower lexical scope outlives a deeper (inner) one; and `assumptions`
@@ -948,7 +860,7 @@ impl<'tcx> CompileCtx<'tcx> {
         }
         // Lexical nesting: a shallower region outlives a deeper one. Depth is the
         // nesting level, with region parameters, the elided region, and `'static`
-        // all at depth 0 (outermost) — so a caller lifetime or the function frame
+        // all at depth 0 (outermost), so a caller lifetime or the function frame
         // outlives every inner block. Conversely nothing is concluded to outlive
         // a depth-0 region here (it stays conservative: only equality, `'static`,
         // or an explicit assumption can).
@@ -989,7 +901,7 @@ impl<'tcx> CompileCtx<'tcx> {
     ///
     /// Every `EnumRef` is interned as a `Ty` at registration time, so this
     /// lookup is a pure read and always succeeds.
-    pub fn enum_ty(&self, er: EnumRef<'tcx>) -> Ty<'tcx> {
+    pub fn enum_ty(&self, er: AdtRef<'tcx>) -> Ty<'tcx> {
         *self
             .ty_interner
             .get(&TyKind::Enum(er))
@@ -1106,10 +1018,13 @@ impl<'tcx> CompileCtx<'tcx> {
 
     /// The interned [`Ty`] for a type parameter use site.
     /// The declared kind of a type parameter: `Owned` for ordinary
-    /// params, an arrow for higher-kinded ones. Defaults to `Owned` for ids with
-    /// no recorded kind (none should occur in practice).
+    /// params, an arrow for higher-kinded ones. Defaults to `Owned` for ids
+    /// with no recorded kind (none should occur in practice).
     pub fn type_param_kind(&self, id: TypeParamId) -> Kind {
-        self.type_param_kinds.get(&id).copied().unwrap_or(Kind::Owned)
+        self.type_param_kinds
+            .get(&id)
+            .copied()
+            .unwrap_or(Kind::Owned)
     }
 
     pub fn param_ty(&mut self, id: TypeParamId) -> Ty<'tcx> {
@@ -1145,7 +1060,7 @@ impl<'tcx> CompileCtx<'tcx> {
         Ok(OriginalVarRef(r))
     }
 
-    /// Mint a fresh, uniquified variable not backed by any source `Pair` —
+    /// Mint a fresh, uniquified variable not backed by any source `Pair`,
     /// used by compiler-synthesised bindings (e.g. the heap lowering's
     /// `unique_take` node temporaries and the all-binding match desugaring).
     pub fn fresh_synthetic_var(
@@ -1269,7 +1184,7 @@ impl<'tcx> CompileCtx<'tcx> {
         self.entrypoint == Some(fun)
     }
 
-    /// Record `fun` as an external (FFI) function (Memory Step A) bound to the
+    /// Record `fun` as an external (FFI) function bound to the
     /// given C symbol in `module`.
     pub fn register_extern(&mut self, fun: FunRef<'tcx>, module: ModuleRef<'tcx>, symbol: String) {
         self.extern_funcs.insert(fun, (module, symbol));
@@ -1320,7 +1235,7 @@ impl<'tcx> CompileCtx<'tcx> {
         range: Range,
         module: ModuleRef<'tcx>,
         derives: Vec<crate::compiler::structure::Derivable>,
-    ) -> Result<EnumRef<'tcx>, ContextError> {
+    ) -> Result<AdtRef<'tcx>, ContextError> {
         if let Some(existing) = self.enum_names.get(name) {
             return Err(ContextError::DuplicateEnum {
                 name: name.to_string(),
@@ -1329,7 +1244,7 @@ impl<'tcx> CompileCtx<'tcx> {
             });
         }
         let id = self.enum_defs.len();
-        let def = EnumDef {
+        let def = AdtDef {
             name: name.to_string(),
             variants: variant_names
                 .into_iter()
@@ -1346,7 +1261,7 @@ impl<'tcx> CompileCtx<'tcx> {
             is_anonymous: false,
             derives,
         };
-        let er = EnumRef(self.arenas.alloc_enum(def));
+        let er = AdtRef(self.arenas.alloc_enum(def));
         self.enum_defs.push(er);
         self.enum_names.insert(name.to_string(), er);
         self.intern_ty(TyKind::Enum(er));
@@ -1356,23 +1271,23 @@ impl<'tcx> CompileCtx<'tcx> {
     /// Phase 2 of enum registration: attach a resolved payload type to a
     /// variant that was registered (with `payload: None`) by
     /// [`Self::register_enum`]. Uses the variant's `Cell` so the shared,
-    /// arena-allocated `EnumDef` does not need to be mutably re-borrowed.
+    /// arena-allocated `AdtDef` does not need to be mutably re-borrowed.
     pub fn set_variant_payload(
         &mut self,
-        er: EnumRef<'tcx>,
+        er: AdtRef<'tcx>,
         variant_idx: usize,
         payload: Ty<'tcx>,
     ) {
         er.0.variants[variant_idx].payload.set(Some(payload));
     }
 
-    /// Every registered enum, in registration order (Memory Step C uses this
-    /// for recursion detection / `Heaped` legality).
-    pub fn all_enums(&self) -> impl Iterator<Item = EnumRef<'tcx>> + '_ {
+    /// Every registered enum, in registration order (recursion detection and
+    /// `Heaped` legality use this).
+    pub fn all_enums(&self) -> impl Iterator<Item = AdtRef<'tcx>> + '_ {
         self.enum_defs.iter().copied()
     }
 
-    pub fn get_enum(&self, er: EnumRef<'tcx>) -> &'tcx EnumDef<'tcx> {
+    pub fn get_enum(&self, er: AdtRef<'tcx>) -> &'tcx AdtDef<'tcx> {
         er.0
     }
 
@@ -1382,11 +1297,11 @@ impl<'tcx> CompileCtx<'tcx> {
         TyDisplay { ty, ctx: self }
     }
 
-    pub fn lookup_enum_by_name(&self, name: &str) -> Option<EnumRef<'tcx>> {
+    pub fn lookup_enum_by_name(&self, name: &str) -> Option<AdtRef<'tcx>> {
         self.enum_names.get(name).copied()
     }
 
-    pub fn lookup_variant(&self, er: EnumRef<'tcx>, variant: &str) -> Option<usize> {
+    pub fn lookup_variant(&self, er: AdtRef<'tcx>, variant: &str) -> Option<usize> {
         er.0.variants.iter().position(|v| v.name == variant)
     }
 
@@ -1394,19 +1309,19 @@ impl<'tcx> CompileCtx<'tcx> {
         &self,
         module: ModuleRef<'tcx>,
         name: &str,
-    ) -> Option<EnumRef<'tcx>> {
+    ) -> Option<AdtRef<'tcx>> {
         self.enum_defs
             .iter()
             .find(|er| er.0.src_module == module && er.0.name == name)
             .copied()
     }
 
-    /// Resolve a bare (unqualified) type name lexically (Step M): the importing
+    /// Resolve a bare (unqualified) type name lexically: the importing
     /// `module`, then its explicit `use` imports, then its glob `use` imports,
     /// then the prelude (`core`). A type in another *user* module is reachable
     /// only if qualified (`mod::Type`) or `use`d. (`core` defines no types yet,
     /// so the prelude layer is empty.)
-    pub fn lookup_enum_scoped(&self, name: &str, module: ModuleRef<'tcx>) -> Option<EnumRef<'tcx>> {
+    pub fn lookup_enum_scoped(&self, name: &str, module: ModuleRef<'tcx>) -> Option<AdtRef<'tcx>> {
         // own module
         if let Some(er) = self.lookup_enum_in_module(module, name) {
             return Some(er);
@@ -1417,9 +1332,9 @@ impl<'tcx> CompileCtx<'tcx> {
         {
             return Some(er);
         }
-        // glob `use src::*` — two distinct hits are ambiguous and resolve to
+        // glob `use src::*`: two distinct hits are ambiguous and resolve to
         // nothing, forcing a qualification rather than a silent pick.
-        let mut glob_hit: Option<EnumRef<'tcx>> = None;
+        let mut glob_hit: Option<AdtRef<'tcx>> = None;
         for g in self.glob_import_modules(module) {
             if let Some(er) = self.lookup_enum_in_module(g, name) {
                 match glob_hit {
@@ -1443,11 +1358,11 @@ impl<'tcx> CompileCtx<'tcx> {
     /// [`Self::lookup_enum_scoped`] against the module currently being built
     /// (set by [`Self::set_build_module`]). Used by `build_type` to resolve
     /// bare type names during AST construction.
-    pub fn lookup_enum_current(&self, name: &str) -> Option<EnumRef<'tcx>> {
+    pub fn lookup_enum_current(&self, name: &str) -> Option<AdtRef<'tcx>> {
         self.lookup_enum_scoped(name, self.cur_build_module?)
     }
 
-    // ---- module imports (`use`, Step M) -------------------------------------
+    // ---- module imports (`use`) ---------------------------------------------
 
     /// Record a `use src::name;` (item = `Some(name)`) or `use src::*;`
     /// (item = `None`) declared in `importing`.
@@ -1461,8 +1376,8 @@ impl<'tcx> CompileCtx<'tcx> {
         }
     }
 
-    /// The source module a `name` is explicitly imported from (`use
-    /// src::name`).
+    /// The source module a `name` is explicitly imported from
+    /// (`use src::name`).
     pub fn explicit_import(
         &self,
         importing: ModuleRef<'tcx>,
@@ -1503,13 +1418,13 @@ impl<'tcx> CompileCtx<'tcx> {
     /// names. Returns the same `EnumRef` for any two call sites with the same
     /// tag set (structural identity).
     ///
-    /// The resulting `EnumDef` uses a sorted `variants` list so that variant
+    /// The resulting `AdtDef` uses a sorted `variants` list so that variant
     /// indices are stable regardless of the order tags were written.
     pub fn register_or_get_anon_enum(
         &mut self,
         mut tags: Vec<String>,
         range: Range,
-    ) -> EnumRef<'tcx> {
+    ) -> AdtRef<'tcx> {
         tags.sort();
         tags.dedup();
         if let Some(&er) = self.anon_tag_types.get(&tags) {
@@ -1526,7 +1441,7 @@ impl<'tcx> CompileCtx<'tcx> {
             .or_else(|| self.project_modules.first().copied())
             .unwrap_or_else(|| internal_bug!("no module context for anonymous enum"));
         let id = self.enum_defs.len();
-        let def = EnumDef {
+        let def = AdtDef {
             name: display_name,
             variants: tags
                 .iter()
@@ -1544,7 +1459,7 @@ impl<'tcx> CompileCtx<'tcx> {
             // anonymous tag-unions are never recursive and derive nothing.
             derives: Vec::new(),
         };
-        let er = EnumRef(self.arenas.alloc_enum(def));
+        let er = AdtRef(self.arenas.alloc_enum(def));
         self.enum_defs.push(er);
         // NOTE: anonymous enums are not inserted into `enum_names`; they are
         // only looked up via `anon_tag_types`.
@@ -1553,7 +1468,7 @@ impl<'tcx> CompileCtx<'tcx> {
         er
     }
 
-    pub fn enum_display(&self, enum_ref: EnumRef<'tcx>, variant: usize) -> String {
+    pub fn enum_display(&self, enum_ref: AdtRef<'tcx>, variant: usize) -> String {
         let variants = &enum_ref.0.variants;
         if variants.len() <= variant {
             internal_bug!("enum display indexed with oob variant: {enum_ref:?}[{variant}]");
@@ -1587,7 +1502,7 @@ impl<'tcx> CompileCtx<'tcx> {
         match def.name.as_str() {
             "Copy" => self.copy_class = Some(tref),
             "Clone" => self.clone_class = Some(tref),
-            // Reserved for Step C; harmless until `core.sand` declares `Heaped`.
+            // Reserved; harmless until `core.sand` declares `Heaped`.
             "Heaped" => self.heaped_class = Some(tref),
             _ => {}
         }
@@ -1636,33 +1551,31 @@ impl<'tcx> CompileCtx<'tcx> {
         self.copy_class
     }
 
-    /// The `Heaped` lang-item class, if `core.sand` declared it (Step C).
-    /// `None` through Steps A/B; the registration hook is reserved in Step
-    /// A.
+    /// The `Heaped` lang-item class, if `core.sand` declared it. `None` until
+    /// then; the registration hook is reserved ahead of time.
     pub fn heaped_class(&self) -> Option<TypeclassRef> {
         self.heaped_class
     }
 
-    /// The `Unique<T>` handle enum lang-item (Memory Step C): the core-lib
+    /// The `Unique<T>` handle enum lang-item: the core-lib
     /// `type Unique<T> = U(Ptr<T>)` backing the unique heap strategy. The heap
     /// lowering rewrites every `deriving Heaped` value into a `Unique<Node>`,
     /// and codegen recognizes this enum to make dropping a handle a
     /// `unique_release`. Resolved by name (like the other lang-items); `None`
     /// if `core.sand` has not been loaded.
-    pub fn unique_enum(&self) -> Option<EnumRef<'tcx>> {
+    pub fn unique_enum(&self) -> Option<AdtRef<'tcx>> {
         self.lookup_enum_by_name("Unique")
     }
 
-    /// Record that `er` is a monomorphised `Unique<…>` instance (Step C.5);
+    /// Record that `er` is a monomorphised `Unique<…>` instance;
     /// called by monomorphisation when it specialises the `Unique` lang-item.
-    pub fn mark_unique_instance(&mut self, er: EnumRef<'tcx>) {
+    pub fn mark_unique_instance(&mut self, er: AdtRef<'tcx>) {
         self.unique_instances.insert(er);
     }
 
-    /// Whether `er` is a (monomorphised) `Unique<…>` heap handle — i.e.
-    /// dropping a value of this enum must `free` its backing allocation
-    /// (Step C.5).
-    pub fn is_unique_handle(&self, er: EnumRef<'tcx>) -> bool {
+    /// Whether `er` is a (monomorphised) `Unique<…>` heap handle: i.e.
+    /// dropping a value of this enum must `free` its backing allocation.
+    pub fn is_unique_handle(&self, er: AdtRef<'tcx>) -> bool {
         self.unique_instances.contains(&er)
     }
 
@@ -1920,7 +1833,7 @@ impl std::fmt::Display for TyDisplay<'_, '_> {
                 }
                 write!(f, ")")
             }
-            // `Name<T, ...>` — the enum name applied to its type arguments. Region
+            // `Name<T, ...>`: the enum name applied to its type arguments. Region
             // arguments are elided (their internal ids carry no source meaning in
             // a diagnostic; lifetime errors are reported separately).
             TyKind::App(er, args, _) => {
@@ -1938,7 +1851,7 @@ impl std::fmt::Display for TyDisplay<'_, '_> {
                 Ok(())
             }
             // references print as `&T` / `&mut T`; a region ascription shows only
-            // its inner type — internal regions are omitted for readability.
+            // its inner type, with internal regions omitted for readability.
             TyKind::Ref(_, inner) => write!(f, "&{}", self.ctx.display_ty(*inner)),
             TyKind::RefMut(_, inner) => write!(f, "&mut {}", self.ctx.display_ty(*inner)),
             TyKind::Region(inner, _) => write!(f, "{}", self.ctx.display_ty(*inner)),
@@ -1959,8 +1872,8 @@ fn apply_region_subst(r: Region, subst: &Map<RegionVar, Region>) -> Region {
 }
 
 /// Walk a declared parameter type against an actual argument type in parallel,
-/// recording — for every region position whose declared region is one of the
-/// `solve` variables — the actual region found there. The accumulated
+/// recording, for every region position whose declared region is one of the
+/// `solve` variables, the actual region found there. The accumulated
 /// candidates are later met per variable (see
 /// [`CompileCtx::infer_region_subst`]). Region positions whose declared region
 /// is not solved (e.g. `'static`) are ignored; structural mismatches simply
@@ -1997,7 +1910,7 @@ fn collect_region_bindings(
         (TyKind::App(_, ds, dr), TyKind::App(_, as_, ar)) if ds.len() == as_.len() => {
             // pair the region args positionally: a declared `Holder<'a>` parameter
             // binds 'a from the actual argument's region (call-site inference for
-            // ADT-typed parameters). Bind before recursing — `bind` holds `out`.
+            // ADT-typed parameters). Bind before recursing; `bind` holds `out`.
             for (dreg, areg) in dr.iter().zip(ar.iter()) {
                 bind(*dreg, *areg);
             }

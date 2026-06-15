@@ -3,8 +3,8 @@
 //! These tests cover *declaring* generic functions and enums: the grammar
 //! accepts type parameters, they are threaded through the IRs, and a `T` in a
 //! signature/body resolves to an opaque `Ty::Param`. Generic *instantiation*
-//! (calling a generic function with concrete types) is Step 2, so these tests
-//! only define generic items, calls are not exercised here.
+//! (calling a generic function with concrete types) is exercised separately, so
+//! these tests only define generic items; calls are not exercised here.
 
 use lang::ir_types::typed_hir::Expression;
 
@@ -439,7 +439,7 @@ fn run_generic_function_returning_generic_enum() {
     assert_eq!(run_both(src), Expression::Int(13));
 }
 
-// ── Step 5: kind and variance annotations on type parameters
+// ── kind and variance annotations on type parameters
 // ──────────────────
 
 use lang::lang::types::Kind;
@@ -490,7 +490,7 @@ fn contravariant_on_phantom_param_is_accepted() {
     typecheck("type Phantom<-a> = Red | Green \n def main(): Int := 0");
 }
 
-// ── Step 13 variance follow-up: function arrows are the first consumer
+// ── variance follow-up: function arrows are the first consumer
 // (contravariant) positions, and applications compose nested variance. ────────
 
 #[test]
@@ -515,7 +515,7 @@ fn covariant_param_in_function_result_is_accepted() {
 #[test]
 fn param_in_both_function_positions_must_be_inferred_invariant() {
     // `a` occurs in both argument and result of `a -> a`, so neither explicit
-    // polarity is sound — only the (unannotated) inferred-invariant default is.
+    // polarity is sound; only the (unannotated) inferred-invariant default is.
     typecheck_fails("type Endo<+a> = MkEndo(a -> a) \n def main(): Int := 0");
     typecheck_fails("type Endo<-a> = MkEndo(a -> a) \n def main(): Int := 0");
     typecheck("type Endo<a> = MkEndo(a -> a) \n def main(): Int := 0");
@@ -595,7 +595,7 @@ fn generic_mut_borrow_parameter_infers_type() {
 
 #[test]
 fn generic_borrow_parameter_conflict_fails() {
-    // `&T` forces `T = Int`, then `T` forces `T = Bool` — unsolvable.
+    // `&T` forces `T = Int`, then `T` forces `T = Bool`: unsolvable.
     typecheck_fails("def g<T>(a: &T, b: T): T := b \n def main(): Int := g(&5, true)");
 }
 

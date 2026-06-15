@@ -1,8 +1,4 @@
 //@TEST:{0}[42,7,42,22,43]
-// Step 13 — the Functor / Applicative / Monad hierarchy from `core.sand`,
-// instantiated for `Option`. Exercises higher-kinded instances (Step 11) whose
-// methods take and return lambdas (Step 13), plus return-type-driven dispatch
-// for `pure` (which has no `F<_>` argument to resolve its instance from).
 
 type Option<a> = None | Some(a)
 

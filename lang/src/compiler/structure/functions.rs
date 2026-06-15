@@ -97,7 +97,7 @@ impl<'tcx> OriginalFun<'tcx> {
 pub struct FunSig<'tcx> {
     pub args: Vec<(UniqVar<'tcx>, Ty<'tcx>)>,
     pub ret_ty: Ty<'tcx>,
-    /// The function's declared region parameters — the lifetimes inferred at a
+    /// The function's declared region parameters: the lifetimes inferred at a
     /// call site (call-site region inference).
     pub region_params: Vec<RegionParam>,
     /// The function's `where 'a >= 's` outlives constraints, checked at each

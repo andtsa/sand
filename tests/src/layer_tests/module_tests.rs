@@ -1,4 +1,4 @@
-//! Module system (Step M): lexical resolution + `use` imports.
+//! Module system: lexical resolution + `use` imports.
 //!
 //! Unqualified names resolve in the caller's own module → explicit `use` → glob
 //! `use` → prelude (`core`). There is no global fallback: a name in another

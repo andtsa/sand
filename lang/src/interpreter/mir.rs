@@ -1,18 +1,18 @@
 //! an interpreter for the MIR
 //!
-//! ## Store model (R4)
+//! ## Store model
 //!
-//! Faithful to the Calculus's `BorrowedMut` semantics (§3.2, §6.4): a mutable
-//! borrow denotes a *storage location*, not a copied value, and a write through
-//! it mutates that location observably to every alias — exactly what the LLVM
-//! backend does with `alloca` slots + `load`/`store`.
+//! Faithful to the Calculus's `BorrowedMut` semantics: a mutable borrow denotes
+//! a *storage location*, not a copied value, and a write through it mutates
+//! that location observably to every alias, exactly what the LLVM backend does
+//! with `alloca` slots + `load`/`store`.
 //!
 //! We model storage as a graph of mutable **cells**. Each local owns a cell; a
 //! reference value ([`MirValue::Ref`]) is a *shared handle* to a cell. `&place`
 //! ([`RValue::Ref`]) yields the cell; a `[Deref]` projection
 //! ([`ProjElem::Deref`]) follows the handle; reads load the cell, writes store
 //! into it. Because a reference handle is passed by value into a callee's
-//! parameter cell, the callee's `*r = e` mutates the *caller's* storage —
+//! parameter cell, the callee's `*r = e` mutates the *caller's* storage:
 //! cross-frame write-through, just like a real pointer. The `Rc` is a
 //! meta-level implementation detail of the interpreter, not language-level GC:
 //! the static region/escape checker already guarantees no dangling, so the
@@ -29,7 +29,7 @@ use crate::lang::intrinsics::Intrinsic;
 use crate::lang::ops::Bop;
 use crate::lang::ops::CompOp;
 use crate::lang::ops::Uop;
-use crate::lang::types::EnumRef;
+use crate::lang::types::AdtRef;
 use crate::lang::types::Ty;
 use crate::lang::types::TyKind;
 
@@ -43,7 +43,7 @@ pub enum MirValue<'tcx> {
     Bool(bool),
     Unit,
     EnumVariant {
-        enum_ref: EnumRef<'tcx>,
+        enum_ref: AdtRef<'tcx>,
         variant_idx: usize,
         payload: Option<Box<MirValue<'tcx>>>,
     },
@@ -51,10 +51,10 @@ pub enum MirValue<'tcx> {
     /// A reference: a shared handle to the cell it points at. Produced by
     /// [`RValue::Ref`], consumed by reads/writes through a `[Deref]` place.
     Ref(Cell<'tcx>),
-    /// A closure value (Step 13): the lifted function and a pointer to its
-    /// captured environment (a `Ref` to a cell holding the env value — `Unit`,
-    /// the single capture, or a tuple). Consumed by `CallIndirect`, which passes
-    /// the env pointer as the lifted function's leading argument.
+    /// A closure value: the lifted function and a pointer to its captured
+    /// environment (a `Ref` to a cell holding the env value: `Unit`,
+    /// the single capture, or a tuple). Consumed by `CallIndirect`, which
+    /// passes the env pointer as the lifted function's leading argument.
     Closure {
         fn_name: crate::compiler::structure::FunRef<'tcx>,
         env: Box<MirValue<'tcx>>,
@@ -93,7 +93,7 @@ impl<'tcx> MirProgram<'tcx> {
         args: &[MirValue<'tcx>],
         ctx: &CompileCtx<'tcx>,
     ) -> Result<MirValue<'tcx>, MirInterpError> {
-        // External (FFI) functions (Memory Step A) have no MIR body; dispatch
+        // External (FFI) functions have no MIR body; dispatch
         // the known C symbols to simulated-heap built-ins.
         if ctx.is_extern(fun) {
             let symbol = ctx
@@ -166,7 +166,7 @@ fn execute_statement<'tcx>(
             let dst_ty = place_ty(dst, local_decls);
             let v = eval_rvalue(value, dst_ty, locals, prog, ctx)?;
             // store into the cell the place names (a `[Deref]` follows the
-            // reference held in the local — write-through).
+            // reference held in the local; write-through).
             *place_cell(dst, locals)?.borrow_mut() = Some(v);
             Ok(())
         }
@@ -176,8 +176,8 @@ fn execute_statement<'tcx>(
             eval_rvalue(value, ctx.types.unit, locals, prog, ctx)?;
             Ok(())
         }
-        // Drop (Step B) is a no-op until types acquire destructors (Step C);
-        // the cell's `Rc` reclaims storage when it falls out of scope.
+        // Drop is a no-op for types without destructors; the cell's `Rc`
+        // reclaims storage when it falls out of scope.
         Statement::Drop { .. } => Ok(()),
     }
 }
@@ -228,7 +228,7 @@ fn eval_rvalue<'tcx>(
     match rv {
         RValue::Use(op) => eval_operand(op, locals),
 
-        // `size_of::<T>()` (Step C): a layout-free approximation here — the
+        // `size_of::<T>()`: a layout-free approximation here, since the
         // interpreter's heap is a cell graph, so the exact byte size is
         // irrelevant (codegen computes the real one).
         RValue::SizeOf(ty) => Ok(MirValue::Int(crate::lang::intrinsics::interp_size_of(*ty))),
@@ -265,7 +265,7 @@ fn eval_rvalue<'tcx>(
             eval_intrinsic(*fn_name, arg_vals, ctx)
         }
 
-        // A closure value (Step 13): pack the captured operands into the env
+        // A closure value: pack the captured operands into the env
         // value (Unit / single / tuple), store it in a fresh cell, and keep a
         // pointer to it (so the lifted function can `__ptr_read` it).
         RValue::Closure { fn_name, env } => {
@@ -285,7 +285,7 @@ fn eval_rvalue<'tcx>(
             })
         }
 
-        // Indirect call (Step 13): evaluate the callee to a closure, then call
+        // Indirect call: evaluate the callee to a closure, then call
         // its lifted function with the env pointer followed by the arguments.
         RValue::CallIndirect { callee, args } => {
             let MirValue::Closure { fn_name, env } = eval_operand(callee, locals)? else {
@@ -466,7 +466,7 @@ fn eval_unop<'tcx>(op: Uop, v: MirValue<'tcx>) -> Result<MirValue<'tcx>, MirInte
     }
 }
 
-/// Execute a known external (FFI) function in the interpreter (Memory Step A).
+/// Execute a known external (FFI) function in the interpreter.
 /// There is no real heap; a `malloc`'d cell is a fresh interpreter cell and a
 /// pointer is a `MirValue::Ref` handle to it. `free` is a no-op (the `Rc` drop
 /// reclaims the cell).
@@ -548,7 +548,7 @@ fn eval_intrinsic<'tcx>(
                 ))),
             }
         }
-        // Raw-pointer ops (Memory Step A). A `Ptr<T>` is a cell handle, exactly
+        // Raw-pointer ops. A `Ptr<T>` is a cell handle, exactly
         // like a reference, so `read`/`write` are a load/store of that cell and
         // `cast` is the identity.
         Intrinsic::PtrRead => {
@@ -578,7 +578,7 @@ fn eval_intrinsic<'tcx>(
             debug_assert_eq!(args.len(), 1, "__ptr_cast expects 1 arg");
             Ok(args.into_iter().next().unwrap())
         }
-        // No-op until types acquire destructors (Step C); the value is simply
+        // No-op for types without destructors; the value is simply
         // discarded (its `Rc`-backed cells, if any, drop here).
         Intrinsic::DropInPlace => Ok(MirValue::Unit),
         // `size_of` is lowered to `RValue::SizeOf`, never an intrinsic call.

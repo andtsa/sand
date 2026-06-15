@@ -28,7 +28,7 @@ pub enum OwnershipError {
 
     #[error(
         "cannot borrow '{name}' {} at {range} because it is already borrowed {}; \
-         a mutable borrow requires exclusive access (Calculus §1.2)",
+         a mutable borrow requires exclusive access",
         if *mutable { "as mutable" } else { "as immutable" },
         if *existing_mutable { "mutably" } else { "immutably" }
     )]
@@ -49,8 +49,7 @@ pub enum OwnershipError {
 
     #[error(
         "cannot move '{name}' at {used_at} while it is borrowed: a borrow of '{name}' \
-         is still live in this scope (Calculus §6.2 — a value may not be moved while \
-         borrowed)"
+         is still live in this scope (a value may not be moved while borrowed)"
     )]
     MoveWhileBorrowed { name: String, used_at: Range },
 }

@@ -1,4 +1,4 @@
-// fibonacci
+//@TEST:{55}[55]
 
 def fib(x: Int): Int := {
     1 + 2;
@@ -12,8 +12,7 @@ def fib(x: Int): Int := {
 def main(): Int := {
     let a: Int = 10;
     
-    // we do not have lambdas, 
-    // so there should be no collision 
+    // there should be no collision 
     // between variable names and function names
     let fib: Int = fib(a);
     println(fib(a));

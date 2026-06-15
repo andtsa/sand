@@ -299,21 +299,23 @@ pub fn build_program<'i, 'run>(
 
     // The front end runs as a collect-then-resolve sequence:
     //
-    //   1 a collect declarations, register enum *skeletons* + `use` imports;
-    //     b resolve enum payloads, now that every skeleton exists, so forward /
-    //       recursive payload types (`type Tree = Node((Tree, Tree))`) resolve;
-    //     c variance soundness, declared variance vs. payload positions;
+    //  1. a. collect declarations, register enum *skeletons* + `use` imports;
+    //     b. resolve enum payloads, now that every skeleton exists, so forward /
+    //        recursive payload types (`type Tree = Node((Tree, Tree))`) resolve;
+    //     c. variance soundness, declared variance vs. payload positions;
     //
-    //   2   build function bodies, names resolve against the collected decls.
+    //  2. build function bodies, names resolve against the collected decls.
     let collected = collect_declarations(ctx, &children, default_module, file)?;
     resolve_enum_payloads(ctx, collected.pending_payloads)?;
-    // Heap-strategy legality (Memory Step C, K-HeapedRec): a (mutually) recursive
+    // Heap-strategy legality (Calculus, `K-HeapedRec`): a (mutually) recursive
     // type must derive a heap strategy; a non-recursive one must not. Runs after
     // payloads resolve (recursion is visible only once payload types exist).
     check_heaped_legality(ctx)?;
-    for er in collected.generic_enums {
-        check_variance(ctx, er)?;
-    }
+    collected
+        .generic_enums
+        .iter()
+        .try_for_each(|er| check_variance(ctx, *er))?;
+
     // Typeclass method signatures resolve after every enum + class skeleton
     // exists, so a method type may reference any enum or the class parameter.
     let defaults = resolve_typeclass_sigs(ctx, collected.pending_classes)?;
@@ -321,12 +323,12 @@ pub fn build_program<'i, 'run>(
     // that omits a defaulted method can point its instance entry at the default.
     let default_fns = build_default_methods(ctx, defaults, src)?;
     let mut mods = build_functions(ctx, children, src, default_module, file)?;
-    for (module, f) in default_fns {
+    default_fns.into_iter().for_each(|(module, f)| {
         mods.entry(module).or_default().push(f);
-    }
+    });
     // Instance-set checks need every instance registered (build_functions did
     // that): a subclass instance requires its superclass instances for the same
-    // head type (Calculus §8.9).
+    // head type (Calculus: Typeclasses, `requires`).
     check_superclass_instances(ctx)?;
     check_copy_instances(ctx)?;
     Ok(mods)
@@ -334,12 +336,12 @@ pub fn build_program<'i, 'run>(
 
 /// The declarations gathered in phase 1, to be resolved in later phases.
 struct Collected<'i, 'run> {
-    /// `(enum, variant index, raw payload `type_` pair)` — resolved in phase
+    /// `(enum, variant index, raw payload `type_` pair)`, resolved in phase
     /// 1.5 once every enum skeleton exists. Pairs borrow from the parse
     /// (`'i`).
-    pending_payloads: Vec<(EnumRef<'run>, usize, Vec<Pair<'i, Rule>>)>,
+    pending_payloads: Vec<(AdtRef<'run>, usize, Vec<Pair<'i, Rule>>)>,
     /// Generic enums, for the phase-1.6 variance check.
-    generic_enums: Vec<EnumRef<'run>>,
+    generic_enums: Vec<AdtRef<'run>>,
     /// Typeclass skeletons whose method signatures + superclasses resolve in a
     /// later phase (once all classes/enums exist). Pairs borrow from the parse.
     pending_classes: Vec<PendingClass<'i>>,
@@ -349,7 +351,7 @@ struct Collected<'i, 'run> {
 /// resolution (see [`resolve_typeclass_sigs`]).
 struct PendingClass<'i> {
     tref: TypeclassRef,
-    /// the class's type parameter(s) — exactly one — to re-enter while building
+    /// the class's type parameter(s), exactly one, to re-enter while building
     /// method signatures (so `T` resolves in them).
     class_params: Vec<TypeParam>,
     method_pairs: Vec<Pair<'i, Rule>>,
@@ -367,8 +369,8 @@ fn collect_declarations<'i, 'run>(
     default_module: ModuleRef<'run>,
     file: FileRef,
 ) -> Result<Collected<'i, 'run>, AstError> {
-    let mut pending_payloads: Vec<(EnumRef<'run>, usize, Vec<Pair<'i, Rule>>)> = Vec::new();
-    let mut generic_enums: Vec<EnumRef<'run>> = Vec::new();
+    let mut pending_payloads: Vec<(AdtRef<'run>, usize, Vec<Pair<'i, Rule>>)> = Vec::new();
+    let mut generic_enums: Vec<AdtRef<'run>> = Vec::new();
     let mut pending_classes: Vec<PendingClass<'i>> = Vec::new();
     let mut cur_mod = default_module;
     for child in children {
@@ -411,8 +413,8 @@ fn collect_enum_skeleton<'i, 'run>(
     ctx: &mut CompileCtx<'run>,
     child: &Pair<'i, Rule>,
     cur_mod: ModuleRef<'run>,
-    pending_payloads: &mut Vec<(EnumRef<'run>, usize, Vec<Pair<'i, Rule>>)>,
-    generic_enums: &mut Vec<EnumRef<'run>>,
+    pending_payloads: &mut Vec<(AdtRef<'run>, usize, Vec<Pair<'i, Rule>>)>,
+    generic_enums: &mut Vec<AdtRef<'run>>,
 ) -> Result<(), AstError> {
     let range = Range::from(child);
     let mut inner = child.clone().into_inner();
@@ -487,11 +489,11 @@ fn collect_enum_skeleton<'i, 'run>(
     Ok(())
 }
 
-/// Dispatch a `deriving C1, C2, …` clause (Memory Step C). A general
-/// mechanism: each derivable name maps to an action. Step C registers only
-/// `HeapedUnique` (sets the type's heap strategy); future derivables
-/// (`HeapedShared`, `Eq`, `Clone`, …) add arms here. An unknown name is a
-/// `NotDerivable` error. Returns the derived heap strategy, if any.
+/// Dispatch a `deriving C1, C2, ...` clause. A general mechanism: each
+/// derivable name maps to an action. Only `HeapedUnique` is registered today
+/// (it sets the type's heap strategy); future derivables (`HeapedShared`, `Eq`,
+/// `Clone`, ...) add arms here. An unknown name is a `NotDerivable` error.
+/// Returns the derived heap strategy, if any.
 fn parse_deriving_clause(pair: &Pair<Rule>) -> Result<Vec<Derivable>, AstError> {
     assert_eq!(pair.as_rule(), Rule::deriving_clause);
     let mut derives: Vec<Derivable> = Vec::new();
@@ -500,7 +502,7 @@ fn parse_deriving_clause(pair: &Pair<Rule>) -> Result<Vec<Derivable>, AstError> 
         let derivable = match ident.as_str() {
             // `Heaped` = the base heap capability (alloc/borrow/release), backed
             // by the default unique strategy. `HeapedShared` (the refcount
-            // strategy) joins here in Step E.
+            // strategy) is a planned addition here.
             "Heaped" => Derivable::Heaped(HeapedStrategy::Unique),
             other => {
                 return Err(AstError::NotDerivable {
@@ -561,7 +563,7 @@ fn collect_use<'run>(
 /// borrow in a payload must name a declared region parameter (or `'static`).
 fn resolve_enum_payloads<'i, 'run>(
     ctx: &mut CompileCtx<'run>,
-    pending_payloads: Vec<(EnumRef<'run>, usize, Vec<Pair<'i, Rule>>)>,
+    pending_payloads: Vec<(AdtRef<'run>, usize, Vec<Pair<'i, Rule>>)>,
 ) -> Result<(), AstError> {
     for (er, idx, payload_pairs) in pending_payloads {
         let params = ctx.get_enum(er).type_params.clone();
@@ -632,7 +634,7 @@ fn collect_typeclass<'i, 'run>(
         .to_string();
 
     // grammar requires `type_params`; a class carries exactly one type parameter
-    // and no region parameters (Step 10).
+    // and no region parameters.
     let tp_pair = inner.next().missing("typeclass type parameter", range)?;
     let type_param_specs = collect_type_params(ctx, tp_pair.clone());
     let region_param_specs = collect_region_params(tp_pair);
@@ -813,7 +815,7 @@ fn build_default_methods<'run>(
 
 /// Build one typeclass method's signature (over the class parameter, which must
 /// already be in scope). The default body, if present, is not built here
-/// (Step 10b synthesises it per instance); only its presence is recorded.
+/// (it is synthesised per instance); only its presence is recorded.
 fn build_method_def<'run>(
     ctx: &mut CompileCtx<'run>,
     mpair: &Pair<Rule>,
@@ -826,7 +828,8 @@ fn build_method_def<'run>(
         .as_str()
         .to_string();
     // A method may declare its own generics (`def fmap<A, B>(...`)
-    // they are in scope *alongside* the class parameter while the signature is resolved
+    // they are in scope *alongside* the class parameter while the signature is
+    // resolved
     //
     // Pushed onto the current (class-parameter) scope and retracted afterwards.
     let method_params = if inner.peek().map(|p| p.as_rule()) == Some(Rule::type_params) {
@@ -918,10 +921,7 @@ fn build_impl<'run>(
         let cname = ty_pair.as_str().trim().to_string();
         let er = ctx
             .lookup_enum_current(&cname)
-            .ok_or(AstError::UnknownType {
-                name: cname,
-                range,
-            })?;
+            .ok_or(AstError::UnknownType { name: cname, range })?;
         (ctx.enum_ty(er), TypeHead::Enum(er))
     } else {
         let for_ty = build_type(ctx, ty_pair)?;
@@ -932,7 +932,7 @@ fn build_impl<'run>(
     };
 
     // orphan rule: the impl is legal only if the class or the implemented type is
-    // *at home* — declared in the impl's own module. (This is the whole-program
+    // *at home*, declared in the impl's own module. (This is the whole-program
     // analogue of Rust's crate-orphan rule; it lets `core.sand` implement its own
     // `Copy`/`Clone` for primitives while still rejecting a user module that
     // implements a foreign class for a foreign type.)
@@ -975,7 +975,7 @@ fn build_impl<'run>(
         funcs.push(f);
     }
 
-    // completeness: every method must end up implemented — by the impl, or by
+    // completeness: every method must end up implemented, by the impl or by
     // the class's default (a generic function built in `build_default_methods`).
     let order = ctx.get_typeclass(tref).method_order.clone();
     for mname in &order {
@@ -1013,7 +1013,7 @@ fn build_impl<'run>(
 }
 
 /// Final check: a `Copy` instance is sound only if every field/payload of the
-/// type is itself `Copy`, and the type is not generic (Step 14; no conditional
+/// type is itself `Copy`, and the type is not generic (no conditional
 /// or blanket `Copy` impls).
 fn check_copy_instances(ctx: &CompileCtx<'_>) -> Result<(), AstError> {
     let Some(copy) = ctx.copy_class() else {
@@ -1041,7 +1041,7 @@ fn check_copy_instances(ctx: &CompileCtx<'_>) -> Result<(), AstError> {
 }
 
 /// Final check: a subclass instance requires its superclass instances for the
-/// same head type (Calculus §8.9 `requires`).
+/// same head type (Calculus: Typeclasses, `requires`).
 fn check_superclass_instances(ctx: &CompileCtx<'_>) -> Result<(), AstError> {
     for (class, head, range) in ctx.instance_keys() {
         let supers = ctx.get_typeclass(class).superclasses.clone();
@@ -1102,7 +1102,7 @@ fn build_functions<'i, 'run>(
                 build_impl(ctx, child, src, &current_module, &mut funcs)?;
             }
             // enum / `use` / typeclass declarations were handled in phase 1
-            // (typeclass method *bodies* — defaults — arrive in Step 10b).
+            // (typeclass method *bodies*, the defaults, are built separately).
             Rule::type_alias | Rule::use_decl | Rule::typeclass_decl => {}
             Rule::EOI => continue,
             other => {
@@ -1257,7 +1257,7 @@ fn build_function<'run>(
     })
 }
 
-/// Collect one `extern def` (Memory Step A): register a bodyless external
+/// Collect one `extern def`: register a bodyless external
 /// (FFI) function with a real `FunRef` + `FunSig` so calls resolve through the
 /// normal path, and record its C symbol in the extern registry. Parameter and
 /// return types must be FFI-safe (`Int`, `Unit`, `Ptr<T>`). No generics.
@@ -1339,15 +1339,15 @@ fn collect_extern<'run>(
             type_constraints: Vec::new(),
         },
     );
-    // C symbol = the sand identifier (explicit rename is deferred).
+    // C symbol = the sand identifier (no renaming).
     ctx.register_extern(fref, *cur_module, name);
 
     ctx.end_type_params();
     Ok(())
 }
 
-/// Heap-strategy legality (Memory Step C, K-HeapedRec): a (mutually) recursive
-/// `type` *must* derive a heap strategy (`deriving HeapedUnique`) — without it
+/// Heap-strategy legality (Calculus, `K-HeapedRec`): a (mutually) recursive
+/// `type` *must* derive a heap strategy (`deriving HeapedUnique`); without it
 /// its values would be infinite-sized and leak. A non-recursive type *may*
 /// derive one (to opt a large value onto the heap) but need not.
 fn check_heaped_legality(ctx: &CompileCtx<'_>) -> Result<(), AstError> {
@@ -1367,7 +1367,7 @@ fn check_heaped_legality(ctx: &CompileCtx<'_>) -> Result<(), AstError> {
 }
 
 /// The enums directly referenced in `er`'s variant payloads.
-fn enum_successors<'tcx>(ctx: &CompileCtx<'tcx>, er: EnumRef<'tcx>) -> Vec<EnumRef<'tcx>> {
+fn enum_successors<'tcx>(ctx: &CompileCtx<'tcx>, er: AdtRef<'tcx>) -> Vec<AdtRef<'tcx>> {
     let mut out = Vec::new();
     for v in &ctx.get_enum(er).variants {
         if let Some(ty) = v.payload.get() {
@@ -1378,7 +1378,7 @@ fn enum_successors<'tcx>(ctx: &CompileCtx<'tcx>, er: EnumRef<'tcx>) -> Vec<EnumR
 }
 
 /// Push every enum mentioned in `ty` (directly or nested) into `out`.
-fn collect_referenced_enums<'tcx>(ty: Ty<'tcx>, out: &mut Vec<EnumRef<'tcx>>) {
+fn collect_referenced_enums<'tcx>(ty: Ty<'tcx>, out: &mut Vec<AdtRef<'tcx>>) {
     match ty.kind() {
         TyKind::Enum(er) => out.push(*er),
         TyKind::App(er, args, _) => {
@@ -1403,15 +1403,15 @@ fn collect_referenced_enums<'tcx>(ty: Ty<'tcx>, out: &mut Vec<EnumRef<'tcx>>) {
     }
 }
 
-/// Whether `start` can reach itself through payload references — i.e. it is
+/// Whether `start` can reach itself through payload references; i.e. it is
 /// (directly or mutually) recursive.
 // `EnumRef` reaches an enum payload `Cell` (interior mutability), but the set
 // keys hash/compare by arena-pointer identity that never reads the `Cell`, so
-// the keys are stable — mirroring the suppression on `CompileCtx`'s maps.
+// the keys are stable, mirroring the suppression on `CompileCtx`'s maps.
 #[allow(clippy::mutable_key_type)]
-fn is_recursive_enum<'tcx>(ctx: &CompileCtx<'tcx>, start: EnumRef<'tcx>) -> bool {
+fn is_recursive_enum<'tcx>(ctx: &CompileCtx<'tcx>, start: AdtRef<'tcx>) -> bool {
     let mut stack = enum_successors(ctx, start);
-    let mut visited: std::collections::BTreeSet<EnumRef<'tcx>> = std::collections::BTreeSet::new();
+    let mut visited: std::collections::BTreeSet<AdtRef<'tcx>> = std::collections::BTreeSet::new();
     while let Some(n) = stack.pop() {
         if n == start {
             return true;
@@ -1423,7 +1423,7 @@ fn is_recursive_enum<'tcx>(ctx: &CompileCtx<'tcx>, start: EnumRef<'tcx>) -> bool
     false
 }
 
-/// An FFI boundary type must be `Int`, `Unit`, or `Ptr<T>` (Memory Step A).
+/// An FFI boundary type must be `Int`, `Unit`, or `Ptr<T>`.
 fn require_ffi_safe<'tcx>(
     ctx: &CompileCtx<'tcx>,
     ty: Ty<'tcx>,
@@ -1463,7 +1463,7 @@ fn build_where_clause(
                 regions.push(RegionConstraint { longer, shorter });
             }
             _ => {
-                // `T : Class` — `T` must be a declared type parameter and `Class`
+                // `T : Class`: `T` must be a declared type parameter and `Class`
                 // a known typeclass.
                 let pname = first.as_str();
                 let param = ctx
@@ -1487,7 +1487,7 @@ fn build_where_clause(
 }
 
 /// Validate the declared variance of a generic enum's parameters against the
-/// positions they occupy in its variant payloads (Calculus §2.1).
+/// positions they occupy in its variant payloads (Calculus: Types, variance).
 ///
 /// Each payload position carries a *polarity*: producer positions (enum
 /// payloads, tuple elements, pointee of a reference/pointer, a function's
@@ -1502,7 +1502,7 @@ fn build_where_clause(
 /// `∅a` is always sound, and an unused parameter accepts anything. A parameter
 /// with **no** annotation is inferred from its positions and so is never
 /// rejected.
-fn check_variance<'run>(ctx: &CompileCtx<'run>, er: EnumRef<'run>) -> Result<(), AstError> {
+fn check_variance<'run>(ctx: &CompileCtx<'run>, er: AdtRef<'run>) -> Result<(), AstError> {
     let def = ctx.get_enum(er);
     for param in &def.type_params {
         let mut occ = Occurrence::default();
@@ -1542,13 +1542,13 @@ struct Occurrence {
 enum Sign {
     Pos,
     Neg,
-    /// invariant — both producer and consumer (e.g. under an invariant
+    /// invariant: both producer and consumer (e.g. under an invariant
     /// constructor parameter); an occurrence here counts as both.
     Inv,
 }
 
 impl Sign {
-    /// Flip producer ↔ consumer (invariant is its own dual).
+    /// Flip producer <-> consumer (invariant is its own dual).
     fn flip(self) -> Sign {
         match self {
             Sign::Pos => Sign::Neg,
@@ -1608,11 +1608,14 @@ fn param_polarity<'run>(
             }
         }
         // `F<..>`: compose the current polarity with each of `F`'s declared
-        // parameter variances (Calculus §2.1 nested composition).
+        // parameter variances (Calculus: Types, variance; nested composition).
         TyKind::App(er, args, _) => {
             let params = &ctx.get_enum(*er).type_params;
             for (i, a) in args.iter().enumerate() {
-                let v = params.get(i).map(|p| p.variance).unwrap_or(Variance::Covariant);
+                let v = params
+                    .get(i)
+                    .map(|p| p.variance)
+                    .unwrap_or(Variance::Covariant);
                 param_polarity(ctx, *a, id, sign.compose(v), occ);
             }
         }
@@ -1759,8 +1762,8 @@ fn resolve_lifetime(ctx: &CompileCtx<'_>, lt: &Pair<Rule>) -> Result<Region, Ast
         })
 }
 
-/// Build a type, applying an optional `@ 'r` region ascription (Calculus §2.3).
-/// `type_ = { fn_type | core_type ~ ("@" ~ lifetime)? }`.
+/// Build a type, applying an optional `@ 'r` region ascription (Calculus:
+/// Types). `type_ = { fn_type | core_type ~ ("@" ~ lifetime)? }`.
 fn build_type<'run>(ctx: &mut CompileCtx<'run>, pair: Pair<Rule>) -> Result<Ty<'run>, AstError> {
     assert_eq!(pair.as_rule(), Rule::type_);
     let range = Range::from(&pair);
@@ -1777,7 +1780,7 @@ fn build_type<'run>(ctx: &mut CompileCtx<'run>, pair: Pair<Rule>) -> Result<Ty<'
     Ok(ty)
 }
 
-/// Build a function type `A -> B` / `A -[k]> B` (Step 13).
+/// Build a function type `A -> B` / `A -[k]> B`.
 /// `fn_type = { core_type ~ fn_arrow ~ type_ }`, right-associative via the
 /// codomain.
 fn build_fn_type<'run>(ctx: &mut CompileCtx<'run>, pair: Pair<Rule>) -> Result<Ty<'run>, AstError> {
@@ -1793,7 +1796,7 @@ fn build_fn_type<'run>(ctx: &mut CompileCtx<'run>, pair: Pair<Rule>) -> Result<T
     Ok(ctx.fn_ty(dom, cod, mode))
 }
 
-/// Parse a function arrow's calling mode (Step 13).
+/// Parse a function arrow's calling mode.
 /// `fn_arrow = { ("-[" ~ arrow_kind ~ "]>") | "->" }`.
 fn build_fn_arrow(pair: &Pair<Rule>) -> FnMode {
     assert_eq!(pair.as_rule(), Rule::fn_arrow);
@@ -1905,7 +1908,7 @@ fn build_core_type<'run>(
             }
 
             // A higher-kinded type parameter applied: `F<A>` where `F` is a
-            // type-constructor parameter in scope (Step 11). Unlike a concrete
+            // type-constructor parameter in scope. Unlike a concrete
             // enum application this produces a `ParamApp`, opaque until
             // monomorphisation binds `F` to a concrete constructor.
             if let Some(id) = ctx.lookup_type_param(&name) {
@@ -1955,8 +1958,8 @@ fn build_core_type<'run>(
                 return Ok(ctx.param_app_ty(id, arg_tys));
             }
 
-            // `Ptr<T>` is a built-in generic primitive (Memory Step A), not a
-            // user enum: exactly one type argument, no region arguments (a raw
+            // `Ptr<T>` is a built-in generic primitive, not a user enum:
+            // exactly one type argument, no region arguments (a raw
             // pointer is outside the region discipline).
             if name == "Ptr" {
                 if !region_args.is_empty() {
@@ -2002,8 +2005,8 @@ fn build_core_type<'run>(
                     range,
                 });
             }
-            // K-App (Calculus §5): each argument's kind must satisfy the
-            // declared parameter kind.
+            // `K-App` (Calculus: Kinding Rules): each argument's kind must
+            // satisfy the declared parameter kind.
             for (param, &arg) in params.iter().zip(&arg_tys) {
                 let arg_kind = ctx.kind_of(arg);
                 if !arg_kind.is_subkind(param.kind) {
@@ -2144,7 +2147,7 @@ fn build_statement<'run>(
                 };
                 let val = build_expr(ctx, expr_pair, src)?;
                 // The `else` expression is mandatory for refutable patterns;
-                // the type checker enforces this — here we just require it.
+                // the type checker enforces this, here we just require it.
                 let else_pair = decl_inner
                     .next()
                     .missing("let_constructor else expression", inner_range)?;
@@ -2207,10 +2210,10 @@ fn build_statement<'run>(
             }
 
             // Borrow binding `let &x : T = e` (shared) or `let &mut x : T = e`
-            // (exclusive) (Calculus §6.4): desugar to `let x : &T = &e` /
+            // (exclusive) (Calculus, the `Let` rules): desugar to `let x : &T = &e` /
             // `let x : &mut T = &mut e`, reusing the borrow-expression
-            // machinery — `e` is borrowed (not consumed) and `x` holds the
-            // reference. A `&mut` binding is assignable (`x = e` writes through
+            // machinery (`e` is borrowed, not consumed, and `x` holds the
+            // reference). A `&mut` binding is assignable (`x = e` writes through
             // the borrow), so it is marked mutable.
             if first_child.as_rule() == Rule::borrow_binding {
                 let mut bb_inner = first_child.into_inner().peekable();
@@ -2379,7 +2382,7 @@ fn build_expr<'run>(
     }
 }
 
-/// Build a lambda `fn (x: T) -> e` (Step 13).
+/// Build a lambda `fn (x: T) -> e`.
 /// `lambda_expr = { "fn" ~ lambda_param ~ "->" ~ expression }`,
 /// `lambda_param = { "(" ~ mut_kw? ~ identifier ~ ":" ~ type_ ~ ")" }`.
 fn build_lambda<'run>(
@@ -2871,7 +2874,7 @@ fn build_primary<'run>(
                 .missing("tag variant", inner_range)?
                 .as_str()
                 .to_string();
-            // optional payload expression(s) — >1 desugar to a tuple payload.
+            // optional payload expression(s); more than one desugar to a tuple payload.
             let payload = build_payload_expr(ctx, children, src, inner_range)?;
             Ok(Expr {
                 expr: Expression::Tag { variant, payload },
@@ -3122,8 +3125,9 @@ fn build_let_destructure<'run>(
     }
 }
 
-/// Build a constructor/tag payload from its (zero or more) argument expressions.
-/// Multiple arguments desugar to a single tuple payload: `Ok(a, b)` ≡ `Ok((a, b))`.
+/// Build a constructor/tag payload from its (zero or more) argument
+/// expressions. Multiple arguments desugar to a single tuple payload: `Ok(a,
+/// b)` ≡ `Ok((a, b))`.
 fn build_payload_expr<'i, 'run>(
     ctx: &mut CompileCtx<'run>,
     parts: impl Iterator<Item = Pair<'i, Rule>>,
@@ -3268,7 +3272,7 @@ fn build_call<'run>(
     let name_pair = inner.next().missing("function call name", range)?;
     let name = name_pair.as_str().to_string();
 
-    // optional turbofish `::<T, …>` (function_call only; Memory Step C)
+    // optional turbofish `::<T, …>` (function_call only)
     let mut type_args = Vec::new();
     if inner.peek().map(|p| p.as_rule()) == Some(Rule::turbofish) {
         let tf = inner.next().missing("turbofish", range)?;

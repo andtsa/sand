@@ -23,32 +23,30 @@ pub enum Intrinsic {
     Max,
     ReadInt,
     Exit,
-    /// `__ptr_read(p: Ptr<T>): T` — load through a raw pointer (Memory Step A).
-    /// Generic in the element type, so it has no entry in [`INTRINSICS`]; it is
-    /// type-checked and lowered with bespoke rules using the element type
-    /// recovered from its argument / result.
+    /// `__ptr_read(p: Ptr<T>): T`: load through a raw pointer. Generic in the
+    /// element type, so it has no entry in [`INTRINSICS`]; it is type-checked
+    /// and lowered with the rules of the element type recovered from its
+    /// argument / result.
     PtrRead,
-    /// `__ptr_write(p: Ptr<T>, v: T): Unit` — store through a raw pointer.
+    /// `__ptr_write(p: Ptr<T>, v: T): Unit`: store through a raw pointer.
     PtrWrite,
-    /// `__ptr_cast(p: Ptr<A>): Ptr<B>` — reinterpret a raw pointer (runtime
+    /// `__ptr_cast(p: Ptr<A>): Ptr<B>`: reinterpret a raw pointer (runtime
     /// no-op); `B` comes from the expected-type context.
     PtrCast,
-    /// `__drop_in_place(x): Unit` — compiler-generated structural destructor
-    /// glue (Memory Step A). A no-op for every type in Steps A/B (no type has a
-    /// non-trivial destructor yet); it gains structural field recursion when
-    /// `Heaped` types acquire `release` in Step C. Wired into drop insertion in
-    /// Step B. Accepts any type (`Top` arg), returns `Unit`.
+    /// `__drop_in_place(x): Unit`: compiler-generated structural destructor
+    /// glue. A no-op for a type with no non-trivial destructor; it gains
+    /// structural field recursion for `Heaped` types, which acquire `release`.
+    /// Wired into drop insertion. Accepts any type (`Top` arg), returns `Unit`.
     DropInPlace,
-    /// `size_of::<T>(): Int` — the byte size of `T` (Memory Step C). Generic
-    /// via a turbofish *type* argument (no value args), so it is
-    /// bespoke-typed; the concrete size is target-dependent, computed by
-    /// codegen.
+    /// `size_of::<T>(): Int`: the byte size of `T`. Generic via a turbofish
+    /// *type* argument (no value args); the concrete size is target-dependent,
+    /// computed by codegen.
     SizeOf,
 }
 
 impl Intrinsic {
-    /// Whether this intrinsic is a generic raw-pointer op (Memory Step A): it
-    /// has no fixed [`IntrinsicSig`] and is handled by bespoke generic rules.
+    /// Whether this intrinsic is a generic raw-pointer op: it has no fixed
+    /// [`IntrinsicSig`] and is handled by bespoke generic rules.
     pub fn is_ptr_op(self) -> bool {
         matches!(
             self,
@@ -57,8 +55,9 @@ impl Intrinsic {
     }
 
     /// Whether this intrinsic is generic in an explicit *type* argument
-    /// (turbofish) rather than inferring from value args — only `size_of` so
-    /// far. Such intrinsics are bespoke-typed and not in [`INTRINSICS`].
+    /// (turbofish) rather than inferring from value args (only `size_of` so
+    /// far). Such intrinsics have their own types and are not in
+    /// [`INTRINSICS`].
     pub fn is_type_arg_intrinsic(self) -> bool {
         matches!(self, Intrinsic::SizeOf)
     }
@@ -158,7 +157,7 @@ fn intrinsics() -> Map<Intrinsic, (FnName, IntrinsicSig)> {
             },
         ),
         (
-            // `Top` arg = accepts a value of any type; no-op until Step C.
+            // `Top` arg = accepts a value of any type; currently a no-op.
             Intrinsic::DropInPlace,
             IntrinsicSig {
                 args: vec![TyTag::Top],
@@ -216,11 +215,11 @@ pub fn fn_name_allowed(name: &str) -> bool {
 }
 
 /// A layout-free approximation of a type's byte size, used by *both*
-/// interpreters so they agree on `size_of` (Memory Step C). The interpreters
-/// model the heap as a cell graph, not raw bytes, so the precise size is
-/// irrelevant there (it is consumed by `malloc`, which mints a cell regardless)
-/// — the real, target-dependent size is computed by codegen. Kept simple and
-/// shared so HIR and MIR results match.
+/// interpreters so they agree on `size_of`. The interpreters model the heap as
+/// a cell graph, not raw bytes, so the precise size is irrelevant there (it is
+/// consumed by `malloc`, which creates a cell regardless); the real,
+/// target-dependent size is computed by codegen. Kept simple and shared so HIR
+/// and MIR results match.
 pub fn interp_size_of(ty: Ty<'_>) -> i64 {
     use crate::lang::types::TyKind;
     match ty.kind() {

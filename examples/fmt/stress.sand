@@ -1,5 +1,4 @@
 // stress.sand
-// kitchen-sink file, combines all challenging patterns together
 
 def mod(a: Int, m: Int): Int := a - (a / m) * m
 

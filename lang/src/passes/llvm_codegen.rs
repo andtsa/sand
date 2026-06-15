@@ -18,7 +18,7 @@ use crate::lang::intrinsics::Intrinsic;
 use crate::lang::ops::Bop;
 use crate::lang::ops::CompOp;
 use crate::lang::ops::Uop;
-use crate::lang::types::EnumRef;
+use crate::lang::types::AdtRef;
 use crate::lang::types::Ty;
 use crate::lang::types::TyKind;
 
@@ -26,8 +26,8 @@ pub struct LlvmCodegen<'ctx> {
     context: &'ctx inkwell::context::Context,
     module: inkwell::module::Module<'ctx>,
     builder: inkwell::builder::Builder<'ctx>,
-    /// Target layout, for sizing the payload area of stack tagged-union enums
-    /// (Memory Step C). The module's data layout is set to match.
+    /// Target layout, for sizing the payload area of stack tagged-union enums.
+    /// The module's data layout is set to match.
     target_data: inkwell::targets::TargetData,
 }
 
@@ -58,7 +58,7 @@ impl<'ctx> LlvmCodegen<'ctx> {
     pub fn new(context: &'ctx Context, module_name: &str) -> Self {
         use inkwell::targets::*;
         // Resolve the native target's data layout up front so enum-union sizing
-        // (Memory Step C) matches the backend, and pin it on the module.
+        // matches the backend, and pin it on the module.
         Target::initialize_native(&InitializationConfig::default())
             .expect("initialize native target");
         let triple = TargetMachine::get_default_triple();
@@ -101,7 +101,7 @@ impl<'ctx> LlvmCodegen<'ctx> {
             .map(|(fref, f)| (*fref, self.declare_function(f, ctx)))
             .collect();
 
-        // Declare external (FFI) functions (Memory Step A) under their C symbol
+        // Declare external (FFI) functions under their C symbol
         // so calls to them resolve through the same `fns` map.
         for (fref, symbol) in ctx.extern_functions() {
             fns.insert(fref, self.declare_extern(fref, symbol, ctx));
@@ -260,10 +260,10 @@ impl<'ctx> LlvmCodegen<'ctx> {
             }
             Statement::Eval { value, .. } => {
                 // Side-effecting call only; Aggregate/Field never appear here,
-                // so dst_ty is irrelevant — use unit as a dummy.
+                // so dst_ty is irrelevant: use unit as a dummy.
                 self.emit_rvalue(value, fn_ctx.compile_ctx.types.unit, fn_ctx, fns)?;
             }
-            // Drop (Memory Step B/C): structurally release the place's value.
+            // Drop: structurally release the place's value.
             // For a type that owns no heap (no `Unique<…>` handle anywhere) this
             // is a no-op; otherwise it runs the per-type drop glue, which frees
             // each owned allocation and recurses through nested handles.
@@ -280,7 +280,7 @@ impl<'ctx> LlvmCodegen<'ctx> {
     }
 
     /// rvalues / operands
-    /// `dst_ty` is the Sand type of the destination local — needed by
+    /// `dst_ty` is the Sand type of the destination local, needed by
     /// `Aggregate` (to distinguish enum from tuple) and `Field` (to know
     /// what type to load).
     fn emit_rvalue<'tcx>(
@@ -293,7 +293,7 @@ impl<'ctx> LlvmCodegen<'ctx> {
         match rv {
             RValue::Use(op) => self.emit_operand(op, fn_ctx),
 
-            // `size_of::<T>()` (Memory Step C): the target's LLVM size, as i64.
+            // `size_of::<T>()`: the target's LLVM size, as i64.
             RValue::SizeOf(ty) => {
                 let sz = self
                     .llvm_type(fn_ctx.compile_ctx, *ty)
@@ -302,7 +302,7 @@ impl<'ctx> LlvmCodegen<'ctx> {
                 Ok(sz.into())
             }
 
-            // `&place` / `&mut place`: the address of the place's storage (R2).
+            // `&place` / `&mut place`: the address of the place's storage.
             RValue::Ref(place) => Ok(self.place_address(place, fn_ctx)?.into()),
 
             RValue::BinaryOp {
@@ -353,7 +353,7 @@ impl<'ctx> LlvmCodegen<'ctx> {
                 Intrinsic::Print | Intrinsic::Println => {
                     self.emit_intrinsic(*fn_name, args, fn_ctx)
                 }
-                // Raw-pointer ops (Memory Step A). `dst_ty` gives the element
+                // Raw-pointer ops. `dst_ty` gives the element
                 // type for a load (`__ptr_read`) and the target for a cast.
                 Intrinsic::PtrRead => {
                     let ptr = self.emit_operand(&args[0], fn_ctx)?.into_pointer_value();
@@ -375,7 +375,7 @@ impl<'ctx> LlvmCodegen<'ctx> {
 
             RValue::Field { base, index } => self.emit_field(base, *index, dst_ty, fn_ctx),
 
-            // A closure value (Step 13): the fat pointer `{ fn_ptr, env_ptr }`.
+            // A closure value: the fat pointer `{ fn_ptr, env_ptr }`.
             // The captures (if any) are packed into a heap-allocated environment
             // (a single value or a tuple), whose pointer is the env field; an
             // empty environment uses a null pointer. (The env is not yet freed.)
@@ -422,18 +422,23 @@ impl<'ctx> LlvmCodegen<'ctx> {
                     raw
                 };
 
-                let struct_ty = self.context.struct_type(&[ptr_ty.into(), ptr_ty.into()], false);
-                let s = self
-                    .builder
-                    .build_insert_value(struct_ty.get_undef(), fn_ptr, 0, "clos_fn")?;
-                let s = self
-                    .builder
-                    .build_insert_value(s.into_struct_value(), env_ptr, 1, "clos_env")?;
+                let struct_ty = self
+                    .context
+                    .struct_type(&[ptr_ty.into(), ptr_ty.into()], false);
+                let s =
+                    self.builder
+                        .build_insert_value(struct_ty.get_undef(), fn_ptr, 0, "clos_fn")?;
+                let s = self.builder.build_insert_value(
+                    s.into_struct_value(),
+                    env_ptr,
+                    1,
+                    "clos_env",
+                )?;
                 Ok(s.into_struct_value().into())
             }
 
-            // Indirect call (Step 13): extract the fn pointer + env pointer from
-            // the closure fat pointer and call `fn_ptr(env_ptr, args…)` — the
+            // Indirect call: extract the fn pointer + env pointer from
+            // the closure fat pointer and call `fn_ptr(env_ptr, args…)`, where the
             // lifted function takes the env pointer as its leading parameter.
             RValue::CallIndirect { callee, args } => {
                 let cctx = fn_ctx.compile_ctx;
@@ -459,9 +464,9 @@ impl<'ctx> LlvmCodegen<'ctx> {
                 } else {
                     self.llvm_type(cctx, dst_ty).fn_type(&arg_types, false)
                 };
-                let call =
-                    self.builder
-                        .build_indirect_call(fn_type, fn_ptr, &arg_vals, "indirect")?;
+                let call = self
+                    .builder
+                    .build_indirect_call(fn_type, fn_ptr, &arg_vals, "indirect")?;
                 Ok(call
                     .try_as_basic_value()
                     .basic()
@@ -659,7 +664,7 @@ impl<'ctx> LlvmCodegen<'ctx> {
                 self.builder.build_call(exit_fn, &[code_i32.into()], "")?;
                 Ok(self.context.struct_type(&[], false).const_zero().into())
             }
-            // No-op until types acquire destructors (Step C); yields unit.
+            // No-op for types without destructors; yields unit.
             Intrinsic::DropInPlace => Ok(self.context.struct_type(&[], false).const_zero().into()),
             _ => unreachable!("emit_intrinsic_value called for print/println/ptr-ops"),
         }
@@ -722,7 +727,7 @@ impl<'ctx> LlvmCodegen<'ctx> {
     /// The global is named `__enum_<idx>_variants` and is created only once.
     fn get_or_create_variant_table<'tcx>(
         &self,
-        er: crate::lang::types::EnumRef<'tcx>,
+        er: crate::lang::types::AdtRef<'tcx>,
         ctx: &CompileCtx<'tcx>,
     ) -> llvm::GlobalValue<'ctx> {
         let global_name = format!("__enum_{}_variants", er.0.id);
@@ -851,7 +856,7 @@ impl<'ctx> LlvmCodegen<'ctx> {
         self.module.add_function("free", fn_ty, None)
     }
 
-    // ── drop glue (Memory Step C.5) ──────────────────────────────────────────
+    // ── drop glue ─────────────────────────────────────────────────────────────
 
     /// Whether dropping a value of `ty` does any work: it (transitively) owns a
     /// `Unique<…>` heap handle that must be freed. Pure scalars, raw pointers,
@@ -1044,7 +1049,7 @@ impl<'ctx> LlvmCodegen<'ctx> {
     /// Enums where at least one variant has a payload are heap-allocated:
     /// every value is a `ptr` to a `{ i64, ptr }` cell (field 0 = discriminant,
     /// field 1 = separately-malloc'd payload, or null for nullary variants).
-    fn enum_has_payload<'tcx>(ctx: &CompileCtx<'tcx>, er: EnumRef<'tcx>) -> bool {
+    fn enum_has_payload<'tcx>(ctx: &CompileCtx<'tcx>, er: AdtRef<'tcx>) -> bool {
         ctx.get_enum(er)
             .variants
             .iter()
@@ -1053,7 +1058,7 @@ impl<'ctx> LlvmCodegen<'ctx> {
 
     /// The byte size of a stack enum's payload area: the maximum store size
     /// over all variant payloads (0 if every variant is nullary).
-    fn enum_payload_area_size<'tcx>(&self, ctx: &CompileCtx<'tcx>, er: EnumRef<'tcx>) -> u64 {
+    fn enum_payload_area_size<'tcx>(&self, ctx: &CompileCtx<'tcx>, er: AdtRef<'tcx>) -> u64 {
         ctx.get_enum(er)
             .variants
             .iter()
@@ -1063,16 +1068,16 @@ impl<'ctx> LlvmCodegen<'ctx> {
             .unwrap_or(0)
     }
 
-    /// `{ i64 disc, [P x i8] payload }` — the stack tagged-union layout for a
-    /// non-heaped payload enum (Memory Step C). The `i64` discriminant forces
-    /// 8-byte struct alignment, so the payload area (at offset 8) is 8-aligned
-    /// — enough for every payload type in the current universe
+    /// `{ i64 disc, [P x i8] payload }`: the stack tagged-union layout for a
+    /// non-heaped payload enum. The `i64` discriminant forces 8-byte struct
+    /// alignment, so the payload area (at offset 8) is 8-aligned, which is
+    /// enough for every payload type in the current universe
     /// (`i64`/`ptr`/ structs of those), so the bitcast payload stores/loads
     /// are aligned.
     fn enum_struct_type<'tcx>(
         &self,
         ctx: &CompileCtx<'tcx>,
-        er: EnumRef<'tcx>,
+        er: AdtRef<'tcx>,
     ) -> inkwell::types::StructType<'ctx> {
         let payload_bytes = self.enum_payload_area_size(ctx, er) as u32;
         let payload_area = self.context.i8_type().array_type(payload_bytes);
@@ -1093,9 +1098,9 @@ impl<'ctx> LlvmCodegen<'ctx> {
             TyKind::Int => self.context.i64_type().into(),
             TyKind::Bool => self.context.bool_type().into(),
             TyKind::Unit => self.context.struct_type(&[], false).into(),
-            // Payload enum: stack tagged-union (Memory Step C). Heaped enums no
-            // longer reach codegen — the heap lowering rewrites them to
-            // `Unique<Node>` handles, themselves ordinary single-variant enums.
+            // Payload enum: stack tagged-union. Heaped enums no longer reach
+            // codegen: the heap lowering rewrites them to `Unique<Node>` handles,
+            // themselves ordinary single-variant enums.
             TyKind::Enum(er) if Self::enum_has_payload(ctx, *er) => {
                 self.enum_struct_type(ctx, *er).into()
             }
@@ -1105,23 +1110,25 @@ impl<'ctx> LlvmCodegen<'ctx> {
                 let field_tys: Vec<_> = tys.iter().map(|t| self.llvm_type(ctx, *t)).collect();
                 self.context.struct_type(&field_tys, false).into()
             }
-            // References are real pointers (R2); the region carries no runtime data.
+            // References are real pointers; the region carries no runtime data.
             TyKind::Ref(..) | TyKind::RefMut(..) => self
                 .context
                 .ptr_type(inkwell::AddressSpace::default())
                 .into(),
-            // Raw pointers (A) are address-sized; the element type is erased.
+            // Raw pointers are address-sized; the element type is erased.
             TyKind::Ptr(_) => self
                 .context
                 .ptr_type(inkwell::AddressSpace::default())
                 .into(),
-            // A function value (Step 13) is a fat pointer `{ fn_ptr, env_ptr }`
+            // A function value is a fat pointer `{ fn_ptr, env_ptr }`
             // (the env is null for a capture-free function). Closures/lambdas are
             // a later phase; the layout is fixed here so a `Fn`-typed signature
             // already has a representation.
             TyKind::Fn(..) => {
                 let ptr = self.context.ptr_type(inkwell::AddressSpace::default());
-                self.context.struct_type(&[ptr.into(), ptr.into()], false).into()
+                self.context
+                    .struct_type(&[ptr.into(), ptr.into()], false)
+                    .into()
             }
             _ => internal_bug!("no LLVM type for {:?}", ty),
         }
@@ -1154,10 +1161,10 @@ impl<'ctx> LlvmCodegen<'ctx> {
                     return Ok(disc_val.into());
                 }
 
-                // ── stack tagged-union `{ i64 disc, [P x i8] }` (Step C) ──
+                // ── stack tagged-union `{ i64 disc, [P x i8] }` ──
                 // Build via a temporary alloca, then load the struct value. The
                 // payload is stored at field 1's address as its own type (opaque
-                // pointers — the `[P x i8]` only sizes the slot). Heaped enums no
+                // pointers; the `[P x i8]` only sizes the slot). Heaped enums no
                 // longer reach codegen (lowered to `Unique<Node>` handles).
                 let struct_ty = self.enum_struct_type(ctx, er);
                 let slot = self.builder.build_alloca(struct_ty, "enum_tmp")?;
@@ -1224,7 +1231,7 @@ impl<'ctx> LlvmCodegen<'ctx> {
 
         match base_sand_ty.kind() {
             // Payload enum: base is a stack `{ i64, [P x i8] }` value. (Heaped
-            // enums are gone — lowered to `Unique<Node>` handles.)
+            // enums are gone, lowered to `Unique<Node>` handles.)
             TyKind::Enum(er) if Self::enum_has_payload(ctx, *er) => {
                 let er = *er;
                 let struct_ty = self.enum_struct_type(ctx, er);
@@ -1370,7 +1377,7 @@ impl<'ctx> LlvmCodegen<'ctx> {
 
     // output
 
-    /// Write human-readable LLVM IR (.ll) — useful for debugging.
+    /// Write human-readable LLVM IR (.ll), useful for debugging.
     pub fn write_ir<P: AsRef<Path>>(&self, path: P, dry: bool) -> Result<(), CodegenError> {
         if dry {
             self.module.print_to_stderr();

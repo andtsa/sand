@@ -6,7 +6,7 @@ use crate::compiler::structure::Range;
 use crate::compiler::structure::UniqVar;
 use crate::ir_types::qhir;
 use crate::ir_types::typed_hir;
-use crate::lang::types::EnumRef;
+use crate::lang::types::AdtRef;
 use crate::lang::types::Kind;
 use crate::lang::types::Region;
 use crate::lang::types::RegionVar;
@@ -29,8 +29,9 @@ use crate::passes::type_ast::infer::join_region_ty;
 type PatternBindings<'tcx> = Vec<(UniqVar<'tcx>, Ty<'tcx>, Range)>;
 
 /// If `e` diverges (kind `Never`), re-type it to `expected` and return it:
-/// a diverging expression inhabits every type (Calculus §6.1, `Never <: k`),
-/// so checking it against any `expected` succeeds. Returns `None` otherwise.
+/// a diverging expression inhabits every type (Calculus: Subsumption, `Never <:
+/// k`), so checking it against any `expected` succeeds. Returns `None`
+/// otherwise.
 fn coerce_never<'tcx>(
     e: &typed_hir::Expr<'tcx>,
     expected: Ty<'tcx>,
@@ -54,7 +55,7 @@ type RegionSubst = Map<RegionVar, Region>;
 fn enum_instantiation<'tcx>(
     ctx: &CompileCtx<'tcx>,
     ty: Ty<'tcx>,
-) -> Option<(EnumRef<'tcx>, Subst<'tcx>, RegionSubst)> {
+) -> Option<(AdtRef<'tcx>, Subst<'tcx>, RegionSubst)> {
     match ty.kind() {
         TyKind::Enum(er) => Some((*er, Subst::new(), RegionSubst::new())),
         TyKind::App(er, args, regions) => {
@@ -80,10 +81,9 @@ fn enum_instantiation<'tcx>(
 /// type-check a list of match arms against a scrutinee of type `scrutinee_ty`.
 ///
 /// `scrutinee_ty` may be an enum type (tag-coverage exhaustiveness, the
-/// classic case) or a tuple type (every legal pattern is irrefutable — see
-/// `DESTRUCTURING_PATTERNS.todo.md` decision D1 — so exhaustiveness reduces to
-/// "the first arm's pattern always matches").  any other scrutinee type is a
-/// `MatchNonAggregateScrutinee` error.
+/// classic case) or a tuple type (every legal pattern is irrefutable, so
+/// exhaustiveness reduces to "the first arm's pattern always matches"). Any
+/// other scrutinee type is a `MatchNonAggregateScrutinee` error.
 ///
 /// if `forced_expected` is `Some(ty)`, all arm bodies are checked against that
 /// type (check mode, enables bare-tag resolution in bodies).  if `None`, the
@@ -99,10 +99,10 @@ pub(super) fn type_check_match_arms<'tcx>(
     forced_expected: Option<Ty<'tcx>>,
     range: Range,
 ) -> Result<Vec<typed_hir::TypedMatchArm<'tcx>>, AstTypeError<'tcx>> {
-    // classify the scrutinee type up front — copy out of the borrow before
+    // classify the scrutinee type up front, copying out of the borrow before
     // taking `&mut ctx` again
     enum ScrutKind<'tcx> {
-        Enum(EnumRef<'tcx>),
+        Enum(AdtRef<'tcx>),
         Tuple,
         Int,
         Bool,
@@ -143,13 +143,13 @@ pub(super) fn type_check_match_arms<'tcx>(
 /// `enum_ref` is `Some` for enum scrutinees (enabling tag-coverage
 /// exhaustiveness + `Variant`/`Tag` patterns) and `None` for tuple scrutinees
 /// (where only irrefutable patterns are legal at all, so exhaustiveness is
-/// trivial — see decision D1 in the design doc).
+/// trivial).
 fn type_check_match_arms_inner<'tcx>(
     ctx: &mut CompileCtx<'tcx>,
     env: &TypeEnv<'tcx>,
     arms: &[qhir::QMatchArm<'tcx>],
     scrutinee_ty: Ty<'tcx>,
-    enum_ref: Option<EnumRef<'tcx>>,
+    enum_ref: Option<AdtRef<'tcx>>,
     forced_expected: Option<Ty<'tcx>>,
     range: Range,
 ) -> Result<Vec<typed_hir::TypedMatchArm<'tcx>>, AstTypeError<'tcx>> {
@@ -169,7 +169,7 @@ fn type_check_match_arms_inner<'tcx>(
     for arm in arms {
         let mut bindings: PatternBindings<'tcx> = Vec::new();
 
-        // validate & translate the pattern (always at "top level" — the
+        // validate & translate the pattern (always at "top level": the
         // pattern is being matched directly against the scrutinee)
         let match_pattern = match &arm.pattern {
             qhir::QPattern::Variant {
@@ -286,7 +286,7 @@ fn type_check_match_arms_inner<'tcx>(
         }
         prior_patterns.push(match_pattern.clone());
 
-        // extend the env with this arm's pattern bindings (immutable — D4).
+        // extend the env with this arm's pattern bindings (immutable).
         // Bindings live in the current lexical scope (the enclosing block).
         let mut arm_env = env.clone();
         let home = ctx.current_scope_region();
@@ -353,15 +353,16 @@ enum Ctor {
 
 /// A normalised pattern for the usefulness matrix: either a wildcard (covering
 /// `Binding`/`Wildcard`) or a constructor applied to sub-patterns. Carries no
-/// type information — column types are tracked alongside the matrix.
+/// type information; column types are tracked alongside the matrix.
 #[derive(Clone)]
 enum Pat {
     Wild,
     Ctor { ctor: Ctor, args: Vec<Pat> },
 }
 
-/// Normalise a typed pattern into a [`Pat`] (dropping bindings to wildcards —
-/// bindings impose no test; variable extraction happens at the matched arm).
+/// Normalise a typed pattern into a [`Pat`] (dropping bindings to wildcards,
+/// since bindings impose no test; variable extraction happens at the matched
+/// arm).
 fn to_pat(p: &typed_hir::MatchPattern<'_>) -> Pat {
     match p {
         typed_hir::MatchPattern::Wildcard | typed_hir::MatchPattern::Binding { .. } => Pat::Wild,
@@ -390,8 +391,8 @@ fn to_pat(p: &typed_hir::MatchPattern<'_>) -> Pat {
 
 /// The complete set of constructors for `ty`, or `None` if the type has no
 /// finite signature that literal patterns could exhaust (e.g. `Int`, or a type
-/// that cannot be matched refutably at all). A `Some` signature means a match is
-/// exhaustive once every listed constructor is covered.
+/// that cannot be matched refutably at all). A `Some` signature means a match
+/// is exhaustive once every listed constructor is covered.
 fn type_signature<'tcx>(ctx: &CompileCtx<'tcx>, ty: Ty<'tcx>) -> Option<Vec<Ctor>> {
     if let Some((er, _, _)) = enum_instantiation(ctx, ty) {
         let n = ctx.get_enum(er).variants.len();
@@ -406,22 +407,16 @@ fn type_signature<'tcx>(ctx: &CompileCtx<'tcx>, ty: Ty<'tcx>) -> Option<Vec<Ctor
 
 /// The field types introduced by specialising `ty`'s column on `ctor` (the
 /// sub-occurrences). Empty for nullary constructors.
-fn ctor_field_tys<'tcx>(
-    ctx: &mut CompileCtx<'tcx>,
-    ty: Ty<'tcx>,
-    ctor: &Ctor,
-) -> Vec<Ty<'tcx>> {
+fn ctor_field_tys<'tcx>(ctx: &mut CompileCtx<'tcx>, ty: Ty<'tcx>, ctor: &Ctor) -> Vec<Ty<'tcx>> {
     match ctor {
         Ctor::Variant(vi) => match enum_instantiation(ctx, ty) {
-            Some((er, inst, region_inst)) => {
-                match ctx.get_enum(er).variants[*vi].payload.get() {
-                    Some(p) => {
-                        let p = subst(ctx, p, &inst);
-                        vec![ctx.region_subst_ty(p, &region_inst)]
-                    }
-                    None => Vec::new(),
+            Some((er, inst, region_inst)) => match ctx.get_enum(er).variants[*vi].payload.get() {
+                Some(p) => {
+                    let p = subst(ctx, p, &inst);
+                    vec![ctx.region_subst_ty(p, &region_inst)]
                 }
-            }
+                None => Vec::new(),
+            },
             None => Vec::new(),
         },
         Ctor::Tuple => match ty.kind() {
@@ -434,12 +429,7 @@ fn ctor_field_tys<'tcx>(
 
 /// Render a constructor (with already-rendered argument strings) as a pattern,
 /// for non-exhaustiveness witnesses.
-fn render_ctor<'tcx>(
-    ctx: &CompileCtx<'tcx>,
-    ty: Ty<'tcx>,
-    ctor: &Ctor,
-    args: &[String],
-) -> String {
+fn render_ctor<'tcx>(ctx: &CompileCtx<'tcx>, ty: Ty<'tcx>, ctor: &Ctor, args: &[String]) -> String {
     match ctor {
         Ctor::Variant(vi) => {
             let name = match enum_instantiation(ctx, ty) {
@@ -500,7 +490,7 @@ fn specialize<'tcx>(
                 new_row.extend_from_slice(rest);
                 rows.push(new_row);
             }
-            _ => {} // different constructor — does not match
+            _ => {} // different constructor: does not match
         }
     }
     (rows, new_tys)
@@ -519,7 +509,7 @@ fn default_matrix<'tcx>(
     (rows, col_tys[1..].to_vec())
 }
 
-/// `useful(P, q)` — `Some(witness)` if `q` matches a value no row of `P` does
+/// `useful(P, q)`: `Some(witness)` if `q` matches a value no row of `P` does
 /// (the witness is one such value, rendered per column), `None` otherwise.
 fn useful<'tcx>(
     ctx: &mut CompileCtx<'tcx>,
@@ -611,7 +601,7 @@ fn arm_is_reachable<'tcx>(
 }
 
 /// Witnesses of non-exhaustiveness for a match over `scrutinee_ty` with the
-/// given arm patterns — empty when the match is exhaustive.
+/// given arm patterns; empty when the match is exhaustive.
 fn exhaustiveness_witnesses<'tcx>(
     ctx: &mut CompileCtx<'tcx>,
     scrutinee_ty: Ty<'tcx>,
@@ -629,7 +619,7 @@ fn exhaustiveness_witnesses<'tcx>(
 #[allow(clippy::too_many_arguments)]
 fn check_variant_payload_pattern<'tcx>(
     ctx: &mut CompileCtx<'tcx>,
-    enum_ref: EnumRef<'tcx>,
+    enum_ref: AdtRef<'tcx>,
     variant_idx: usize,
     payload_pattern: Option<&qhir::QPattern<'tcx>>,
     inst: &Subst<'tcx>,
@@ -707,13 +697,13 @@ fn check_tuple_pattern<'tcx>(
     })
 }
 /// validate & translate a pattern that appears in a *nested* (sub-pattern)
-/// position — inside a payload or a tuple element.
+/// position: inside a payload or a tuple element.
 ///
 /// Supported here:
-/// - bindings, wildcards — irrefutable
-/// - tuple destructuring — recursively irrefutable
-/// - enum variant patterns (`E#V(p)` or `#V(p)`) — refutable but well-typed
-/// - integer / boolean literal patterns (`IntLit`, `BoolLit`) — refutable; the
+/// - bindings, wildcards: irrefutable
+/// - tuple destructuring: recursively irrefutable
+/// - enum variant patterns (`E#V(p)` or `#V(p)`): refutable but well-typed
+/// - integer / boolean literal patterns (`IntLit`, `BoolLit`): refutable; the
 ///   usefulness checker tracks their coverage at any depth
 ///
 /// Refutability at any depth is fine: the usefulness checker decides
@@ -975,7 +965,8 @@ pub(super) fn check<'tcx>(
             expr: Some(ret),
         } => {
             // A block opens a fresh lexical region scope; the trailing
-            // expression may not yield a borrow of a local (Calculus §6.3).
+            // expression may not yield a borrow of a local
+            // (Calculus: The Escape Check).
             let block_region = ctx.enter_region_scope();
             let block_depth = ctx.region_depth(block_region);
 
@@ -1003,7 +994,7 @@ pub(super) fn check<'tcx>(
                 expr: typed_hir::Expression::Block {
                     statements: typed_statements,
                     expr: Some(Box::new(typed_ret)),
-                    // Drops are inserted by the ownership pass (Step B).
+                    // Drops are inserted by the ownership pass.
                     drops: Vec::new(),
                 },
                 ty: ret_ty,
@@ -1080,7 +1071,7 @@ pub(super) fn check<'tcx>(
             Ok(e)
         }
 
-        // Raw-pointer ops (Memory Step A) are generic; push the expected type
+        // Raw-pointer ops are generic; push the expected type
         // down so `__ptr_cast` can take its target type from the context.
         qhir::Expression::IntrinsicCall { fn_name, args, .. } if fn_name.is_ptr_op() => {
             let e = infer_ptr_op(ctx, env, *fn_name, args, Some(expected), expr.range)?;

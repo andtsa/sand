@@ -1,9 +1,4 @@
 //@TEST:{7}[]
-// A generic enum with an explicit variance annotation (`+a`, covariant)
-// is declared, then constructed and consumed at two different instantiations.
-// The declaration-site variance check passes (the parameter appears only in a
-// producer position), and monomorphisation specialises `Box<Int>` and
-// `Box<Bool>` to distinct concrete enums before codegen.
 
 type Box<+a> = Wrap(a)
 

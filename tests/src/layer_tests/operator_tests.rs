@@ -1,5 +1,5 @@
 //! The split of the old overloaded `&` into bitwise `&&` (Int) and logical
-//! `and` (Bool), which frees single `&` for borrow syntax (Step 7 pre-step).
+//! `and` (Bool), which frees single `&` for borrow syntax.
 
 use lang::ir_types::typed_hir::Expression;
 

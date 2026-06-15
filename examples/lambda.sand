@@ -1,14 +1,6 @@
 //@TEST:{0}[42,42,55,111]
-// Step 13 — lambda values and first-class functions.
-//
-// A `fn (x: T) -> e` is a function value. It can be bound to a variable and
-// called (`g(21)`), passed to a function whose parameter has a function type and
-// applied there (`apply`), or returned from a function and then called. Each
-// lambda is lifted to a top-level function during monomorphisation; the value is
-// a fat pointer `{ fn_ptr, env_ptr }` (the env is null in this non-capturing
-// milestone). Bare `->` is the reusable arrow (≈ Rust `Fn`).
+// lambda values and first-class functions.
 
-// Apply a function value to an argument (an indirect call through `f`).
 def apply(f: Int -> Int, x: Int): Int := f(x)
 
 // Return a function value that *captures* this function's parameter `n`. The

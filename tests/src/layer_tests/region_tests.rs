@@ -1,7 +1,7 @@
 //! region variables and `T @ 'r` ascription.
 //!
-//! This step is structural plumbing (Calculus §1.1, §2.3): lifetime syntax
-//! parses and round-trips, `T @ 'r` is a distinct interned type, and
+//! This layer is structural plumbing (Calculus: Regions, Types): lifetime
+//! syntax parses and round-trips, `T @ 'r` is a distinct interned type, and
 //! monomorphisation erases regions so codegen is unaffected. There are no
 //! borrow semantics yet, so region-ascribed values cannot be *created* from
 //! literals; they appear only in signatures.

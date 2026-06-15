@@ -248,7 +248,7 @@ fn match_result_used_in_arithmetic() {
 /// (`colors::Light#…`) and the arms use bare `#tag` patterns, which resolve
 /// against the scrutinee's type. (Under the module redesign, the foreign type
 /// name `Light` is *not* in `app`'s scope, so unqualified `Light#…` patterns
-/// would not resolve — bare tags are the idiomatic cross-module match.)
+/// would not resolve; bare tags are the idiomatic cross-module match.)
 #[test]
 fn match_cross_module_enum() {
     let val = run_mir(
@@ -473,7 +473,7 @@ fn match_single_adhoc_tag_exhaustive() {
 // variant's payload (`Circle(r)`), tuple destructuring (`(a, b)`), nested
 // destructuring (`Wrap((x, y))`), wildcard/binding sub-patterns, and the new
 // error cases (duplicate bindings, arity mismatches, refutable nested
-// patterns, undestructured payloads). see `DESTRUCTURING_PATTERNS.todo.md`.
+// patterns, undestructured payloads).
 
 /// destructuring a payload-carrying variant binds the payload to a variable
 /// usable in the arm body.
@@ -1027,11 +1027,15 @@ fn decision_tree_nested_variant_dispatch() {
                    Opt#None => 100, \n \
                } \n";
     assert_eq!(
-        run_both(&format!("{src} def main(): Int := classify(Opt#Some(Res#Ok(7)))")),
+        run_both(&format!(
+            "{src} def main(): Int := classify(Opt#Some(Res#Ok(7)))"
+        )),
         Expression::Int(7)
     );
     assert_eq!(
-        run_both(&format!("{src} def main(): Int := classify(Opt#Some(Res#Err(5)))")),
+        run_both(&format!(
+            "{src} def main(): Int := classify(Opt#Some(Res#Err(5)))"
+        )),
         Expression::Int(-5)
     );
     assert_eq!(
@@ -1061,7 +1065,7 @@ fn decision_tree_int_literals_with_default() {
 #[test]
 fn decision_tree_many_arms_same_enum() {
     // Several arms over one enum lower to a single discriminant read followed by
-    // a branch chain — exercising constructor collection + the default path.
+    // a branch chain, exercising constructor collection + the default path.
     let src = "type Day = Mon | Tue | Wed | Thu | Fri \n \
                def num(d: Day): Int := match d { \n \
                    Day#Mon => 1, \n \
@@ -1093,7 +1097,7 @@ fn tuple_with_refutable_element_must_be_exhaustive() {
 }
 
 /// A tuple match that does cover every product combination type-checks and
-/// selects the right arm — the previously-rejected valid program.
+/// selects the right arm (the previously-rejected valid program).
 #[test]
 fn tuple_with_refutable_elements_exhaustive_runs() {
     let (hir, mir) = run_hir_and_mir(
@@ -1158,8 +1162,9 @@ fn deeply_nested_match_missing_leaf_is_rejected() {
     );
 }
 
-/// Literal patterns may now nest inside a payload; the usefulness checker tracks
-/// their coverage and the decision tree tests the extracted sub-occurrence.
+/// Literal patterns may now nest inside a payload; the usefulness checker
+/// tracks their coverage and the decision tree tests the extracted
+/// sub-occurrence.
 #[test]
 fn nested_literal_patterns_dispatch_and_bind() {
     let (hir, mir) = run_hir_and_mir(

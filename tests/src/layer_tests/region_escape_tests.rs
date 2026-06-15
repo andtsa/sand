@@ -1,8 +1,8 @@
-//! Step 8b — borrow escape check and the outlives solver (Calculus §1.1, §6.3).
+//! Borrow escape check and the outlives solver (Calculus: The Escape Check).
 //!
 //! A block opens a lexical region scope; a borrow of a value bound inside the
 //! block lives in that scope and may not be yielded out of it (a dangling
-//! borrow). Borrows of parameters — which outlive the call — may be returned.
+//! borrow). Borrows of parameters, which outlive the call, may be returned.
 //! Region types are still erased by monomorphisation; the check is purely
 //! static. The outlives relation (`'r ≥ 's`) is exercised directly.
 
@@ -41,7 +41,7 @@ fn returning_a_borrow_from_a_nested_block_is_rejected() {
 #[test]
 fn returning_a_borrow_of_a_by_value_parameter_is_rejected() {
     // a by-value parameter lives in the frame and is dropped when the call
-    // returns, so a borrow of it would dangle (Calculus §6.3, frame boundary).
+    // returns, so a borrow of it would dangle (Calculus: The Escape Check).
     typecheck_fails("def f(x: Int): &Int := { &x } \n def main(): Int := 0");
 }
 
@@ -57,7 +57,7 @@ fn returning_a_let_bound_borrow_of_a_by_value_parameter_is_rejected() {
 
 #[test]
 fn borrowing_a_local_without_yielding_it_is_accepted() {
-    // the borrow is used inside the block and not returned — no escape.
+    // the borrow is used inside the block and not returned: no escape.
     typecheck("def f(): Int := { let y = 5; let r = &y; 0 } \n def main(): Int := 0");
 }
 
@@ -147,7 +147,7 @@ fn returning_a_tuple_of_a_parameter_borrow_is_accepted() {
     );
 }
 
-// ── the outlives solver: `'r ≥ 's` (Calculus §1.1)
+// ── the outlives solver: `'r ≥ 's` (Calculus: Regions)
 // ────────────────────────────
 //
 // These exercise `outlives` directly. Regions are allocated *through* the
@@ -156,7 +156,7 @@ fn returning_a_tuple_of_a_parameter_borrow_is_accepted() {
 
 /// Allocate `n` distinct sibling regions (each opened and immediately closed,
 /// so all share the same nesting depth and have no outlives relationship by
-/// nesting — they relate only through explicit assumptions).
+/// nesting; they relate only through explicit assumptions).
 fn siblings(ctx: &mut lang::compiler::context::CompileCtx<'static>, n: usize) -> Vec<Region> {
     (0..n)
         .map(|_| {
@@ -238,8 +238,8 @@ fn satisfies_outlives_checks_a_constraint_set() {
 #[test]
 fn reseating_an_outer_reference_to_an_inner_borrow_is_rejected() {
     // re-pointing an outer reference at a borrow from an inner block would dangle
-    // once the inner block closes (Calculus §6.3, item 11): the assignment's RHS
-    // region must outlive the variable it is assigned into.
+    // once the inner block closes (Calculus: The Escape Check): the assignment's
+    // RHS region must outlive the variable it is assigned into.
     typecheck_fails(
         "def f(): Int := { let a = 1; let mut o = &a; { let i = 2; o = &i; 0 }; *o } \n \
          def main(): Int := 0",
@@ -248,7 +248,7 @@ fn reseating_an_outer_reference_to_an_inner_borrow_is_rejected() {
 
 #[test]
 fn reseating_a_reference_within_the_same_scope_is_accepted() {
-    // re-pointing a reference at another borrow from the *same* scope is fine —
+    // re-pointing a reference at another borrow from the *same* scope is fine:
     // both live equally long.
     typecheck(
         "def g(): Int := { let a = 1; let b = 2; let mut o = &a; o = &b; *o } \n \

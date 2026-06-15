@@ -1,6 +1,5 @@
 //@TEST:{0}[1,2,1,0]
-// Demonstrates nested exhaustiveness checking (todo 7):
-// Outer#A(Inner#X) + Outer#A(Inner#Y) collectively cover all of A.
+
 type Inner = X | Y
 type Outer = A(Inner) | B
 

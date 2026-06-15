@@ -1,71 +1,41 @@
-//! This module contains the implementation of the compilation process.
-//! It does not contain any compiler logic, it just strings together the
-//! appropriate compiler passes.
-//!
-//! Other subcommands that implement smaller parts of the compilation process
-//! will use this module for functionality (interacting with the backend) and
-//! will _only_ implement the frontend / printing.
+//! run the input files with the interpreter
 use std::path::PathBuf;
 
 use clap::Args;
+use clap::clap_derive::ValueEnum;
 use lang::castles::project::CheckResult;
 use lang::castles::project::Project;
 use lang::compiler::diagnostics::SandDiagnostic;
 use lang::ir_types::mir::MirProgram;
-use lang::passes::llvm_codegen::LlvmCodegen;
-use lang::util::fs::FileOperations;
-use lang::util::fs::real_fs::FileSystem;
 
 use crate::error::CliError;
 
-#[derive(Debug, Args)]
-pub struct CompileArgs {
-    /// Input file(s) to compile
-    #[arg(required = true, conflicts_with = "config")]
-    input: Vec<PathBuf>,
-    /// Compile a project from a config file
-    #[arg(short, long)]
-    config: Option<PathBuf>,
-    /// Output file to write
-    #[arg(short, long)]
-    output: Option<PathBuf>,
-    /// Emit LLVM IR instead of machine code
-    #[arg(short, long)]
-    emit_llvm: bool,
-    /// Print the AST instead of compiling
-    #[arg(short, long)]
-    print_ast: bool,
+#[derive(Default, ValueEnum, Debug, Clone, PartialEq, Eq)]
+enum InterpMode {
+    Hir,
+    #[default]
+    Mir,
 }
 
-pub fn compile(args: CompileArgs, dry_run: bool) -> Result<(), CliError> {
-    let span = tracing::info_span!("compile subcommand");
+#[derive(Debug, Args)]
+pub struct RunArgs {
+    /// Input file(s) to run
+    #[arg(required = true, conflicts_with = "config")]
+    input: Vec<PathBuf>,
+    /// Run a project from a config file
+    #[arg(short, long)]
+    config: Option<PathBuf>,
+    /// Print the AST instead of running
+    #[arg(short, long)]
+    print_ast: bool,
+    /// Whether to use the HIR or MIR interpreter for running
+    #[arg(short, long, value_enum, default_value = "mir")]
+    mode: InterpMode,
+}
+
+pub fn run(args: RunArgs, dry_run: bool) -> Result<(), CliError> {
+    let span = tracing::info_span!("run subcommand");
     let _g = span.enter();
-
-    let outfile_name = if args.input.len() == 1 {
-        args.input[0]
-            .file_stem()
-            .and_then(|n| n.to_str())
-            .unwrap_or("a")
-    } else {
-        "a"
-    };
-
-    let output_file = args.output.unwrap_or_else(|| {
-        if args.emit_llvm {
-            PathBuf::from(format!("{}.ll", outfile_name))
-        } else {
-            PathBuf::from(format!("{}.out", outfile_name))
-        }
-    });
-
-    if !args.emit_llvm && output_file.ends_with(".ll") {
-        eprintln!("If you want to emit LLVM IR, use the --emit-llvm flag");
-    }
-
-    tracing::debug!(
-        "outfile_name: {outfile_name}, output_file: {}",
-        output_file.display()
-    );
 
     let project_result = if let Some(config) = &args.config {
         // Load project from config file
@@ -126,34 +96,19 @@ pub fn compile(args: CompileArgs, dry_run: bool) -> Result<(), CliError> {
         println!("{}", ast.dump(&ctx));
         return Ok(());
     }
-
-    // Emit code
-    let mir = MirProgram::from_typed_program(&ast, &ctx);
-    let llvm_ctx = inkwell::context::Context::create();
-    let codegen = LlvmCodegen::new(&llvm_ctx, "sand_module");
-    codegen.emit_program(&mir, &ctx)?;
-
-    if args.emit_llvm {
-        tracing::debug!("emitting llvm ir directly");
-        codegen.write_ir(&output_file, dry_run)?;
+    if dry_run {
         return Ok(());
     }
 
-    let object_file = output_file.with_extension("o");
-    tracing::debug!("writing object file {}", object_file.display());
-    codegen.write_object(&object_file, dry_run)?;
-
-    if !dry_run {
-        LlvmCodegen::link(
-            &object_file.display().to_string(),
-            &output_file.display().to_string(),
-        )?;
-
-        let fs = FileSystem { dry_run };
-        if let Err(e) = fs.delete_file(&object_file) {
-            eprintln!("failed to delete object file: {}", e);
-        }
+    // run code
+    if args.mode == InterpMode::Hir {
+        ast.interpret(&ctx)?;
+        return Ok(());
     }
 
+    let mir = MirProgram::from_typed_program(&ast, &ctx);
+
+    mir.interpret(&ctx)?;
+    
     Ok(())
 }

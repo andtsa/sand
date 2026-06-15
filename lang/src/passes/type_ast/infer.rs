@@ -7,13 +7,13 @@ use crate::compiler::structure::Map;
 use crate::compiler::structure::Range;
 use crate::compiler::structure::RegionParam;
 use crate::compiler::structure::TypeclassRef;
+use crate::compiler::structure::UniqVar;
 use crate::ir_types::qhir;
 use crate::ir_types::typed_hir;
 use crate::ir_types::typed_hir::TypedFunction;
 use crate::lang::intrinsics::INTRINSICS;
 use crate::lang::intrinsics::Intrinsic;
-use crate::compiler::structure::UniqVar;
-use crate::lang::types::EnumRef;
+use crate::lang::types::AdtRef;
 use crate::lang::types::Kind;
 use crate::lang::types::Region;
 use crate::lang::types::RegionVar;
@@ -36,7 +36,7 @@ pub(super) fn infer_function<'tcx>(
     func: &qhir::Function<'tcx>,
 ) -> Result<(FunRef<'tcx>, TypedFunction<'tcx>), TypeError<'tcx>> {
     // Open the function's region scope (depth 0): parameters live for the whole
-    // call, so a borrow of a parameter never escapes the body (Step 8b).
+    // call, so a borrow of a parameter never escapes the body.
     let fn_region = ctx.enter_region_scope();
     // The function's own `where 'a >= 's` clauses become the outlives
     // assumptions available while checking callee constraints at call sites.
@@ -59,9 +59,10 @@ pub(super) fn infer_function<'tcx>(
         module: func.src_module,
     })?;
 
-    // Function-return escape check (Calculus §6.3, the frame boundary): the
-    // returned value's type may not name any *local* region — the function frame
-    // or a block. Only *outer* regions (`'static`, lifetime parameters) outlive
+    // Function-return escape check (Calculus: The Escape Check, the frame
+    // boundary): the returned value's type may not name any *local* region (the
+    // function frame or a block). Only *outer* regions (`'static`, lifetime
+    // parameters) outlive
     // the call, so a borrow of a by-value parameter or a local cannot be
     // returned; a borrow tied to a lifetime parameter (`&'a T`) can. This
     // tightens the per-block escape check, which alone would wrongly admit
@@ -104,7 +105,7 @@ pub(super) fn infer_constructor<'tcx>(
     ctx: &mut CompileCtx<'tcx>,
     env: &TypeEnv<'tcx>,
     expr: &qhir::Expr<'tcx>,
-    enum_ref: EnumRef<'tcx>,
+    enum_ref: AdtRef<'tcx>,
     variant_idx: usize,
     payload: Option<&qhir::Expr<'tcx>>,
     expected: Option<Ty<'tcx>>,
@@ -241,11 +242,12 @@ pub(super) fn infer_constructor<'tcx>(
     make(typed_payload, ty)
 }
 
-/// Borrow escape check (Calculus §6.3): a block must not yield a value whose
-/// *type* names a region introduced at or inside the block — such a region
-/// would dangle once the block closes. `block_depth` is the block's nesting
-/// depth; any free region of the result type at that depth or deeper escapes.
-/// Regions live on the type, so this reads `freeRegions(ty)`, not the kind.
+/// Borrow escape check (Calculus: The Escape Check): a block must not yield a
+/// value whose *type* names a region introduced at or inside the block, since
+/// such a region would dangle once the block closes. `block_depth` is the
+/// block's nesting depth; any free region of the result type at that depth or
+/// deeper escapes. Regions live on the type, so this reads `freeRegions(ty)`,
+/// not the kind.
 pub(super) fn escape_check<'tcx>(
     ctx: &CompileCtx<'tcx>,
     ty: Ty<'tcx>,
@@ -266,15 +268,17 @@ pub(super) fn escape_check<'tcx>(
 /// Result type of a branch join (`if`/`match`): the common structural type
 /// (`structural`, which is region-blind-equal to every branch) with all its
 /// regions stamped to the **meet** (shortest-lived GLB) of the branches'
-/// regions — the same per-argument `meet` the call path applies (§6.3, item 8).
+/// regions: the same per-argument `meet` the call path applies (Calculus:
+/// Region Substitution at Call Sites).
 ///
 /// This is the soundness fix for branch joins: taking one branch's type
 /// verbatim (the first arm, or the region-blind `expected`) drops the regions
 /// of the *other* branches, so a borrow of a local escaping through a
 /// non-chosen branch slipped past the enclosing escape check. Stamping the join
 /// with the meet makes the result outlive *no* branch, so an escape in **any**
-/// branch surfaces in the result type and is caught (Calculus §6.3, §6.9 "all
-/// arms agree"). Diverging branches (kind `Never`) yield no value, so they do
+/// branch surfaces in the result type and is caught (Calculus: The Escape
+/// Check, plus the `Match` rule's "all arms agree"). Diverging branches (kind
+/// `Never`) yield no value, so they do
 /// not constrain the region.
 pub(super) fn join_region_ty<'tcx>(
     ctx: &mut CompileCtx<'tcx>,
@@ -288,7 +292,7 @@ pub(super) fn join_region_ty<'tcx>(
         }
     }
     if regions.is_empty() {
-        return structural; // no borrows in play — nothing to constrain
+        return structural; // no borrows in play, nothing to constrain
     }
     // Meet under the enclosing function's `where` assumptions, so a branch that
     // returns a longer-lived borrow coercible to the result lifetime (e.g.
@@ -298,12 +302,13 @@ pub(super) fn join_region_ty<'tcx>(
     ctx.region_fill(structural, meet)
 }
 
-/// Call-site region inference + `where`-clause checking (Calculus §1.1, §8.10).
+/// Call-site region inference + `where`-clause checking (Calculus: Region
+/// Substitution at Call Sites).
 ///
 /// Infers the call's region substitution (each callee region parameter and the
 /// elided region mapped to the meet of the actual argument regions, via
 /// [`CompileCtx::infer_region_subst`]), then checks every callee `where 'a >=
-/// 's` constraint under it — using the *enclosing* function's own clauses as
+/// 's` constraint under it, using the *enclosing* function's own clauses as
 /// assumptions, so a generic caller can discharge a callee constraint. Returns
 /// the substitution to stamp onto the return type.
 fn instantiate_call_regions<'tcx>(
@@ -403,9 +408,9 @@ pub(super) fn infer_statement<'tcx>(
             // Use check() so that bare tags are resolved against the variable's
             // known type (e.g. `result = #gt` when result: #gt | #lt | #eq).
             let val_expr = check(ctx, env, val, var_ty)?;
-            // Reseat-escape (Calculus §6.3, item 11): the new value must live at
-            // least as long as the variable it is assigned into — re-pointing an
-            // *outer* reference at an *inner*-scope borrow would dangle, and no
+            // Reseat-escape (Calculus: The Escape Check): the new value must live
+            // at least as long as the variable it is assigned into. Re-pointing
+            // an *outer* reference at an *inner*-scope borrow would dangle, and no
             // scope *result* crosses a boundary to trigger the escape check, so it
             // is caught here: every free region of the RHS must outlive the
             // variable's home region.
@@ -425,8 +430,8 @@ pub(super) fn infer_statement<'tcx>(
             value,
             range,
         } => {
-            // `*reference = value` (Calculus §3.2): write-through requires a
-            // *mutable* reference; a shared `&T` deref is a read-only place.
+            // `*reference = value` (Calculus: write-through): write-through
+            // requires a *mutable* reference; a shared `&T` deref is a read-only place.
             let ref_expr = infer(ctx, env, reference)?;
             let (pointee_ty, ref_region) = match ref_expr.ty.kind() {
                 TyKind::RefMut(r, t) => (*t, *r),
@@ -451,8 +456,8 @@ pub(super) fn infer_statement<'tcx>(
             };
             // RHS checked against the pointee type.
             let val_expr = check(ctx, env, value, pointee_ty)?;
-            // Write-through escape (Calculus §6.3, item 11): the stored value must
-            // outlive the region the reference points into, else it would dangle.
+            // Write-through escape (Calculus: The Escape Check): the stored value
+            // must outlive the region the reference points into, else it would dangle.
             let mut regions = Vec::new();
             val_expr.ty.free_regions(&mut regions);
             if regions.iter().any(|&r| !ctx.outlives(r, ref_region, &[])) {
@@ -607,8 +612,8 @@ fn check_type_constraint<'tcx>(
     if ok { Ok(()) } else { Err(no_instance()) }
 }
 
-/// Type-check a raw-pointer op (`__ptr_read` / `__ptr_write` / `__ptr_cast`,
-/// Memory Step A). These are generic, so they bypass the monomorphic
+/// Type-check a raw-pointer op (`__ptr_read` / `__ptr_write` / `__ptr_cast`).
+/// These are generic, so they bypass the monomorphic
 /// `INTRINSICS` table: the element type is recovered from the `Ptr<T>` argument
 /// (`read`/`write`) or the expected type (`cast`'s target). `expected` is the
 /// checking-mode context, required by `__ptr_cast`.
@@ -844,18 +849,18 @@ pub(super) fn infer<'tcx>(
             ty: ctx.types.unit,
             kind: Kind::Owned,
         }),
-        // `&e` / `&mut e` (Calculus §3.2): a shared (`K-Borrow`) or exclusive
-        // (`K-BorrowMut`) borrow, of type `&'r T` / `&'r mut T`. The *type*'s
-        // region stays the shared elided region (so `&e` matches a `&T`
-        // annotation), while the *kind* carries the borrow's real scope — the
-        // referent's home region for a borrowed variable, or the current scope
-        // for a temporary — so the escape check (Step 8b) can tell a local's
-        // borrow from a parameter's. (Mutable-borrow exclusivity is enforced
-        // separately, in the ownership pass.)
+        // `&e` / `&mut e`: a shared (`K-Borrow`) or exclusive (`K-BorrowMut`)
+        // borrow, of type `&'r T` / `&'r mut T`. The *type*'s region stays the
+        // shared elided region (so `&e` matches a `&T` annotation), while the
+        // *kind* carries the borrow's real scope: the referent's home region for
+        // a borrowed variable, or the current scope for a temporary. That lets
+        // the escape check tell a local's borrow from a parameter's.
+        // (Mutable-borrow exclusivity is enforced separately, in the ownership
+        // pass.)
         qhir::Expression::Borrow(inner, mutable) => {
             // `&mut x` of a *variable* requires that `x` be a mutable binding
             // (a `let mut`/`mut` parameter). Borrowing a temporary is always
-            // fine — the borrower owns it exclusively.
+            // fine: the borrower owns it exclusively.
             if *mutable
                 && let qhir::Expression::Var(v) = &inner.expr
                 && !env.get(v).map(|b| b.2).unwrap_or(false)
@@ -866,8 +871,8 @@ pub(super) fn infer<'tcx>(
                 });
             }
             let inner_expr = infer(ctx, env, inner)?;
-            // the borrow's region is the referent's storage region — a borrowed
-            // variable's home region, or the current scope for a temporary — and
+            // the borrow's region is the referent's storage region (a borrowed
+            // variable's home region, or the current scope for a temporary) and
             // it lives on the *type* (`&'r T`). The kind records only capability.
             let region = match &inner.expr {
                 qhir::Expression::Var(v) => env
@@ -963,19 +968,16 @@ pub(super) fn infer<'tcx>(
             })
         }
 
-        // A lambda `fn (x: T) -> e` (Step 13). The body is typed in the
-        // enclosing scope extended with the parameter, so it may reference outer
-        // variables — those become *captures* (by move). The captured set is the
+        // A lambda `fn (x: T) -> e`. The body is typed in the enclosing scope
+        // extended with the parameter, so it may reference outer variables;
+        // those become *captures* (by move). The captured set is the
         // body's referenced variables that are bound in the *outer* scope (this
         // excludes the parameter and any variables bound inside the body, whose
         // uniquified names are absent from the outer env).
         qhir::Expression::Lambda { param, body, mode } => {
             let home = ctx.current_scope_region();
             let mut body_env = env.clone();
-            body_env.insert(
-                param.name,
-                (param.ty, Kind::Owned, param.is_mutable, home),
-            );
+            body_env.insert(param.name, (param.ty, Kind::Owned, param.is_mutable, home));
             let body_typed = infer(ctx, &body_env, body)?;
 
             let mut referenced = std::collections::HashSet::new();
@@ -1000,7 +1002,7 @@ pub(super) fn infer<'tcx>(
             })
         }
 
-        // Application of a function value (indirect call) `func(arg)` (Step 13).
+        // Application of a function value (indirect call) `func(arg)`.
         qhir::Expression::Apply { func, arg } => {
             let func_typed = infer(ctx, env, func)?;
             let (param_ty, ret_ty) = match func_typed.ty.kind() {
@@ -1208,8 +1210,8 @@ pub(super) fn infer<'tcx>(
             // Region inference: a callee's reference regions are inferred at the
             // call site, so arguments match region-*blind* (`f<'r>(x: &'r T)` is
             // callable with any borrow); the *result* region is the `meet` of the
-            // argument regions (Calculus §6.3, item 8), stamped onto the return
-            // type once the arguments are typed.
+            // argument regions (Calculus: Region Substitution at Call Sites),
+            // stamped onto the return type once the arguments are typed.
             let expected_tys: Vec<Ty<'tcx>> =
                 raw_expected.iter().map(|t| ctx.region_erase(*t)).collect();
 
@@ -1293,7 +1295,7 @@ pub(super) fn infer<'tcx>(
                 }
             }
             // Check the callee's `where T : C` constraints against the solved
-            // type arguments (Step 10b): the instantiation must have an instance.
+            // type arguments: the instantiation must have an instance.
             for tc in &fun_sig.type_constraints {
                 if let Some(&arg_ty) = mapping.get(&tc.param) {
                     let required_by = Some(ConstraintOrigin {
@@ -1322,8 +1324,8 @@ pub(super) fn infer<'tcx>(
                 kind: Kind::Owned,
             })
         }
-        // `size_of::<T>(): Int` (Memory Step C) — a turbofish *type* argument,
-        // no value args; the size itself is computed by codegen.
+        // `size_of::<T>(): Int`: a turbofish *type* argument, no value args; the
+        // size itself is computed by codegen.
         qhir::Expression::IntrinsicCall {
             fn_name,
             args,
@@ -1404,7 +1406,8 @@ pub(super) fn infer<'tcx>(
             expr: ret_expr,
         } => {
             // A block opens a fresh lexical region scope; locals bound here live
-            // in it, and the block may not yield a borrow of one (Calculus §6.3).
+            // in it, and the block may not yield a borrow of one
+            // (Calculus: The Escape Check).
             let block_region = ctx.enter_region_scope();
             let block_depth = ctx.region_depth(block_region);
 
@@ -1436,7 +1439,7 @@ pub(super) fn infer<'tcx>(
                 expr: typed_hir::Expression::Block {
                     statements: typed_statements,
                     expr: typed_expr,
-                    // Drops are inserted by the ownership pass (Step B).
+                    // Drops are inserted by the ownership pass.
                     drops: Vec::new(),
                 },
                 range: expr.range,

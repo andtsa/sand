@@ -73,10 +73,9 @@ pub enum Statement<'tcx> {
     /// expression statements with side effects
     Eval { value: RValue<'tcx>, range: Range },
 
-    /// Drop the value held in `place` at scope exit (Memory Step B,
-    /// Calculus §6.11). First-class so MIR passes can reorder / elide it and so
-    /// the `Drop` typeclass can attach here. Lowers to `__drop_in_place` (a
-    /// no-op until Step C gives types `release`).
+    /// Drop the value held in `place` at scope exit (Calculus: Ownership and
+    /// Drop). First-class so MIR passes can reorder / elide it and so the
+    /// `Drop` typeclass can attach here. Lowers to `__drop_in_place`.
     Drop { place: Place, range: Range },
 }
 
@@ -102,7 +101,7 @@ pub enum Terminator {
 /// A place: a local plus a (possibly empty) projection path. `projection` is
 /// empty for a plain local (`x`); `[Deref]` denotes going *through* the
 /// reference held in `local` (`*r`), the inverse of [`RValue::Ref`]. Reading a
-/// `[Deref]` place is a load through the pointer; writing one (R3) is a store
+/// `[Deref]` place is a load through the pointer; writing one is a store
 /// through it.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Place {
@@ -131,7 +130,7 @@ impl Place {
 /// A single step in a [`Place`] projection path.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ProjElem {
-    /// Dereference the reference held by the place so far — `*r`.
+    /// Dereference the reference held by the place so far (`*r`).
     Deref,
 }
 
@@ -159,16 +158,16 @@ pub enum Constant {
 pub enum RValue<'tcx> {
     Use(Operand),
 
-    /// The byte size of a type — `size_of::<T>()` (Memory Step C). Carries the
+    /// The byte size of a type (`size_of::<T>()`). Carries the
     /// (monomorphised, concrete) type; codegen emits the target-dependent LLVM
     /// size, the interpreters a layout-free approximation. The type must be
     /// carried here because, unlike the pointer ops, `size_of` has no value
     /// argument to recover it from.
     SizeOf(Ty<'tcx>),
 
-    /// Address-of: a pointer to `place`'s storage — `&place` / `&mut place`
-    /// (Calculus §3.2). The inverse of a `[Deref]` projection. With R2,
-    /// references are real pointers, so this yields the address, not a copy.
+    /// Address-of: a pointer to `place`'s storage (`&place` / `&mut place`).
+    /// The inverse of a `[Deref]` projection. References are pointers, so
+    /// this yields the address, not a copy.
     Ref(Place),
 
     /// Build an aggregate (enum variant or tuple) from a flat list of field
@@ -225,7 +224,7 @@ pub enum RValue<'tcx> {
         args: Vec<Operand>,
     },
 
-    /// A closure value (Step 13): a fat pointer `{ fn_ptr, env_ptr }` to the
+    /// A closure value: a fat pointer `{ fn_ptr, env_ptr }` to the
     /// lifted top-level function `fn_name`. `env` holds the captured operands
     /// (empty / null env in the non-capturing milestone).
     Closure {
@@ -233,7 +232,7 @@ pub enum RValue<'tcx> {
         env: Vec<Operand>,
     },
 
-    /// Indirect call of a function value (Step 13): call the closure `callee`
+    /// Indirect call of a function value: call the closure `callee`
     /// (a `Fn`-typed operand) with `args`.
     CallIndirect {
         callee: Operand,

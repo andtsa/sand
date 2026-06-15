@@ -19,15 +19,11 @@ tuple_type = { "(" ~ type_ ~ ("," ~ type_)+ ~ ")" }
 type_application = { identifier ~ "<" ~ type_app_arg ~ ("," ~ type_app_arg)* ~ ">" }
 type_app_arg = { lifetime | type_ }
 
-// a lifetime / region: `'r`, `'heap`, `'static`. atomic so no internal
-// whitespace is consumed between the tick and the name.
+// a lifetime / region: `'r`, `'heap`, `'static`. 
+// atomic so no internal whitespace is consumed between the tick and the name.
 lifetime = @{ "'" ~ identifier }
 
-// primitive type keywords. atomic (`@`) with a trailing word-boundary
-// predicate so a name with a leading keyword prefix (`IntList`, `Boolean`,
-// `Unite`) lexes as an identifier rather than the keyword + a stray suffix.
-// the atomicity also prevents implicit whitespace from being folded into the
-// matched span (which would otherwise capture `Int ` instead of `Int`).
+// primitive type keywords
 prim_int  = @{ "Int" ~ !(ASCII_ALPHANUMERIC | "_") }
 prim_bool = @{ "Bool" ~ !(ASCII_ALPHANUMERIC | "_") }
 prim_unit = @{ "Unit" ~ !(ASCII_ALPHANUMERIC | "_") } // equivalent to rust (), python None
@@ -50,32 +46,27 @@ core_type = {
   | identifier // named enum type
 }
 
-// reference type `&'r T` (shared) or `&'r mut T` (exclusive) (Calculus §2.3).
-// the lifetime is optional; an absent one is assigned a fresh region. the
-// `mut` keyword marks an exclusive (mutable) borrow (Step 9).
+// reference type `&'r T` (shared) or `&'r mut T` (exclusive)
 borrow_type = { "&" ~ lifetime? ~ mut_kw? ~ core_type }
 
-// a function arrow, optionally annotated with the calling mode (Calculus §3.1
-// `→[K]`): bare `->` is the *reusable* arrow (≈ Rust `Fn`); `-[Owned]>` is
-// consuming (`FnOnce`), `-[BorrowedMut]>` is mutating (`FnMut`), `-[Borrowed]>`
-// is reusable (the explicit form of `->`).
+// a function arrow, optionally annotated with the calling mode
 arrow_kind = { "Owned" | "BorrowedMut" | "Borrowed" }
 fn_arrow   = { ("-[" ~ arrow_kind ~ "]>") | "->" }
 
 // a function type `A -> B`. Unary and right-associative
 // (`A -> B -> C` is `A -> (B -> C)`); the codomain is a full `type_` so it may
 // itself be a function type. The domain is a `core_type`: a nested arrow in the
-// domain (`(A -> B) -> C`) needs the parenthesised form, a later extension.
+// domain (`(A -> B) -> C`) needs the parenthesised form
 fn_type = { core_type ~ fn_arrow ~ type_ }
 
-// a type, optionally ascribed to a region: `Int`, `Int @ 'r` (Calculus §2.3).
+// a type, optionally ascribed to a region: `Int`, `Int @ 'r`
 // the `@ 'r` suffix is parsed here (rather than a left-recursive `region_type`)
-// so the grammar stays a valid PEG. A function type is tried first (it needs the
-// `->`), falling back to an ascribed core type.
+// so the grammar stays a valid PEG. 
+// A function type is tried first (it needs the `->`), falling back to an ascribed core type.
 type_ = { fn_type | core_type ~ ("@" ~ lifetime)? }
 
 // keywords (prevent them from being identifiers)
-KEYWORD = { "if" | "then" | "else" | "let" | "def" | "true" | "false" | "Unit" | "Int" | "Bool" | "while" | "do" | "module" | "mut" | "type" | "match" | "and" | "where" | "use" | "typeclass" | "impl" | "requires" | "for" | "extern" | "deriving" | "fn" }
+KEYWORD = { "if" | "then" | "else" | "let" | "def" | "true" | "false" | "Unit" | "Int" | "Bool" | "while" | "do" | "module" | "mut" | "type" | "match" | "and" | "or" | "xor" | "where" | "use" | "typeclass" | "impl" | "requires" | "for" | "extern" | "deriving" | "fn" }
 
 identifier       = @{ !(KEYWORD ~ !(ASCII_ALPHANUMERIC | "_")) ~ "_"* ~ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
 empty_identifier = @{ "_" }
@@ -92,12 +83,10 @@ multiply = { "*" }
 divide   = { "/" }
 pow      = { "^" }
 negate   = { "!" }
-// `&&` is bitwise AND (on Int); `and` is logical AND (on Bool). single `&` is
-// reserved for borrow syntax (Step 7).
 bitand   = { "&&" }
 logand   = @{ "and" ~ !(ASCII_ALPHANUMERIC | "_") }
-or       = { "|" }
-xor      = { "⊕" | "¡" }
+or       = @{ "or" ~ !(ASCII_ALPHANUMERIC | "_") }
+xor      = @{ "⊕" | ("xor" ~ !(ASCII_ALPHANUMERIC | "_")) }
 gt       = { ">" }
 lt       = { "<" }
 ne       = { "≠" | "!=" }
@@ -106,10 +95,12 @@ ge       = { ">=" | "≥" }
 le       = { "<=" | "≤" }
 
 // type parameters on a generic declaration: `<T>`, `<+a : Owned, -b>`.
-// each parameter carries an optional variance annotation (`+`/`-`; absent =
-// default) and an optional kind annotation (absent = `Owned`). a kind is a base
-// kind (`Owned`/`Never`) or a type-constructor arrow `Owned -> Owned` (Step 11,
-// higher-kinded params); `->` is right-associative and may be parenthesised
+// each parameter carries an optional variance annotation 
+// (`+`/`-`; absent = // default) 
+// and an optional kind annotation (absent = `Owned`). 
+// a kind is a base kind (`Owned`/`Never`) 
+// or a type-constructor arrow `Owned -> Owned`
+// `->` is right-associative and may be parenthesised
 // (`(Owned -> Owned) -> Owned`). only appears in declaration position (right
 // after the def/type name); uses of a type parameter inside a type are bare
 // identifiers (applied via `F<A>`).
@@ -117,12 +108,10 @@ variance_ann = { "+" | "-" }
 kind_atom    = { "Owned" | "Never" | "(" ~ kind_ann ~ ")" }
 kind_ann     = { kind_atom ~ ("->" ~ kind_atom)* }
 type_param   = { variance_ann? ~ identifier ~ (":" ~ kind_ann)? }
-// a region (lifetime) parameter `'r` declared on a generic item (Calculus §8.4).
+// a region (lifetime) parameter `'r` declared on a generic item
 region_param = { lifetime }
 type_params  = { "<" ~ (region_param | type_param) ~ ("," ~ (region_param | type_param))* ~ ">" }
 
-// outlives constraints on a function signature: `where 'r >= 's` (Calculus
-// §8.10). typeclass constraints (`where T : Clone`) arrive in Step 15.
 where_constraint = { (lifetime ~ ">=" ~ lifetime) | (identifier ~ ":" ~ identifier) }
 where_clause     = { "where" ~ where_constraint ~ ("," ~ where_constraint)* }
 
@@ -136,8 +125,6 @@ enum_variant = { identifier ~ ("(" ~ type_ ~ ("," ~ type_)* ~ ")")? }
 deriving_clause = { "deriving" ~ identifier ~ ("," ~ identifier)* }
 type_alias   = { "type" ~ identifier ~ type_params? ~ "=" ~ enum_variant ~ ("|" ~ enum_variant)* ~ deriving_clause? ~ ";"? }
 
-// enum constructors: Light#Red (local), mod::Light#Red (cross-module), or #Red (bare tag, needs check mode)
-// an optional parenthesised argument supplies the variant's payload: `Result#Ok(5)`
 // A comma-separated payload list is sugar for a single tuple payload:
 // `Result#Ok(a, b)` ≡ `Result#Ok((a, b))`.
 external_constructor_expr = { identifier ~ "::" ~ identifier ~ "#" ~ identifier ~ ("(" ~ expression ~ ("," ~ expression)* ~ ")")? }
@@ -166,16 +153,11 @@ match_expr           =  { "match" ~ expression ~ "{" ~ match_arm+ ~ "}" }
 
 // the language is built around expressions
 
-ifstatement = {
-    "if" ~ expression ~ "then" ~ expression ~ ("else" ~ expression)?
-}
+ifstatement = { "if" ~ expression ~ "then" ~ expression ~ ("else" ~ expression)? }
 
-whileloop = {
-    "while" ~ expression ~ "do" ~ expression
-}
+whileloop = { "while" ~ expression ~ "do" ~ expression }
 
-// `f::<T, ...>(args)` — explicit type arguments (turbofish, Memory Step C). The
-// `<` after `::` disambiguates from a `mod::fn` qualified call.
+// `f::<T, ...>(args)`
 turbofish              = { "::" ~ "<" ~ type_ ~ ("," ~ type_)* ~ ">" }
 function_call          = { identifier ~ turbofish? ~ "(" ~ (expression ~ ("," ~ expression)*)? ~ ")" }
 external_function_call = { identifier ~ "::" ~ identifier ~ "(" ~ (expression ~ ("," ~ expression)*)? ~ ")" }
@@ -183,18 +165,19 @@ external_function_call = { identifier ~ "::" ~ identifier ~ "(" ~ (expression ~ 
 // tuple literal: `(a, b, ...)`
 tuple_expr = { "(" ~ expression ~ ("," ~ expression)+ ~ ")" }
 
-// lambda expression `fn (x: T) -> e` (Step 13). Unary; the parameter carries a
-// type annotation (param-type inference is a later extension). The body is a
-// full `expression`, so it extends as far right as possible
-// (`fn (x: Int) -> x + 1` has body `x + 1`); a terminator (`,`, `)`, `}`, …)
-// ends it. Currently produces a *reusable* function value (bare `->` arrow).
+// lambda expression `fn (x: T) -> e`
+// the body is a full `expression`, so it extends as far right as possible
+// (`fn (x: Int) -> x + 1` has body `x + 1`); 
+// a terminator (`,`, `)`, `}`, ...) ends it.
 lambda_param = { "(" ~ mut_kw? ~ identifier ~ ":" ~ type_ ~ ")" }
 lambda_expr  = { "fn" ~ lambda_param ~ fn_arrow ~ expression }
 
 // precedence chaining
-// borrow expression `&e` (shared) or `&mut e` (exclusive) (Calculus §3.2 /
-// §8.7). binds tightly (to a primary), so `&x + 1` is `(&x) + 1`.
+
+// borrow expression `&e` (shared) or `&mut e` (exclusive)
+// binds tightly (to a primary), so `&x + 1` is `(&x) + 1`.
 borrow_expr = { "&" ~ mut_kw? ~ primary }
+
 // dereference expression `*e`: read through a reference (`&T`/`&mut T` -> T).
 // like `borrow_expr` it binds to a primary, so `*x + 1` is `(*x) + 1`. the
 // prefix `*` is unambiguous with the infix multiply, which only appears
@@ -245,13 +228,9 @@ let_tuple      = { "(" ~ let_tuple_elem ~ ("," ~ let_tuple_elem)+ ~ ")" }
 let_binding_elem  = { identifier | empty_identifier }
 let_binding_tuple = { "(" ~ let_binding_elem ~ ("," ~ let_binding_elem)+ ~ ")" }
 let_destructure   = { let_constructor | let_binding_tuple | let_binding_elem }
-// A comma-separated payload list is sugar for a single tuple sub-pattern:
-// `let Cons(x, rest) = …` ≡ `let Cons((x, rest)) = …`.
-let_constructor   = { identifier ~ "#" ~ identifier ~ ("(" ~ let_destructure ~ ("," ~ let_destructure)* ~ ")")? }
+let_constructor   = { identifier ~ "#" ~ identifier ~ ("(" ~ let_destructure ~ ")")? }
 
 // borrow binding `let &x = e` (shared) or `let &mut x = e` (exclusive)
-// (Calculus §3.2 / §6.4): `x` borrows `e`, so it stays usable and `e` is not
-// consumed.
 borrow_binding = { "&" ~ mut_kw? ~ (identifier | empty_identifier) }
 
 // variables, either a single binding, a flat tuple-pattern, a constructor-pattern, or bare binding
@@ -265,9 +244,7 @@ declaration = {
 assignment = { (deref_expr | identifier) ~ "=" ~ expression }
 
 // statements are the imperative elements of the language
-statement = {
-    ((declaration | assignment | expression) ~ ";")
-}
+statement = { ((declaration | assignment | expression) ~ ";") }
 
 // functions are highest-order tokens
 parameter  = { mut_kw? ~ (identifier | empty_identifier) ~ ":" ~ type_ }
@@ -275,28 +252,21 @@ parameters = { parameter ~ ("," ~ parameter)* ~ ","? }
 
 function = { "def" ~ identifier ~ type_params? ~ "(" ~ parameters? ~ ")" ~ ":" ~ type_ ~ where_clause? ~ ":=" ~ expression }
 
-// External (FFI) function declaration (Memory Step A): a bodyless `def` bound
-// to a C symbol of the same name. C ABI, non-variadic; parameter/return types
-// must be FFI-safe (Int, Ptr<T>, Unit). No generics, no `where`-clause.
+// External (FFI) function declaration: 
+// a bodyless `def` bound to a C symbol of the same name. 
 extern_decl = { "extern" ~ "def" ~ identifier ~ "(" ~ parameters? ~ ")" ~ ":" ~ type_ ~ ";" }
 
-// Typeclass declaration (Calculus §8.8). A single type parameter for now
-// (`typeclass Eq<T> { … }`); `requires` lists superclasses. A method is a `def`
-// header (sand has no arrow types yet, so a signature reuses the function-header
-// form) with an optional default body (`:= expression`).
+// typeclass declaration
 typeclass_method = { "def" ~ identifier ~ type_params? ~ "(" ~ parameters? ~ ")" ~ ":" ~ type_ ~ where_clause? ~ (":=" ~ expression)? }
 requires_clause  = { "requires" ~ identifier ~ ("," ~ identifier)* }
 typeclass_decl   = { "typeclass" ~ identifier ~ type_params ~ requires_clause? ~ "{" ~ typeclass_method* ~ "}" }
 
-// Typeclass implementation (Calculus §8.9): `impl Eq for Int { def eq(…) := … }`.
+// typeclass implementation: `impl Eq for Int { def eq(...) := ... }`.
 impl_decl = { "impl" ~ identifier ~ "for" ~ type_ ~ "{" ~ function* ~ "}" }
 
 module = { "module" ~ identifier ~ ";"? }
 
-// import a name (or all names) from another module into unqualified scope.
-// `use math::gcd;` brings one item; `use geometry::*;` is a glob. The path is
-// parsed as a general multi-segment path (room for nested modules later);
-// resolution currently handles the flat `module::item` / `module::*` case.
+// import a name (or all names) from another module into unqualified scope
 use_glob = { "*" }
 use_path = { identifier ~ ("::" ~ identifier)* ~ ("::" ~ use_glob)? }
 use_decl = { "use" ~ use_path ~ ";" }

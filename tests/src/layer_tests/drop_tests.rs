@@ -1,7 +1,6 @@
-//! Memory Step B — drop / RAII placement (Calculus §6.11).
+//! Drop / RAII placement (Calculus: Ownership and Drop).
 //!
-//! Drops are *observationally inert* until Step C (`__drop_in_place` is a
-//! no-op), so these tests assert drop *placement* structurally: they lower a
+//! These tests assert drop *placement* structurally: they lower a
 //! program to MIR and inspect the first-class `Statement::Drop`s. An owned,
 //! non-`Copy` binding is dropped at scope exit in reverse declaration order; a
 //! value moved out (returned/consumed) or a `Copy` value is not dropped; and a

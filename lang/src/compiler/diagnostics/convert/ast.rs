@@ -263,7 +263,7 @@ pub fn ast_error_to_diagnostics(
                 },
             );
         }
-        // Typeclass declaration errors (Step 10): the `#[error]` Display already
+        // Typeclass declaration errors: the `#[error]` Display already
         // carries a full message; surface it with the variant's range.
         err @ (AstError::UnknownTypeclass { range, .. }
         | AstError::TypeclassParamArity { range, .. }

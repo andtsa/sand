@@ -1,10 +1,10 @@
-//! Memory Step C.2 — `size_of::<T>()` and turbofish.
+//! `size_of::<T>()` and turbofish.
 //!
 //! `size_of` takes an explicit type argument (turbofish) and returns the byte
 //! size of that type. Codegen emits the real, target-dependent LLVM size; the
 //! interpreters use a layout-free approximation that happens to match for the
-//! primitive/tuple cases tested here. Turbofish is wired only for `size_of` in
-//! Step C; on any other call it is a clear error.
+//! primitive/tuple cases tested here. Turbofish is wired only for `size_of`;
+//! on any other call it is a clear error.
 
 use lang::ir_types::typed_hir::Expression;
 
@@ -56,7 +56,7 @@ fn size_of_used_in_arithmetic() {
     );
 }
 
-// ── turbofish is restricted to `size_of` in Step C ───────────────────────
+// ── turbofish is restricted to `size_of` ─────────────────────────────────
 
 #[test]
 fn turbofish_on_regular_function_is_rejected() {

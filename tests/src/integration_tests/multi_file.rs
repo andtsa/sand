@@ -43,7 +43,7 @@ fn multi_file_cross_call_compiles() {
 }
 
 /// A file with no `module` declaration becomes a module **named after the
-/// file** (Step M, option 2): `geometry.sand`'s items live in module
+/// file**: `geometry.sand`'s items live in module
 /// `geometry`, and are reachable from another file via `geometry::…`. The
 /// module name is *derived* from the file (`code_file(fr).module_name()`), not
 /// a synthetic placeholder.

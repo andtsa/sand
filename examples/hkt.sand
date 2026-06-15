@@ -1,15 +1,5 @@
 //@TEST:{0}[42,7,41]
-// Step 11 — higher-kinded type parameters.
-//
-// `Container<F : Owned -> Owned>` quantifies over a type *constructor* (not a
-// type): `F` has kind `Owned -> Owned`, and methods mention `F<A>`. Each
-// instance is given per constructor (`impl Container for Opt` / `for Cell`), and
-// the right instance is recovered from a call argument by unifying the method's
-// `F<A>` against the concrete `Opt<Int>` / `Cell<Int>`.
-//
-// (`Functor`/`Monad` need function types `A -> B`, which arrive with lambdas in
-// Step 13; these arrow-free container methods exercise the HKT machinery on its
-// own.)
+// higher-kinded type parameters.
 
 type Opt<a> = Nothing | Just(a)
 

@@ -1,7 +1,7 @@
 //! Call-site region inference: a function with explicit lifetime parameters
 //! (`def f<'r>(x: &'r T)`) is callable with an ordinary borrow. Reference
 //! regions carry no type-level constraint (safety is the lexical escape check),
-//! so they are inferred away at the call boundary — `&'r T` accepts any `&_ T`.
+//! so they are inferred away at the call boundary: `&'r T` accepts any `&_ T`.
 
 use lang::ir_types::typed_hir::Expression;
 
@@ -79,7 +79,7 @@ fn region_parametric_result_flows_into_a_binding() {
 fn returning_a_call_result_over_a_local_is_rejected() {
     // the call result's region is the `meet` of its argument regions (item 8), so
     // a result tied to a *local* borrow names a local region and cannot be
-    // returned (Calculus §6.3, frame boundary).
+    // returned (Calculus: The Escape Check, frame boundary).
     typecheck_fails(
         "def longest<'a>(x: &'a Int, y: &'a Int): &'a Int := if true then x else y \n \
          def f(): &Int := { let a = 1; longest(&a, &a) } \n \
@@ -91,7 +91,7 @@ fn returning_a_call_result_over_a_local_is_rejected() {
 fn returning_a_call_result_tied_to_a_parameter_is_accepted() {
     // `wrapper` forwards a reference *parameter* through a call; the `meet`
     // instantiates the result to the parameter's region, which outlives the call,
-    // so it is returnable (Calculus §6.3, item 8 reconciliation).
+    // so it is returnable (Calculus: Region Substitution at Call Sites).
     typecheck(
         "def id_ref<'r>(x: &'r Int): &'r Int := x \n \
          def wrapper<'r>(r: &'r Int): &'r Int := id_ref(r) \n \
@@ -99,8 +99,8 @@ fn returning_a_call_result_tied_to_a_parameter_is_accepted() {
     );
 }
 
-// ── `where 'a >= 'b` checked at call sites (Calculus §1.1, §8.10)
-// ─────────────
+// ── `where 'a >= 'b` checked at call sites (Calculus: Region Substitution at
+// Call Sites) ─────────────
 //
 // The call's region substitution maps each callee lifetime parameter to the
 // actual argument region; the callee's `where` clauses are then checked under
@@ -109,7 +109,7 @@ fn returning_a_call_result_tied_to_a_parameter_is_accepted() {
 #[test]
 fn satisfied_where_clause_param_outlives_local_is_accepted() {
     // `pick` needs `'a >= 'b`; the call binds 'a to a caller lifetime parameter
-    // and 'b to a local — a parameter outlives a local, so the constraint holds.
+    // and 'b to a local; a parameter outlives a local, so the constraint holds.
     typecheck(
         "def pick<'a, 'b>(x: &'a Int, y: &'b Int): &'a Int where 'a >= 'b := x \n \
          def f<'o>(o: &'o Int): &'o Int := { let inner = 2; pick(o, &inner) } \n \

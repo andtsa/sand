@@ -1,5 +1,6 @@
 //! the different contexts for the compiler
 
+mod arenas;
 mod compile;
 mod project;
 

@@ -12,7 +12,7 @@ use crate::lang::types::Variance;
 /// `range` are retained for diagnostics. Uses of the parameter inside a type
 /// resolve to [`TyKind::Param`](crate::lang::types::TyKind::Param)`(id)`.
 /// `variance` and `kind` carry the declared (or defaulted) annotations
-/// (Calculus §2.2).
+/// (Calculus: Types).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TypeParam {
     pub id: TypeParamId,
@@ -21,7 +21,8 @@ pub struct TypeParam {
     pub variance: Variance,
     /// Whether `variance` was written explicitly (`+a`/`-a`/`∅a`) rather than
     /// defaulted. An absent annotation is *inferred* from payload positions at
-    /// the variance check (Calculus §2.1) and so is never rejected as unsound.
+    /// the variance check (Calculus: Types, variance) and so is never rejected
+    /// as unsound.
     pub explicit_variance: bool,
     pub kind: Kind,
 }
@@ -37,7 +38,7 @@ pub struct TypeParamSpec {
 }
 
 /// A single declared region (lifetime) parameter (the `'r` in `def f<'r>(...)`
-/// or `type Ref<'r, a>`; Calculus §8.4).
+/// or `type Ref<'r, a>`; Calculus: Generic parameters).
 ///
 /// `region` is the [`RegionVar`] allocated during AST building, scoped to this
 /// declaration; `name` and `range` are retained for diagnostics. Uses of the

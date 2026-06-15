@@ -42,13 +42,6 @@ impl Copy for Bool { }
 impl Clone for Unit { def clone(x: &Unit): Unit := *x }
 impl Copy for Unit { }
 
-// ── Functor / Applicative / Monad (Step 13) ─────────────────────────────────
-//
-// The classic higher-kinded hierarchy, now expressible: the type parameter `F`
-// has kind `Owned -> Owned` (HKT, Step 11) and the methods take/return function
-// values (lambdas, Step 13). Instances are given per type constructor (e.g.
-// `impl Functor for Option`) — see `examples/monad.sand`.
-
 // A `Functor` lets you map a function over the contents of an `F<A>`.
 typeclass Functor<F : Owned -> Owned> {
     def fmap<A, B>(x: F<A>, f: A -> B): F<B>
@@ -68,13 +61,13 @@ typeclass Monad<F : Owned -> Owned> requires Applicative {
     def bind<A, B>(x: F<A>, f: A -> F<B>): F<B>
 }
 
-// ── Heaped: the `Unique` (Box-like) allocation strategy (Memory Step C) ──────
+// Heaped: the `Unique` (Box-like) allocation strategy
 //
 // The compiler-internal strategy backing `deriving Heaped`. A `Unique<T>` is a
 // non-`Copy` handle owning one heap node of type `T`; the compiler lowers a
 // heaped type's construct / match / drop to `unique_alloc` / `unique_borrow`
-// (Step C.5) / `unique_release`. The allocation policy lives *here*, over the
-// Step-A `Ptr` primitives — swapping the allocator is swapping these functions.
+// / `unique_release`. The allocation policy lives *here*, over the
+// `Ptr` primitives, swapping the allocator is swapping these functions.
 
 extern def malloc(size: Int): Ptr<Unit>;
 extern def free(p: Ptr<Unit>): Unit;
@@ -101,7 +94,7 @@ def unique_release<T>(handle: Unique<T>): Unit := match handle {
 
 // Move the node out of a handle and free *only* the backing cell (a shallow
 // release): the node value is returned by move, so its fields become the
-// caller's responsibility. This backs a consuming `match` on a heaped value —
+// caller's responsibility. This backs a consuming `match` on a heaped value:
 // the node is read onto the stack and destructured, its bound fields moving to
 // the arm bindings while the husk allocation is reclaimed here.
 def unique_take<T>(handle: Unique<T>): T := match handle {

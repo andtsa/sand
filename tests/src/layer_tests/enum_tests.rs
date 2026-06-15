@@ -569,7 +569,8 @@ fn unknown_type_in_external_constructor_is_error() {
 }
 
 // ── Multi-payload constructors: `C(a, b)` is sugar for a single tuple payload
-// `C((a, b))`, in declarations, constructor expressions, and patterns. ─────────
+// `C((a, b))`, in declarations, constructor expressions, and patterns.
+// ─────────
 
 #[test]
 fn multi_payload_constructor_and_pattern() {

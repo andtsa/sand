@@ -118,7 +118,7 @@ fn interpret_bool_and_false() {
 #[test]
 fn interpret_bool_or() {
     assert_eq!(
-        run_both("def main(): Bool := false | true"),
+        run_both("def main(): Bool := false or true"),
         Expression::Bool(true)
     );
 }

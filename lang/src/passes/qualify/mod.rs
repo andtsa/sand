@@ -19,7 +19,7 @@ use crate::ir_types::hhir::{self};
 use crate::ir_types::qhir::Program;
 use crate::ir_types::qhir::{self};
 use crate::lang::intrinsics::Intrinsic;
-use crate::lang::types::EnumRef;
+use crate::lang::types::AdtRef;
 use crate::passes::qualify::error::QualifyError;
 
 pub mod error;
@@ -152,11 +152,11 @@ impl<'qual, 'run> QualfiyCtx<'qual, 'run> {
     ///
     /// Factored out of [`Self::resolve_constructor`] /
     /// [`Self::resolve_external_constructor`] so the only thing that differs
-    /// between a local and an external constructor lookup — *how the
-    /// `EnumRef` is found* — is the only thing duplicated.
+    /// between a local and an external constructor lookup (*how the `EnumRef`
+    /// is found*) is the only thing duplicated.
     fn resolve_variant_idx(
         &self,
-        enum_ref: EnumRef<'run>,
+        enum_ref: AdtRef<'run>,
         display_name: &str,
         variant: &str,
         range: Range,
@@ -179,7 +179,7 @@ impl<'qual, 'run> QualfiyCtx<'qual, 'run> {
     /// that previously appeared, inline and slightly differently worded, in
     /// three separate places (`Constructor` / `ExternalConstructor` expressions
     /// and `Constructor` patterns). Bundling it into one getter is exactly
-    /// `to lookupEnumByName . to lookupVariant` composition in `lens` terms —
+    /// `to lookupEnumByName . to lookupVariant` composition in `lens` terms,
     /// chaining two partial lookups into one:
     ///
     /// ```haskell
@@ -195,7 +195,7 @@ impl<'qual, 'run> QualfiyCtx<'qual, 'run> {
     /// The only thing that differs between resolving a *constructor
     /// expression* and a *constructor pattern* is which `QualifyError`
     /// variant ("unknown constructor type" vs. "unknown pattern type") to
-    /// raise when the type name doesn't resolve — so that one decision is
+    /// raise when the type name doesn't resolve, so that one decision is
     /// taken as a parameter (`not_found`) rather than duplicating the whole
     /// chain. This is the getter analogue of passing a `Prism` in to pick
     /// which constructor to `review` on failure.
@@ -206,7 +206,7 @@ impl<'qual, 'run> QualfiyCtx<'qual, 'run> {
         range: Range,
         module_name: &ModuleRef<'run>,
         not_found: impl FnOnce(String, Range, ModuleInfo<'run>) -> QualifyError<'run>,
-    ) -> Result<(EnumRef<'run>, usize), QualifyError<'run>> {
+    ) -> Result<(AdtRef<'run>, usize), QualifyError<'run>> {
         let enum_ref = self
             .compile_ctx
             .lookup_enum_scoped(type_name, *module_name)
@@ -231,7 +231,7 @@ impl<'qual, 'run> QualfiyCtx<'qual, 'run> {
         variant: &str,
         range: Range,
         module_name: &ModuleRef<'run>,
-    ) -> Result<(EnumRef<'run>, usize), QualifyError<'run>> {
+    ) -> Result<(AdtRef<'run>, usize), QualifyError<'run>> {
         self.resolve_enum_and_variant(
             type_name,
             variant,
@@ -248,7 +248,7 @@ impl<'qual, 'run> QualfiyCtx<'qual, 'run> {
     /// The external-module variant of [`Self::resolve_constructor`]: first
     /// resolves `mod_name -> ModuleRef` (a getter in its own right,
     /// [`Self::get_module_by_name`]), then looks the enum up *scoped to that
-    /// module* rather than globally — i.e. `lookup_enum_by_name` is replaced
+    /// module* rather than globally; i.e. `lookup_enum_by_name` is replaced
     /// by `to (resolve mod_name) . lookup_enum_in_module`. The display name
     /// used in error messages is qualified as `module::type` to match the
     /// surface syntax the user wrote.
@@ -259,7 +259,7 @@ impl<'qual, 'run> QualfiyCtx<'qual, 'run> {
         variant: &str,
         range: Range,
         module_name: &ModuleRef<'run>,
-    ) -> Result<(EnumRef<'run>, usize), QualifyError<'run>> {
+    ) -> Result<(AdtRef<'run>, usize), QualifyError<'run>> {
         let mod_ref = self.get_module_by_name(mod_name, *module_name, range)?;
         let display_name = format!("{mod_name}::{type_name}");
         let enum_ref = self
@@ -316,8 +316,8 @@ impl<'tcx> Program<'tcx> {
                 fn_names.insert(name, f.range);
                 fns.insert(f.name);
             }
-            // External (FFI) functions (Memory Step A) are bodyless, so they are
-            // not in `functions`; make them visible for unqualified calls in
+            // External (FFI) functions are bodyless, so they are not in
+            // `functions`; make them visible for unqualified calls in
             // their declaring module.
             for ext in q.compile_ctx.externs_in_module(*module_name) {
                 fns.insert(ext);
@@ -534,8 +534,8 @@ fn qualify_expr<'tcx>(
                 .into_iter()
                 .map(|a| qualify_expr(q, module_name, a))
                 .collect::<Result<Vec<_>, QualifyError<'tcx>>>()?;
-            // turbofish (Memory Step C) is wired only for type-argument
-            // intrinsics (`size_of`); on anything else it is a clear error.
+            // turbofish is wired only for type-argument intrinsics (`size_of`);
+            // on anything else it is a clear error.
             let turbofish_err = |name: &str| QualifyError::TurbofishUnsupported {
                 func: name.to_string(),
                 range: expr.range,

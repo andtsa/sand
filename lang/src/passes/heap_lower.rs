@@ -1,23 +1,23 @@
-//! Memory Step C.5 — heap lowering.
+//! Heap lowering.
 //!
 //! Rewrites every `deriving Heaped` enum into a `Unique<Node>` handle over the
-//! core-lib allocator, so that **no heaped enum survives** into ownership,
-//! monomorphisation, or codegen — those passes only ever see ordinary enums,
+//! core-lib allocator, so that no heaped enum survives into ownership,
+//! monomorphisation, or codegen: those passes only ever see ordinary enums,
 //! `Unique` handles, and `Ptr` ops.
 //!
-//! The transformation, per the Step C plan:
-//!   * **Node synthesis** — for each heaped enum `E<T…>`, synthesise a
-//!     non-recursive node enum `E$Node<T…>` with the same variants, every
-//!     heaped field rewritten to its `Unique<…$Node>` handle (so the type is
-//!     finite — recursion goes through a pointer).
-//!   * **Type rewrite** — a homomorphism `R` applied uniformly to every type in
-//!     the program: a heaped `E<a>` becomes `Unique<E$Node<a>>`.
-//!   * **Construct** — `E#C(p)` becomes `unique_alloc(E$Node#C(p))`.
-//!   * **Consuming match** — `match s { … }` (when `s` is heaped and some arm
-//!     inspects a variant) becomes `{ let n = unique_take(s); match n { … } }`,
+//! The transformation has four parts:
+//!   * **Node synthesis**: for each heaped enum `E<T..>`, synthesise a
+//!     non-recursive node enum `E$Node<T..>` with the same variants, every
+//!     heaped field rewritten to its `Unique<..$Node>` handle (so the type is
+//!     finite, with recursion going through a pointer).
+//!   * **Type rewrite**: a homomorphism `R` applied uniformly to every type in
+//!     the program, so a heaped `E<a>` becomes `Unique<E$Node<a>>`.
+//!   * **Construct**: `E#C(p)` becomes `unique_alloc(E$Node#C(p))`.
+//!   * **Consuming match**: `match s { … }` (when `s` is heaped and some arm
+//!     inspects a variant) becomes `{ let n = unique_take(s); match n { .. } }`,
 //!     the patterns retargeted to the node enum. Every payload position is
 //!     bound (wildcards become fresh bindings) so ownership's scope-exit drops
-//!     reclaim any field the arm does not move out — no leak.
+//!     reclaim any field the arm does not move out, with no leak.
 //!
 //! Runs **before** ownership (so drops are inserted uniformly on the resulting
 //! `Unique` handles) and before mono (so the injected generic `unique_*` calls
@@ -30,17 +30,17 @@ use crate::compiler::structure::Range;
 use crate::compiler::structure::VarDeclType;
 use crate::internal_bug;
 use crate::ir_types::typed_hir::*;
-use crate::lang::types::EnumRef;
+use crate::lang::types::AdtRef;
 use crate::lang::types::Kind;
 use crate::lang::types::Ty;
 use crate::lang::types::TyKind;
 
 // `node_of` is keyed by `EnumRef`, whose interior `Cell` (variant payloads) is
 // never part of its hash/eq (it hashes by arena identity), so the mutable-key
-// lint does not apply — mirroring the other enum-keyed maps in the compiler.
+// lint does not apply, mirroring the other enum-keyed maps in the compiler.
 #[allow(clippy::mutable_key_type)]
 pub fn lower<'tcx>(ctx: &mut CompileCtx<'tcx>, program: TypedProgram<'tcx>) -> TypedProgram<'tcx> {
-    let heaped: Vec<EnumRef<'tcx>> = ctx
+    let heaped: Vec<AdtRef<'tcx>> = ctx
         .all_enums()
         .filter(|e| ctx.get_enum(*e).heaped_strategy().is_some())
         .collect();
@@ -60,7 +60,7 @@ pub fn lower<'tcx>(ctx: &mut CompileCtx<'tcx>, program: TypedProgram<'tcx>) -> T
 
     // Phase 1: register every node enum with empty payloads, so mutually
     // recursive heaped types can reference each other's nodes.
-    let mut node_of: Map<EnumRef<'tcx>, EnumRef<'tcx>> = Map::default();
+    let mut node_of: Map<AdtRef<'tcx>, AdtRef<'tcx>> = Map::default();
     for &e in &heaped {
         let def = ctx.get_enum(e);
         let node_name = format!("{}$Node", def.name);
@@ -118,8 +118,8 @@ pub fn lower<'tcx>(ctx: &mut CompileCtx<'tcx>, program: TypedProgram<'tcx>) -> T
 
 struct HeapLower<'a, 'tcx> {
     ctx: &'a mut CompileCtx<'tcx>,
-    node_of: Map<EnumRef<'tcx>, EnumRef<'tcx>>,
-    unique_er: EnumRef<'tcx>,
+    node_of: Map<AdtRef<'tcx>, AdtRef<'tcx>>,
+    unique_er: AdtRef<'tcx>,
     alloc_fn: FunRef<'tcx>,
     take_fn: FunRef<'tcx>,
 }
@@ -130,7 +130,7 @@ impl<'tcx> HeapLower<'_, 'tcx> {
         self.ctx.intern_app(self.unique_er, vec![inner], vec![])
     }
 
-    /// `unique_take(handle) : node_ty` — move the node out of a handle.
+    /// `unique_take(handle) : node_ty`: move the node out of a handle.
     fn take(&self, handle: Expr<'tcx>, node_ty: Ty<'tcx>, range: Range) -> Expr<'tcx> {
         Expr {
             expr: Expression::Call {
@@ -159,7 +159,7 @@ impl<'tcx> HeapLower<'_, 'tcx> {
         }
     }
 
-    /// The type homomorphism `R`: heaped `E<a>` → `Unique<E$Node<a>>`,
+    /// The type homomorphism `R`: heaped `E<a>` -> `Unique<E$Node<a>>`,
     /// recursing structurally everywhere else.
     fn rewrite_ty(&mut self, ty: Ty<'tcx>) -> Ty<'tcx> {
         match ty.kind() {
@@ -201,7 +201,7 @@ impl<'tcx> HeapLower<'_, 'tcx> {
                 let inner = self.rewrite_ty(*inner);
                 self.ctx.region_ty(inner, *r)
             }
-            // Int, Bool, Unit, Param, Top, … carry no heaped sub-structure.
+            // Int, Bool, Unit, Param, Top, .. carry no heaped sub-structure.
             _ => ty,
         }
     }
@@ -235,7 +235,7 @@ impl<'tcx> HeapLower<'_, 'tcx> {
             } => {
                 let payload = payload.map(|p| Box::new(self.rewrite_expr(*p)));
                 if let Some(&node) = self.node_of.get(&enum_ref) {
-                    // `E#C(p)` → `unique_alloc(E$Node#C(p))`.
+                    // `E#C(p)` -> `unique_alloc(E$Node#C(p))`.
                     let node_ty = self.strip_unique(ty);
                     let node_ctor = Expr {
                         expr: Expression::Constructor {
@@ -371,7 +371,7 @@ impl<'tcx> HeapLower<'_, 'tcx> {
                 arg: Box::new(self.rewrite_expr(*arg)),
             },
             // `Closure` is produced by monomorphisation, which runs after heap
-            // lowering — it carries no types to rewrite, so pass it through.
+            // lowering; it carries no types to rewrite, so pass it through.
             Expression::Closure { func, captures } => Expression::Closure { func, captures },
             // leaves
             Expression::Var(_) | Expression::Int(_) | Expression::Bool(_) | Expression::Unit => {
@@ -438,7 +438,7 @@ impl<'tcx> HeapLower<'_, 'tcx> {
         &mut self,
         arm: TypedMatchArm<'tcx>,
         node_ty: Ty<'tcx>,
-        node_er: EnumRef<'tcx>,
+        node_er: AdtRef<'tcx>,
         range: Range,
     ) -> TypedMatchArm<'tcx> {
         let pattern = match arm.pattern {
@@ -469,7 +469,7 @@ impl<'tcx> HeapLower<'_, 'tcx> {
             },
             MatchPattern::Binding { .. } => internal_bug!(
                 "a named binding arm on a heaped match rebinds the handle; \
-                 unsupported in Step C.5 (use variant arms)"
+                 unsupported (use variant arms)"
             ),
             MatchPattern::Tuple { .. } | MatchPattern::IntLit(_) | MatchPattern::BoolLit(_) => {
                 internal_bug!("tuple/literal pattern as a top-level arm on an enum scrutinee")
@@ -521,10 +521,10 @@ impl<'tcx> HeapLower<'_, 'tcx> {
                 }
             }
             MatchPattern::Variant { .. } => internal_bug!(
-                "nested variant pattern on a heaped field is unsupported in Step C.5 \
+                "nested variant pattern on a heaped field is unsupported \
                  (it would need a recursive `unique_take`)"
             ),
-            // literals match Copy scalar positions — left as-is.
+            // literals match Copy scalar positions, left as-is.
             lit @ (MatchPattern::IntLit(_) | MatchPattern::BoolLit(_)) => lit,
         }
     }
@@ -541,9 +541,7 @@ impl<'tcx> HeapLower<'_, 'tcx> {
                 payload,
             } => {
                 if self.node_of.contains_key(&enum_ref) {
-                    internal_bug!(
-                        "nested variant pattern on a heaped field is unsupported in Step C.5"
-                    );
+                    internal_bug!("nested variant pattern on a heaped field is unsupported");
                 }
                 MatchPattern::Variant {
                     ty: self.rewrite_ty(ty),

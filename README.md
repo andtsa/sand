@@ -4,11 +4,17 @@ a compiler for a small statically-typed, expression-oriented language with an af
 
 ## usage
 
+### installation
+**requirements**:
+- [rust](https://rust-lang.org/tools/install/)
+- llvm-21 (`brew install llvm@21`, `apt-get install llvm-21`, https://github.com/llvm/llvm-project/releases/tag/llvmorg-21.1.8)
+- `cc`
+
 1. [install rust](https://rust-lang.org/tools/install/)
 2. clone & cd in the repo
 3. `cargo build` to compile the compiler & all utilities
 
-now you have the 2 main binaries: `target/debug/sand-cli` and `target/debug/sand-lsp`, as well as 
+now you have the 2 main binaries: `target/debug/sand-cli` and `target/debug/sand-lsp`, as well as several other utility binaries in `target/debug/`.
 
 ### `sand-cli`
 use it to compile `.sand` files to executables:
@@ -39,7 +45,7 @@ sources = [
 ```
 
 <details><summary>sand-lsp</summary>
-unfortunately most IDEs nowdays do not support custom LSPs easily, and instead require a plugin or extension to be installed (which doesnt exist for sand).
+unfortunately most IDEs nowadays do not support custom LSPs out of the box, and instead require a plugin or extension to be installed (which doesn't exist for sand).
 
 however if you're using vim/nvim, you can add the lsp with:
 ```lua
@@ -80,7 +86,7 @@ its grammar is defined in [`grammar.pest`](grammar.pest), and the parser is auto
 the type system, kinds, regions & borrows, ownership, generics, typeclasses, and the memory model, is specified formally in [`Calculus.md`](Calculus.md)
 
 ### types
-`Int`, `Bool`, `Unit`, user-defined enums (`type Ordering := Lt | Eq | Gt`), [OCaml-style polymorphic variants](hhttps://ocaml.org/manual/5.4/polyvariant.html) (without subtyping):
+`Int`, `Bool`, `Unit`, user-defined enums/adts (`type Ordering := Lt | Eq | Gt`), [OCaml-style polymorphic variants](https://ocaml.org/manual/5.4/polyvariant.html) (without subtyping):
 ```sand
 def check(x: Int): #one | #two | #other :=
     if x < 0 then #one else if x > 0 then #two else #other
@@ -154,7 +160,7 @@ def use_it<T>(x: T): Int where T : ToInt := to_int(x)
 ### memory
 heap allocation is opt-in via `deriving Heaped` on a type; a (mutually) recursive type *must* derive it (else it would be infinite-sized). non-recursive types are stack tagged-unions. the compiler stays allocation-agnostic, since it knows only `Ptr<T>`, `extern` FFI, and a `Heaped` lowering protocol; `malloc`/`free` and the `Unique` strategy live in [`core.sand`](lang/src/core.sand). drops free deterministically.
 ```sand
-type Expr = Lit(Int) | Add((Expr, Expr)) | Neg(Expr) deriving Heaped
+type Expr = Lit(Int) | Add(Expr, Expr) | Neg(Expr) deriving Heaped
 ```
 
 ## IR layers
@@ -222,7 +228,7 @@ the typed ast and final HIR.
 - the `else` branch becomes mandatory, `if` without `else` is desugared to `if ... then ... else ()`, requiring the return type of `if` to be `Unit`.
 - declaration types are resolved since type annotations are no longer optional in the tree.
 - bare `Tag` expressions are eliminated, `#gt` in a context expecting `Ordering` becomes `Constructor { enum_ref, variant_idx: 2 }`.
-- this is also the layer the three `TypedProgram -> TypedProgram` transforms operate on (heap lowering, ownership/drop insertion, monomorphisation) before it is lowered to MIR — so generics, kinds, and `deriving Heaped` types are all gone by the time MIR is produced.
+- this is also the layer the three `TypedProgram -> TypedProgram` transforms operate on (heap lowering, ownership/drop insertion, monomorphisation) before it is lowered to MIR, so generics, kinds, and `deriving Heaped` types are all gone by the time MIR is produced.
 
 ---
 
@@ -304,7 +310,7 @@ it wraps an `im::HashMap`[^2] (a persistent immutable hash map) and is cheaply c
 
 match exhaustiveness is checked by collecting covered variant indices into a `Set` and comparing against the total variant count.
 
-this pass also resolves generic instantiations (unifying parameters against argument types), checks kinds, and enforces region safety: borrows carry a lexical region, and the escape check rejects any block result or function return whose type's free regions mention a region that does not outlive the boundary (`'r ∉ freeRegions(T)`). it does **not** check affinity — that is the ownership pass below.
+this pass also resolves generic instantiations (unifying parameters against argument types), checks kinds, and enforces region safety: borrows carry a lexical region, and the escape check rejects any block result or function return whose type's free regions mention a region that does not outlive the boundary (`'r ∉ freeRegions(T)`). it does **not** check affinity; that is the ownership pass below.
 
 
 [^1]: https://www.cis.upenn.edu/~bcpierce/papers/lti-toplas.pdf
@@ -316,7 +322,7 @@ this pass also resolves generic instantiations (unifying parameters against argu
 
 `TypedProgram -> TypedProgram`
 
-rewrites every `deriving Heaped` enum into a `Unique<Node>` handle over the core-lib allocator: a heaped `E<a>` becomes `Unique<E$Node<a>>` (a synthesised, non-recursive node enum), `E#C(p)` becomes `unique_alloc(E$Node#C(p))`, and a consuming `match`/`let`-pattern becomes `unique_take` + an ordinary node match. runs *before* ownership (so drops land uniformly on the resulting handles) and *before* mono (so the injected `unique_*` calls monomorphise normally). after this pass no heaped enum survives — every later pass sees only ordinary enums, `Unique` handles, and `Ptr` ops.
+rewrites every `deriving Heaped` enum into a `Unique<Node>` handle over the core-lib allocator: a heaped `E<a>` becomes `Unique<E$Node<a>>` (a synthesised, non-recursive node enum), `E#C(p)` becomes `unique_alloc(E$Node#C(p))`, and a consuming `match`/`let`-pattern becomes `unique_take` + an ordinary node match. runs *before* ownership (so drops land uniformly on the resulting handles) and *before* mono (so the injected `unique_*` calls monomorphise normally). after this pass no heaped enum survives: every later pass sees only ordinary enums, `Unique` handles, and `Ptr` ops.
 
 ---
 
@@ -324,10 +330,10 @@ rewrites every `deriving Heaped` enum into a `Unique<Node>` handle over the core
 
 `TypedProgram -> Result<TypedProgram, OwnershipError>`
 
-a move/borrow dataflow analysis over the typed program — and a *transformer*, not just a checker: it inserts drops. `OwnershipEnv` (an `im::OrdMap` keyed by `UniqVar`, so key order is declaration order) tracks each variable as `Owned`/`Moved` plus its live borrows. it enforces:
-- **affinity** — using a non-`Copy` owned variable marks it `Moved`; a second use is an error (hinting `clone(&x)` when the type is `Clone`)
-- **`&mut` exclusivity** — a mutable borrow conflicts with any other live borrow of the same place; borrows are released lexically at block exit, and `if`/`match` merges union them
-- **drop placement** — at scope exit, every owned non-`Copy` local is dropped in reverse declaration order; at a branch merge, a value owned on one branch but moved on another gets a completing drop. these are recorded in `Block { drops }` and lowered to a first-class MIR `Statement::Drop`.
+a move/borrow dataflow analysis over the typed program. it is a *transformer*, not just a checker: it inserts drops. `OwnershipEnv` (an `im::OrdMap` keyed by `UniqVar`, so key order is declaration order) tracks each variable as `Owned`/`Moved` plus its live borrows. it enforces:
+- **affinity**: using a non-`Copy` owned variable marks it `Moved`; a second use is an error (hinting `clone(&x)` when the type is `Clone`)
+- **`&mut` exclusivity**: a mutable borrow conflicts with any other live borrow of the same place; borrows are released lexically at block exit, and `if`/`match` merges union them
+- **drop placement**: at scope exit, every owned non-`Copy` local is dropped in reverse declaration order; at a branch merge, a value owned on one branch but moved on another gets a completing drop. these are recorded in `Block { drops }` and lowered to a first-class MIR `Statement::Drop`.
 
 this is where the affine discipline lives: the type checker's context is structural (it never removes a variable on use), so ownership is a separate analysis over the already-typed tree.
 
@@ -357,7 +363,7 @@ this code is adapted (effectively 1-1) from the explicate control assignment of 
 .
 ├── Cargo.toml      // workspace root
 ├── README.md
-├── Calculus.md     // formal type-system spec (+ Calculus-live.md, Calculus-soundness.md, TypeSystemLedger.md)
+├── Calculus.md     // formal type-system spec
 ├── examples/       // .sand programs for showcase & testing
 ├── grammar.pest    // parser grammar
 ├── lang
@@ -375,7 +381,7 @@ this code is adapted (effectively 1-1) from the explicate control assignment of 
 │       │   ├── mod.rs
 │       │   ├── structure
 │       │   │   ├── debug.rs      // source code `Pos` and `Range`
-│       │   │   ├── enums.rs      // `EnumDef`
+│       │   │   ├── enums.rs      // `AdtDef`
 │       │   │   ├── functions.rs  // `FunRef` etc
 │       │   │   ├── mod.rs
 │       │   │   ├── projects.rs   // `CodeModule`, `CodeFile`, `ModuleRef`
@@ -420,6 +426,4 @@ this code is adapted (effectively 1-1) from the explicate control assignment of 
 ├── sand-lsp/    // language server binary
 ├── tests/       // test suite
 └── treesitter/  // tree-sitter grammar for syntax highlighting
-
-45 directories, 174 files
 ```

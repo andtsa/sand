@@ -58,7 +58,7 @@ fn agree_arithmetic_expression() {
 
 #[test]
 fn agree_chained_booleans() {
-    assert_hir_mir_agree("def main(): Bool := (1 < 2) and (3 > 2) | false");
+    assert_hir_mir_agree("def main(): Bool := (1 < 2) and (3 > 2) or false");
 }
 
 #[test]
@@ -163,7 +163,7 @@ fn agree_power_operator() {
 
 #[test]
 fn agree_complex_boolean_expression() {
-    assert_hir_mir_agree("def main(): Bool := !false and (1 == 1) | (2 != 3)");
+    assert_hir_mir_agree("def main(): Bool := !false and (1 == 1) or (2 != 3)");
 }
 
 #[test]
@@ -177,9 +177,9 @@ fn agree_multiple_function_calls() {
 
 #[test]
 fn xor_operator_agrees() {
-    assert_hir_mir_agree("def main(): Bool := true ¡ false");
-    assert_hir_mir_agree("def main(): Bool := true ¡ true");
-    assert_hir_mir_agree("def main(): Bool := false ¡ false");
+    assert_hir_mir_agree("def main(): Bool := true xor false");
+    assert_hir_mir_agree("def main(): Bool := true xor true");
+    assert_hir_mir_agree("def main(): Bool := false xor false");
 }
 
 #[test]
