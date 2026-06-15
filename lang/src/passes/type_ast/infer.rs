@@ -13,6 +13,7 @@ use crate::ir_types::typed_hir::TypedFunction;
 use crate::lang::intrinsics::INTRINSICS;
 use crate::lang::intrinsics::Intrinsic;
 use crate::lang::types::EnumRef;
+use crate::lang::types::FnMode;
 use crate::lang::types::Kind;
 use crate::lang::types::Region;
 use crate::lang::types::RegionVar;
@@ -948,6 +949,56 @@ pub(super) fn infer<'tcx>(
                 expr: typed_hir::Expression::Tuple(typed_elems),
                 range: expr.range,
                 ty,
+                kind: Kind::Owned,
+            })
+        }
+
+        // A lambda `fn (x: T) -> e` (Step 13). The body is typed in a scope
+        // containing *only* the parameter (the non-capturing milestone): a
+        // reference to an enclosing variable is therefore an `UnboundVariable`
+        // error, which is exactly the "captures not yet supported" boundary.
+        // Inner `let`s still bind normally; functions resolve via the context.
+        qhir::Expression::Lambda { param, body } => {
+            let home = ctx.current_scope_region();
+            let mut body_env: TypeEnv<'tcx> = TypeEnv::new();
+            body_env.insert(
+                param.name,
+                (param.ty, Kind::Owned, param.is_mutable, home),
+            );
+            let body_typed = infer(ctx, &body_env, body)?;
+            let fn_ty = ctx.fn_ty(param.ty, body_typed.ty, FnMode::Reusable);
+            Ok(typed_hir::Expr {
+                expr: typed_hir::Expression::Lambda {
+                    param: param.clone(),
+                    body: Box::new(body_typed),
+                    captures: Vec::new(),
+                },
+                range: expr.range,
+                ty: fn_ty,
+                kind: Kind::Owned,
+            })
+        }
+
+        // Application of a function value (indirect call) `func(arg)` (Step 13).
+        qhir::Expression::Apply { func, arg } => {
+            let func_typed = infer(ctx, env, func)?;
+            let (param_ty, ret_ty) = match func_typed.ty.kind() {
+                TyKind::Fn(a, r, _) => (*a, *r),
+                _ => {
+                    return Err(AstTypeError::NotCallable {
+                        ty: func_typed.ty,
+                        range: expr.range,
+                    });
+                }
+            };
+            let arg_typed = check(ctx, env, arg, param_ty)?;
+            Ok(typed_hir::Expr {
+                expr: typed_hir::Expression::Apply {
+                    func: Box::new(func_typed),
+                    arg: Box::new(arg_typed),
+                },
+                range: expr.range,
+                ty: ret_ty,
                 kind: Kind::Owned,
             })
         }

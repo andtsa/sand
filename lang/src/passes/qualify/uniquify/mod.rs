@@ -268,6 +268,59 @@ fn uniquify_expr<'tcx>(
             })
         }
 
+        // A lambda introduces a fresh scope binding its parameter (Step 13),
+        // like a one-parameter function body.
+        Expression::Lambda { param, body } => {
+            u.enter_scope();
+            let new_name = u.bind_var(&param.name);
+            let new_body = uniquify_expr(body, u)?;
+            u.exit_scope();
+            Ok(Expr {
+                expr: Expression::Lambda {
+                    param: Parameter {
+                        name: HirVar::Uniq(new_name),
+                        ty: param.ty,
+                        range: param.range,
+                        is_mutable: param.is_mutable,
+                    },
+                    body: Box::new(new_body),
+                },
+                range: e.range,
+            })
+        }
+
+        // A call whose callee is a *bound local variable* — and is *not* the
+        // name of a function — is an indirect call: apply the function value
+        // (Step 13). A function of the same name takes precedence in call
+        // position (so a local may shadow a function as a value without
+        // shadowing it as a callee). Closures are unary, so this fires only for
+        // a single argument; anything else falls through to function resolution.
+        Expression::Call {
+            fn_name: HirFnCall::Local(name),
+            args,
+            type_args,
+        } if type_args.is_empty()
+            && args.len() == 1
+            && u.compile_ctx.lookup_function_by_name(name).is_none()
+            && u.lookup_var_opt(&HirVar::Unqualified(name.clone()))
+                .is_some() =>
+        {
+            let var = u
+                .lookup_var_opt(&HirVar::Unqualified(name.clone()))
+                .expect("checked in guard");
+            let arg = uniquify_expr(&args[0], u)?;
+            Ok(Expr {
+                expr: Expression::Apply {
+                    func: Box::new(Expr {
+                        expr: Expression::Var(HirVar::Uniq(var)),
+                        range: e.range,
+                    }),
+                    arg: Box::new(arg),
+                },
+                range: e.range,
+            })
+        }
+
         // Every other node — `If`, `While`, `BinOp`, `UnOp`, `Call`,
         // and the constructor/literal leaves — is handled uniformly by the
         // `subexprs` traversal: recurse into each child with `uniquify_expr`

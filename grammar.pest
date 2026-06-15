@@ -71,7 +71,7 @@ fn_type = { core_type ~ "->" ~ type_ }
 type_ = { fn_type | core_type ~ ("@" ~ lifetime)? }
 
 // keywords (prevent them from being identifiers)
-KEYWORD = { "if" | "then" | "else" | "let" | "def" | "true" | "false" | "Unit" | "Int" | "Bool" | "while" | "do" | "module" | "mut" | "type" | "match" | "and" | "where" | "use" | "typeclass" | "impl" | "requires" | "for" | "extern" | "deriving" }
+KEYWORD = { "if" | "then" | "else" | "let" | "def" | "true" | "false" | "Unit" | "Int" | "Bool" | "while" | "do" | "module" | "mut" | "type" | "match" | "and" | "where" | "use" | "typeclass" | "impl" | "requires" | "for" | "extern" | "deriving" | "fn" }
 
 identifier       = @{ !(KEYWORD ~ !(ASCII_ALPHANUMERIC | "_")) ~ "_"* ~ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
 empty_identifier = @{ "_" }
@@ -173,7 +173,13 @@ external_function_call = { identifier ~ "::" ~ identifier ~ "(" ~ (expression ~ 
 // tuple literal: `(a, b, ...)`
 tuple_expr = { "(" ~ expression ~ ("," ~ expression)+ ~ ")" }
 
-// todo: anonymous functions (lambdas) & first class functions
+// lambda expression `fn (x: T) -> e` (Step 13). Unary; the parameter carries a
+// type annotation (param-type inference is a later extension). The body is a
+// full `expression`, so it extends as far right as possible
+// (`fn (x: Int) -> x + 1` has body `x + 1`); a terminator (`,`, `)`, `}`, …)
+// ends it. Currently produces a *reusable* function value (bare `->` arrow).
+lambda_param = { "(" ~ mut_kw? ~ identifier ~ ":" ~ type_ ~ ")" }
+lambda_expr  = { "fn" ~ lambda_param ~ "->" ~ expression }
 
 // precedence chaining
 // borrow expression `&e` (shared) or `&mut e` (exclusive) (Calculus §3.2 /
@@ -213,7 +219,9 @@ equality   = { comparison ~ ((eq | ne) ~ comparison)* }
 logic_and  = { equality ~ ((logand | bitand) ~ equality)* }
 logic_xor  = { logic_and ~ (xor ~ logic_and)* }
 logic_or   = { logic_xor ~ (or ~ logic_xor)* }
-expression = { logic_or }
+// a lambda binds looser than any operator (its body is a full expression), so it
+// sits at the top of the expression grammar.
+expression = { lambda_expr | logic_or }
 
 mut_kw = { "mut" }
 

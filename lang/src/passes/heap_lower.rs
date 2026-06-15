@@ -349,6 +349,30 @@ impl<'tcx> HeapLower<'_, 'tcx> {
             Expression::Tuple(elems) => {
                 Expression::Tuple(elems.into_iter().map(|e| self.rewrite_expr(e)).collect())
             }
+            Expression::Lambda {
+                param,
+                body,
+                captures,
+            } => {
+                let param = Parameter {
+                    name: param.name,
+                    ty: self.rewrite_ty(param.ty),
+                    range: param.range,
+                    is_mutable: param.is_mutable,
+                };
+                Expression::Lambda {
+                    param,
+                    body: Box::new(self.rewrite_expr(*body)),
+                    captures,
+                }
+            }
+            Expression::Apply { func, arg } => Expression::Apply {
+                func: Box::new(self.rewrite_expr(*func)),
+                arg: Box::new(self.rewrite_expr(*arg)),
+            },
+            // `Closure` is produced by monomorphisation, which runs after heap
+            // lowering — it carries no types to rewrite, so pass it through.
+            Expression::Closure { func, captures } => Expression::Closure { func, captures },
             // leaves
             Expression::Var(_) | Expression::Int(_) | Expression::Bool(_) | Expression::Unit => {
                 expr

@@ -276,6 +276,37 @@ impl<'tcx> OwnershipChecker<'_, 'tcx> {
 
             Expression::Tuple(elems) => Expression::Tuple(self.check_exprs(elems, env)?),
 
+            // A lambda body is its own scope (Step 13): the parameter is the only
+            // binding live before it — a non-capturing lambda references nothing
+            // outside — so it is treated like a one-parameter function body
+            // (check the body, drop the unconsumed parameter at exit).
+            Expression::Lambda {
+                param,
+                body,
+                captures,
+            } => {
+                let mut body_env = OwnershipEnv::new();
+                body_env.declare(param.name, param.ty);
+                let new_body = self.check_expr(body, &mut body_env)?;
+                let param_drops = self.scope_exit_drops(&body_env, &HashSet::new());
+                Expression::Lambda {
+                    param: param.clone(),
+                    body: Box::new(attach_drops(new_body, param_drops)),
+                    captures: captures.clone(),
+                }
+            }
+
+            // Indirect call: the function value and the argument are both
+            // consumed, like an ordinary call's operands.
+            Expression::Apply { func, arg } => Expression::Apply {
+                func: Box::new(self.check_expr(func, env)?),
+                arg: Box::new(self.check_expr(arg, env)?),
+            },
+
+            // `Closure` is produced by monomorphisation, after the ownership
+            // pass; it is a plain value here (captures are a later milestone).
+            Expression::Closure { .. } => expr.expr.clone(),
+
             Expression::Var(v) => {
                 if !self.is_copy(expr.ty) {
                     match env.get(v) {

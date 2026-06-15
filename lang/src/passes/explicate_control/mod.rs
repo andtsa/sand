@@ -4,6 +4,7 @@
 pub mod context;
 
 use crate::compiler::context::CompileCtx;
+use crate::internal_bug;
 use crate::ir_types::mir::*;
 use crate::ir_types::typed_hir as th;
 use crate::passes::explicate_control::context::FnCx;
@@ -170,6 +171,17 @@ fn collect_locals<'tcx>(cx: &mut FnCx<'tcx>, expr: &th::Expr<'tcx>) {
             for arm in arms {
                 collect_locals(cx, &arm.body);
             }
+        }
+        // A lifted closure introduces no new locals here (its captures are
+        // existing locals); an indirect call recurses into callee + argument.
+        // A raw `Lambda` is lifted away during monomorphisation.
+        th::Expression::Closure { .. } => {}
+        th::Expression::Apply { func, arg } => {
+            collect_locals(cx, func);
+            collect_locals(cx, arg);
+        }
+        th::Expression::Lambda { .. } => {
+            internal_bug!("lambda should have been lifted during monomorphisation")
         }
     }
 }

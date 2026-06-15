@@ -22,6 +22,7 @@ pub mod generics_tests;
 pub mod hkt_tests;
 pub mod interpreter_tests;
 pub mod kind_tests;
+pub mod lambda_tests;
 pub mod match_tests;
 pub mod module_tests;
 pub mod mut_borrow_tests;

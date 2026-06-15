@@ -51,6 +51,12 @@ pub enum MirValue<'tcx> {
     /// A reference: a shared handle to the cell it points at. Produced by
     /// [`RValue::Ref`], consumed by reads/writes through a `[Deref]` place.
     Ref(Cell<'tcx>),
+    /// A closure value (Step 13): the lifted function and its captured values
+    /// (empty in the non-capturing milestone). Consumed by `CallIndirect`.
+    Closure {
+        fn_name: crate::compiler::structure::FunRef<'tcx>,
+        env: Vec<MirValue<'tcx>>,
+    },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -255,6 +261,31 @@ fn eval_rvalue<'tcx>(
                 .map(|a| eval_operand(a, locals))
                 .collect::<Result<Vec<_>, _>>()?;
             eval_intrinsic(*fn_name, arg_vals, ctx)
+        }
+
+        // A closure value (Step 13): the lifted function + captured operands.
+        RValue::Closure { fn_name, env } => {
+            let env = env
+                .iter()
+                .map(|o| eval_operand(o, locals))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(MirValue::Closure {
+                fn_name: *fn_name,
+                env,
+            })
+        }
+
+        // Indirect call (Step 13): evaluate the callee to a closure, then call
+        // its lifted function with the captures followed by the arguments.
+        RValue::CallIndirect { callee, args } => {
+            let MirValue::Closure { fn_name, env } = eval_operand(callee, locals)? else {
+                internal_bug!("indirect call of a non-closure value")
+            };
+            let mut arg_vals = env;
+            for a in args {
+                arg_vals.push(eval_operand(a, locals)?);
+            }
+            prog.call_function(fn_name, &arg_vals, ctx)
         }
 
         RValue::Aggregate(fields) => {
@@ -581,5 +612,8 @@ fn fmt_value<'tcx>(v: &MirValue<'tcx>, ctx: &CompileCtx<'tcx>) -> String {
             Some(v) => format!("&{}", fmt_value(v, ctx)),
             None => "&<uninit>".to_string(),
         },
+        MirValue::Closure { fn_name, .. } => {
+            format!("<closure {}>", ctx.original_fun_name(*fn_name))
+        }
     }
 }

@@ -25,7 +25,7 @@ pub struct Program<'tcx> {
     pub functions: Map<FunRef<'tcx>, Function<'tcx>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Parameter<'tcx> {
     pub name: UniqVar<'tcx>,
     pub ty: Ty<'tcx>,
@@ -166,6 +166,19 @@ pub enum Expression<'tcx> {
         arms: Vec<QMatchArm<'tcx>>,
     },
     Tuple(Vec<Expr<'tcx>>),
+    /// A lambda `fn (x: T) -> e` (Step 13). The parameter is uniquified; the
+    /// body is resolved in a scope extended with it.
+    Lambda {
+        param: Parameter<'tcx>,
+        body: Box<Expr<'tcx>>,
+    },
+    /// Application of a function *value* (indirect call): `f(arg)` where `f`
+    /// resolved to a local of function type rather than a named function
+    /// (Step 13). Distinct from [`Expression::Call`].
+    Apply {
+        func: Box<Expr<'tcx>>,
+        arg: Box<Expr<'tcx>>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]

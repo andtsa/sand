@@ -1295,9 +1295,38 @@ producing `Box<T> @ 'static`.
 > until closures land; the borrowing arrow's region (§3.1's `'r`) is also deferred
 > to the closures phase (nothing to escape-check without closure values).
 >
-> **Remaining milestones:** lambda expressions + indirect call + capture analysis
-> + fat-pointer codegen; borrowing/consuming closures; the variance follow-up;
-> then `Functor`/`Applicative`/`Monad` in `core.sand` (the HKT payoff).
+> **Milestones 2a + 2b (non-capturing lambdas, full pipeline) — done.** 744
+> tests, clippy clean. `examples/lambda.sand` runs (bind+call, pass-to-HOF,
+> return-then-call) through both interpreters *and* codegen. **2b — lambda
+> lifting:** monomorphisation hoists each `Lambda` into a fresh top-level
+> function and replaces it with `typed_hir::Expression::Closure { func,
+> captures }` (so *both* interpreters and codegen see the lifted form — only the
+> raw `Lambda` is interpreter-only, and only on the pre-mono path). New MIR
+> rvalues `Closure { fn_name, env }` (a fat pointer `{ fn_ptr, env_ptr }`, null
+> env) and `CallIndirect { callee, args }` (extract `fn_ptr`, indirect call);
+> the MIR interpreter calls the lifted function, codegen builds the fat pointer +
+> `build_indirect_call`. Captures are empty (non-capturing milestone).
+>
+> Original 2a note retained below.
+>
+> **Milestone 2a (lambda values, front-end + HIR interpreter) — done.** 743
+> tests, clippy clean. `fn (x: T) -> e` lambdas (grammar `lambda_expr` + `fn`
+> keyword) + `Expression::Lambda`/`Apply` threaded through HHIR→QHIR→TypedHIR,
+> uniquify (binds the param; rewrites `g(arg)` to an indirect `Apply` when `g`
+> is a bound local **and not a function** — a function of the same name wins in
+> call position, preserving the existing no-collision rule), type-checking
+> (lambda ⇒ `param.ty -> body.ty`; `Apply` requires a `Fn` callee), ownership
+> (the body is its own one-parameter scope), mono, and the **HIR interpreter**
+> (closures = param + owned body + captured env; `Apply` runs the body).
+> **Non-capturing only:** the body is typed in a param-only scope, so referencing
+> an enclosing variable is an `UnboundVariable` error (capture analysis is 2b).
+> MIR lowering + codegen are stubbed (`internal_bug`, unreachable from
+> `run_hir`); tests use `run_hir` (`tests/layer_tests/lambda_tests.rs`).
+>
+> **Remaining milestones:** 2b — lift lambdas to top-level functions → MIR
+> (`RValue` closure + indirect call) + fat-pointer codegen → `run_hir_and_mir` +
+> compiled; then capture analysis (by move, then borrow), borrowing/consuming
+> arrows, the variance follow-up, and finally `Functor`/`Applicative`/`Monad`.
 
 **Goal**: Add lambda expressions as values. Functions become first-class
 — they can be passed as arguments, stored in data structures, and

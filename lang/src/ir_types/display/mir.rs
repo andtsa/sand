@@ -113,6 +113,18 @@ fn fmt_rvalue<'tcx>(rv: &RValue<'tcx>, ctx: &CompileCtx<'tcx>) -> String {
         RValue::Field { base, index } => {
             format!("{}.{}", fmt_operand(base), index)
         }
+        RValue::Closure { fn_name, env } => {
+            let env: Vec<_> = env.iter().map(fmt_operand).collect();
+            format!(
+                "closure {}[{}]",
+                ctx.original_fun_name(*fn_name),
+                env.join(", ")
+            )
+        }
+        RValue::CallIndirect { callee, args } => {
+            let args: Vec<_> = args.iter().map(fmt_operand).collect();
+            format!("{}({})", fmt_operand(callee), args.join(", "))
+        }
     }
 }
 

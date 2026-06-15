@@ -142,8 +142,21 @@ back into here.
   since `Consuming`/`FnOnce` is once-callable). Unary + right-associative;
   multi-arg via tuples/currying.
 - **Runtime rep = fat pointer `{ fn_ptr, env_ptr }`** (env null for capture-free).
-- **Milestone 1 (function types) is in; lambda values are not yet.** The
-  borrowing arrow's region (§3.1's `'r`) is deferred to the closures phase.
+- **Indirect calls vs. function names:** `g(arg)` is an indirect call (apply a
+  function value) only when `g` is a bound local **and not a function**; a
+  function of the same name wins in call position (preserves the existing
+  "no collision between variable and function names" rule). Uniquify makes this
+  call (it has both the var scope and the function table).
+- **Lambdas are lifted to top-level functions during monomorphisation.** Mono
+  hoists each `Lambda` into a fresh top-level function and replaces it with
+  `typed_hir::Expression::Closure { func, captures }`, so both interpreters and
+  codegen see the lifted form. A closure value is a fat pointer
+  `{ fn_ptr, env_ptr }` (MIR `RValue::Closure`); an indirect call extracts the
+  fn pointer (`RValue::CallIndirect`). Done through codegen for **non-capturing**
+  lambdas (function types §1 + lambda values §2a + lifting/MIR/codegen §2b).
+- **Still to come:** capture analysis (env population, by-move then by-borrow),
+  the consuming/mutating arrows + §3.1 region, the variance follow-up, then
+  `Functor`/`Applicative`/`Monad`.
 
 ### Typeclasses & misc
 - **Orphan rules are strict** — an `impl` is legal only if the crate owns the
@@ -254,6 +267,20 @@ Memory C — they are no longer open.)*
   `Opt#Nothing` needs an annotation (`let x: Opt<Int> = Opt#Nothing`). This is a
   pre-existing generic-enum-inference gap, surfaced by HKT demos but not specific
   to them.
+
+### Functions / lambdas (Step 13)
+- **No stack-allocated closures.** `A -> B` is one concrete type with a uniform,
+  type-erased fat pointer `{ fn_ptr, env_ptr }`, so a capturing closure's env
+  can't be stored inline at the use site, and bare `->` is first-class with no
+  region bound, so an escaping closure's env must outlive its frame → heap. Not a
+  hard prohibition: the deferred borrowing arrow `A →[Borrowed 'r] B` (§3.1
+  region) would let a provably-non-escaping closure keep its env on the stack.
+  (Moot today — the non-capturing milestone has an empty env.)
+- **No recursive lambdas.** `let` is non-recursive (the bound name isn't in scope
+  in its own initializer) and there's no `letrec`/`fix`; a lambda can't refer to
+  itself by name, and self-capture would be a construction-order cycle needing
+  indirection we don't have. Recursion is available via top-level `def`
+  (mutually-recursively scoped). Deferred (`fix` is on the out-of-scope list).
 
 ### Borrows / regions
 - **Generic deref `*r : T`** for an un-monomorphised type parameter `T` is

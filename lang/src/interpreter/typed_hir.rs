@@ -24,6 +24,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::compiler::context::CompileCtx;
+use crate::compiler::structure::FunRef;
 use crate::compiler::structure::Map;
 use crate::compiler::structure::TypeHead;
 use crate::compiler::structure::TypeclassRef;
@@ -77,6 +78,13 @@ enum Value<'tcx> {
     /// A reference: a shared handle to the cell it points at. Produced by a
     /// borrow expression, consumed by `*r` reads and `*r = e` writes.
     Ref(Cell<'tcx>),
+    /// A function value / closure (Step 13): the lifted top-level function and
+    /// the captured values (empty in the non-capturing milestone). Calling it
+    /// runs `func` with the captures followed by the argument.
+    Closure {
+        func: FunRef<'tcx>,
+        captures: Vec<Value<'tcx>>,
+    },
 }
 
 /// Bindings map a variable to the cell that holds its value.
@@ -93,7 +101,7 @@ fn value_head<'tcx>(v: &Value<'tcx>) -> Option<TypeHead<'tcx>> {
         Value::Bool(_) => Some(TypeHead::Bool),
         Value::Unit => Some(TypeHead::Unit),
         Value::Constructor { enum_ref, .. } => Some(TypeHead::Enum(*enum_ref)),
-        Value::Tuple(_) | Value::Ref(_) => None,
+        Value::Tuple(_) | Value::Ref(_) | Value::Closure { .. } => None,
     }
 }
 
@@ -270,6 +278,53 @@ impl<'tcx> TypedProgram<'tcx> {
                     .map(|e| self.eval_expr(&e.expr, env, ctx, output))
                     .collect::<Result<Vec<_>, InterpError>>()?;
                 Ok(Value::Tuple(vals))
+            }
+
+            // A lambda is lifted to a top-level function during monomorphisation,
+            // so the interpreter only ever sees the lifted `Closure`.
+            Expression::Lambda { .. } => {
+                unreachable!("lambda should have been lifted during monomorphisation")
+            }
+
+            // A lifted closure: capture the listed variables' values now.
+            Expression::Closure { func, captures } => {
+                let captured = captures
+                    .iter()
+                    .map(|v| {
+                        env.get(v)
+                            .map(|c| c.borrow().clone())
+                            .ok_or_else(|| InterpError::UndefinedVariable(ctx.uniq_variable_name(v)))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Value::Closure {
+                    func: *func,
+                    captures: captured,
+                })
+            }
+
+            // Indirect call: evaluate the callee to a closure and the argument,
+            // then run the lifted function with the captures followed by the arg.
+            Expression::Apply { func, arg } => {
+                let callee = self.eval_expr(&func.expr, env, ctx, output)?;
+                let arg_val = self.eval_expr(&arg.expr, env, ctx, output)?;
+                match callee {
+                    Value::Closure { func, captures } => {
+                        let function = &self.functions[&func];
+                        let arg_vals = captures.into_iter().chain(std::iter::once(arg_val));
+                        let call_env = function
+                            .parameters
+                            .iter()
+                            .map(|p| p.name)
+                            .zip(arg_vals)
+                            .map(|(name, v)| (name, cell(v)))
+                            .collect::<Env>();
+                        let mut call_env = call_env;
+                        self.eval_expr(&function.body.expr, &mut call_env, ctx, output)
+                    }
+                    other => Err(InterpError::Runtime(format!(
+                        "indirect call of a non-function value: {other:?}"
+                    ))),
+                }
             }
 
             Expression::Match { scrutinee, arms } => {
@@ -773,6 +828,7 @@ fn fmt_value<'tcx>(v: &Value<'tcx>, ctx: &CompileCtx<'tcx>) -> String {
             format!("({inner})")
         }
         Value::Ref(c) => format!("&{}", fmt_value(&c.borrow(), ctx)),
+        Value::Closure { .. } => "<closure>".to_string(),
     }
 }
 
@@ -809,5 +865,7 @@ fn value_to_expr<'tcx>(v: Value<'tcx>, ctx: &CompileCtx<'tcx>) -> Expression<'tc
         // A program's top-level result is never a bare reference: the escape
         // check forbids returning references to locals, and `main : Int`.
         Value::Ref(_) => unreachable!("a program result cannot be a bare reference"),
+        // `main : Int`, so a closure never escapes as a program result.
+        Value::Closure { .. } => unreachable!("a program result cannot be a closure"),
     }
 }

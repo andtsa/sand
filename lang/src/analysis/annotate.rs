@@ -114,6 +114,16 @@ pub fn collect_dependencies<'tcx>(
                 collect_dependencies(&e.expr, dependencies);
             }
         }
+        Expression::Lambda { body, .. } => collect_dependencies(&body.expr, dependencies),
+        Expression::Apply { func, arg } => {
+            collect_dependencies(&func.expr, dependencies);
+            collect_dependencies(&arg.expr, dependencies);
+        }
+        Expression::Closure { captures, .. } => {
+            for c in captures {
+                dependencies.insert(*c);
+            }
+        }
         Expression::Match { scrutinee, arms } => {
             collect_dependencies(&scrutinee.expr, dependencies);
             for arm in arms {
