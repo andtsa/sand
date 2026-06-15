@@ -40,6 +40,24 @@ pub enum Kind {
     Arrow(KindId),
 }
 
+/// How a call uses a function value's captured environment
+/// 
+/// sand's single kind-annotated arrow (Calculus §3.1)
+/// (in place of Rust's three closure traits).
+/// `Reusable` is the bare-`->` default (the common case, and what
+/// higher-order functions like `fmap` need). Only `Reusable` is produced from
+/// surface syntax until closures land; the others are reserved.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum FnMode {
+    /// `→[Borrowed]`, ≈ Rust `Fn`: reads its environment; callable repeatedly.
+    Reusable,
+    /// `→[BorrowedMut]`, ≈ Rust `FnMut`: may mutate its environment.
+    ReusableMut,
+    /// `→[Owned]`, ≈ Rust `FnOnce`: may consume its environment; callable once.
+    Consuming,
+}
+
 /// Canonical id of an interned arrow kind (`K₁ -> K₂`); see [`Kind::Arrow`].
 /// Interned per [`crate::compiler::context::CompileCtx`]; ids are only
 /// meaningful within one compilation (kinds never cross contexts).
@@ -202,6 +220,14 @@ pub enum TyKind<'tcx> {
     /// constructor for `F` (its `Subst` entry is the bare `Enum(er)`), turning
     /// `F<A>` into `App(er, A)`. Like `Param`, it never survives mono.
     ParamApp(TypeParamId, &'tcx [Ty<'tcx>]),
+    /// A function type `A -> B` (Step 13): a first-class function / closure
+    /// value. Unary (multi-argument via tuple or currying). The [`FnMode`]
+    /// records how a call uses the closure's captured environment — sand's single
+    /// kind-annotated arrow (Calculus §3.1) standing in for Rust's three closure
+    /// traits (`Fn`/`FnMut`/`FnOnce`). Arena-backed, so `TyKind` stays `Copy`.
+    /// The borrowing arrow's region (§3.1's `→[Borrowed 'r]`) is added with
+    /// closure escape-checking; until then only the mode is carried.
+    Fn(Ty<'tcx>, Ty<'tcx>, FnMode),
     /// A generic enum applied to concrete (or still-parametric) type arguments,
     /// e.g. `Option<Int>`. The `EnumRef` is the generic base enum; the slice is
     /// its type arguments, one per declared parameter. Distinct argument lists
@@ -272,6 +298,7 @@ impl<'tcx> Ty<'tcx> {
             TyKind::Param(_) => true,
             // `F<A>` has a parameter head, so it is always non-concrete.
             TyKind::ParamApp(_, _) => true,
+            TyKind::Fn(a, r, _) => a.has_param() || r.has_param(),
             TyKind::Tuple(elems) => elems.iter().any(|t| t.has_param()),
             TyKind::App(_, args, _) => args.iter().any(|t| t.has_param()),
             TyKind::Region(t, _) => t.has_param(),
@@ -326,6 +353,9 @@ impl<'tcx> Ty<'tcx> {
             {
                 xs.iter().zip(*ys).all(|(x, y)| x.eq_modulo_regions(*y))
             }
+            (TyKind::Fn(a1, r1, m1), TyKind::Fn(a2, r2, m2)) if m1 == m2 => {
+                a1.eq_modulo_regions(*a2) && r1.eq_modulo_regions(*r2)
+            }
             _ => false,
         }
     }
@@ -364,6 +394,10 @@ impl<'tcx> Ty<'tcx> {
                     a.free_regions(out);
                 }
             }
+            TyKind::Fn(a, r, _) => {
+                a.free_regions(out);
+                r.free_regions(out);
+            }
             _ => {}
         }
     }
@@ -392,6 +426,9 @@ impl<'tcx> Ty<'tcx> {
                 if p1 == p2 && xs.len() == ys.len() =>
             {
                 xs.iter().zip(*ys).all(|(x, y)| x.compatible(*y))
+            }
+            (TyKind::Fn(a1, r1, m1), TyKind::Fn(a2, r2, m2)) if m1 == m2 => {
+                a1.compatible(*a2) && r1.compatible(*r2)
             }
             _ => false,
         }
@@ -454,6 +491,7 @@ impl fmt::Display for Ty<'_> {
                 }
                 write!(f, ">")
             }
+            TyKind::Fn(a, r, _) => write!(f, "{a} -> {r}"),
             TyKind::Tuple(ts) => {
                 write!(f, "(")?;
                 for (i, t) in ts.iter().enumerate() {

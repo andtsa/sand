@@ -24,6 +24,7 @@ use crate::passes::type_ast::check::check;
 use crate::passes::type_ast::check::check_let_pattern;
 use crate::passes::type_ast::check::type_check_match_arms;
 pub use crate::passes::type_ast::errors::AstTypeError;
+use crate::passes::type_ast::errors::ConstraintOrigin;
 use crate::passes::type_ast::errors::TypeError;
 use crate::passes::type_ast::generics::Subst;
 use crate::passes::type_ast::generics::subst;
@@ -583,35 +584,26 @@ fn check_type_constraint<'tcx>(
     class: TypeclassRef,
     ty: Ty<'tcx>,
     range: Range,
+    required_by: Option<ConstraintOrigin>,
 ) -> Result<(), AstTypeError<'tcx>> {
+    let no_instance = || AstTypeError::TypeclassNoInstance {
+        class: ctx.get_typeclass(class).name.clone(),
+        ty,
+        range,
+        required_by: required_by.clone(),
+    };
     if let TyKind::Param(pid) = ty.kind() {
         let licensed = ctx
             .type_assumptions()
             .iter()
             .any(|tc| tc.param == *pid && ctx.class_satisfies(tc.class, class));
-        return if licensed {
-            Ok(())
-        } else {
-            Err(AstTypeError::TypeclassNoInstance {
-                class: ctx.get_typeclass(class).name.clone(),
-                ty,
-                range,
-            })
-        };
+        return if licensed { Ok(()) } else { Err(no_instance()) };
     }
     let ok = ctx
         .type_head(ty)
         .map(|head| ctx.lookup_instance(class, head).is_some())
         .unwrap_or(false);
-    if ok {
-        Ok(())
-    } else {
-        Err(AstTypeError::TypeclassNoInstance {
-            class: ctx.get_typeclass(class).name.clone(),
-            ty,
-            range,
-        })
-    }
+    if ok { Ok(()) } else { Err(no_instance()) }
 }
 
 /// Type-check a raw-pointer op (`__ptr_read` / `__ptr_write` / `__ptr_cast`,
@@ -794,6 +786,7 @@ fn infer_method_call<'tcx>(
             class: class_name.clone(),
             ty: receiver,
             range: expr.range,
+            required_by: None,
         })?;
     let impl_fn = ctx
         .lookup_instance(class, head)
@@ -802,6 +795,7 @@ fn infer_method_call<'tcx>(
             class: class_name,
             ty: receiver,
             range: expr.range,
+            required_by: None,
         })?;
 
     Ok(typed_hir::Expr {
@@ -1230,7 +1224,11 @@ pub(super) fn infer<'tcx>(
             // type arguments (Step 10b): the instantiation must have an instance.
             for tc in &fun_sig.type_constraints {
                 if let Some(&arg_ty) = mapping.get(&tc.param) {
-                    check_type_constraint(ctx, tc.class, arg_ty, expr.range)?;
+                    let required_by = Some(ConstraintOrigin {
+                        fun: ctx.original_fun_name(*fn_name),
+                        param: ctx.type_param_name(tc.param),
+                    });
+                    check_type_constraint(ctx, tc.class, arg_ty, expr.range, required_by)?;
                 }
             }
             // Infer the call's region substitution per lifetime parameter and

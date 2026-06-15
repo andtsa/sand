@@ -34,6 +34,7 @@ use crate::internal_bug;
 use crate::ir_types::hhir::HirVar;
 use crate::lang::types::CommonTypes;
 use crate::lang::types::EnumRef;
+use crate::lang::types::FnMode;
 use crate::lang::types::Kind;
 use crate::lang::types::KindId;
 use crate::lang::types::Region;
@@ -540,6 +541,11 @@ impl<'tcx> CompileCtx<'tcx> {
     /// reference, it carries no region and survives monomorphisation.
     pub fn ptr_ty(&mut self, inner: Ty<'tcx>) -> Ty<'tcx> {
         self.intern_ty(TyKind::Ptr(inner))
+    }
+
+    /// Intern a function type `arg -> ret` with the given calling mode.
+    pub fn fn_ty(&mut self, arg: Ty<'tcx>, ret: Ty<'tcx>, mode: FnMode) -> Ty<'tcx> {
+        self.intern_ty(TyKind::Fn(arg, ret, mode))
     }
 
     /// Intern a higher-kinded parameter application `F<args>`.

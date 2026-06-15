@@ -7,6 +7,7 @@ use crate::compiler::diagnostics::SandDiagnostics;
 use crate::compiler::diagnostics::SdRelatedInfo;
 use crate::compiler::structure::FileRef;
 use crate::passes::type_ast::AstTypeError;
+use crate::passes::type_ast::errors::required_by_suffix;
 
 pub fn type_error_to_diagnostic<'tcx>(
     ctx: &CompileCtx<'tcx>,
@@ -513,12 +514,20 @@ pub fn type_error_to_diagnostic<'tcx>(
             );
         }
 
-        TypeclassNoInstance { class, ty, range } => {
+        TypeclassNoInstance {
+            class,
+            ty,
+            range,
+            required_by,
+        } => {
             diagnostics.add_one(
                 file,
                 SandDiagnostic {
                     severity: DiagnosticSeverity::Error,
-                    message: format!("no instance of typeclass '{class}' for type {ty}"),
+                    message: format!(
+                        "no instance of typeclass '{class}' for type {ty}{}",
+                        required_by_suffix(class, required_by)
+                    ),
                     range: *range,
                     related: vec![],
                     file: Some(file),

@@ -4,7 +4,7 @@
 //! and output a TypedProgram AST
 
 mod check;
-mod errors;
+pub(crate) mod errors;
 pub(crate) mod generics;
 mod infer;
 

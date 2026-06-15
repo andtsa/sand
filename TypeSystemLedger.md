@@ -130,6 +130,21 @@ back into here.
   function types `A -> B`). Step 11 ships the machinery; arrow-free classes
   (constructor param in *argument* position) are the demonstrable clients now.
 
+### Functions / lambdas (Step 13, in progress)
+- **One kind-annotated arrow, not Rust's four.** Sand has a single function type
+  `TyKind::Fn(arg, ret, FnMode)` (`A →[K] B`, Calculus §3.1) instead of Rust's
+  thin `fn` pointer + the `Fn`/`FnMut`/`FnOnce` traits. `FnMode` =
+  `Reusable` (`Fn`/`→[Borrowed]`), `ReusableMut` (`FnMut`), `Consuming`
+  (`FnOnce`/`→[Owned]`); subsumption reuses kind subtyping; a capture-free
+  function is the empty-env case of the fat pointer. No separate `fn` type, no
+  closure traits.
+- **Bare `->` is the reusable arrow** (the common case; what `fmap`/`bind` need,
+  since `Consuming`/`FnOnce` is once-callable). Unary + right-associative;
+  multi-arg via tuples/currying.
+- **Runtime rep = fat pointer `{ fn_ptr, env_ptr }`** (env null for capture-free).
+- **Milestone 1 (function types) is in; lambda values are not yet.** The
+  borrowing arrow's region (§3.1's `'r`) is deferred to the closures phase.
+
 ### Typeclasses & misc
 - **Orphan rules are strict** — an `impl` is legal only if the crate owns the
   class or the type.
@@ -142,8 +157,11 @@ back into here.
 
 ## 2. Steps not yet completed
 
-Done so far: **Steps 0–9, M, 10, 11, 14**, the **Usability pass**,
-**Ref-Rep R1–R5**, and **Memory A, B, C** (C.1–C.6). Remaining, in roadmap order:
+Done so far: **Steps 0–9, M, 10, 11, 14, 15**, the **Usability pass**,
+**Ref-Rep R1–R5**, and **Memory A, B, C** (C.1–C.6). (Step 15 — `where`-clause
+checking — was already complete: call-site typeclass constraints, superclass-at-impl,
+and region outlives are all implemented + tested, built across Steps 8b/10b/14c.)
+Remaining, in roadmap order:
 
 - **Step 13 — Lambdas / first-class functions.** Lambda grammar/IR, capture
   analysis, fat-pointer codegen. Includes the **variance follow-up** Step 5
