@@ -47,7 +47,7 @@ pub fn subst<'tcx>(ctx: &mut CompileCtx<'tcx>, ty: Ty<'tcx>, mapping: &Subst<'tc
             let inner = subst(ctx, *inner, mapping);
             ctx.ptr_ty(inner)
         }
-        // function types substitute their domain + codomain (Step 13).
+        // function types substitute their domain + codomain.
         TyKind::Fn(a, r, m) => {
             let a = subst(ctx, *a, mapping);
             let r = subst(ctx, *r, mapping);
@@ -146,7 +146,7 @@ pub fn unify<'tcx>(
             Ok(())
         }
         // References and region ascriptions unify their pointee/inner types. The
-        // regions are not constrained here — they carry no type parameters, are
+        // regions are not constrained here: they carry no type parameters, are
         // erased by monomorphisation, and call-site region inference is handled
         // separately, so `&T` unifies against `&Int` regardless of region.
         (TyKind::Ref(_, di), TyKind::Ref(_, ai)) => unify(ctx, *di, *ai, mapping),
@@ -154,7 +154,7 @@ pub fn unify<'tcx>(
         (TyKind::Region(di, _), TyKind::Region(ai, _)) => unify(ctx, *di, *ai, mapping),
         (TyKind::Ptr(di), TyKind::Ptr(ai)) => unify(ctx, *di, *ai, mapping),
         // `declared` is the expected type, `actual` the supplied one; the actual
-        // arrow may be more permissive (Step 13 subsumption).
+        // arrow may be more permissive (arrow subsumption).
         (TyKind::Fn(da, dr, dm), TyKind::Fn(aa, ar, am)) if am.usable_as(*dm) => {
             unify(ctx, *da, *aa, mapping)?;
             unify(ctx, *dr, *ar, mapping)

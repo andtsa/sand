@@ -97,8 +97,8 @@ pub enum Statement<'tcx> {
         val: Expr<'tcx>,
     },
 
-    /// Write-through `*reference = value` (Calculus §3.2): store `value`
-    /// through a `&mut` reference. `reference : &mut T`, `value : T`.
+    /// Write-through `*reference = value` (Calculus: write-through): store
+    /// `value` through a `&mut` reference. `reference : &mut T`, `value : T`.
     DerefAssign {
         reference: Expr<'tcx>,
         value: Expr<'tcx>,
@@ -282,8 +282,8 @@ pub enum Expression<'tcx> {
     Call {
         fn_name: HirFnCall,
         args: Vec<Expr<'tcx>>,
-        /// Explicit type arguments from a turbofish `f::<T, …>(…)` (Memory Step
-        /// C). Empty for an ordinary call. Resolved against the active
+        /// Explicit type arguments from a turbofish `f::<T, ...>(...)`. Empty
+        /// for an ordinary call. Resolved against the active
         /// type-param scope, so a `T` inside a generic function is its `Param`.
         type_args: Vec<Ty<'tcx>>,
     },
@@ -292,7 +292,7 @@ pub enum Expression<'tcx> {
     Bool(bool),
     Unit,
     /// borrow `&e` (shared) or `&mut e` (exclusive, the `bool` is `true`)
-    /// (Calculus §3.2).
+    /// (Calculus: Terms, borrow).
     Borrow(Box<Expr<'tcx>>, bool),
     /// dereference `*e`: read through a reference (`&T`/`&mut T` -> T).
     /// Transparent at runtime (borrows are erased), so it lowers like `Borrow`.
@@ -321,7 +321,7 @@ pub enum Expression<'tcx> {
         arms: Vec<HirMatchArm<'tcx>>,
     },
     Tuple(Vec<Expr<'tcx>>),
-    /// A lambda `fn (x: T) -> e` (Step 13). The parameter mirrors a function
+    /// A lambda `fn (x: T) -> e`. The parameter mirrors a function
     /// parameter (name + declared type); the body is a full expression. `mode`
     /// is the arrow's calling mode (`->` = reusable; `-[k]>` variants).
     Lambda {
@@ -329,8 +329,8 @@ pub enum Expression<'tcx> {
         body: Box<Expr<'tcx>>,
         mode: crate::lang::types::FnMode,
     },
-    /// Application of a function *value* (indirect call): `f(arg)` where `f` is a
-    /// bound local rather than a named function (Step 13). Produced by uniquify
+    /// Application of a function *value* (indirect call): `f(arg)` where `f` is
+    /// a bound local rather than a named function. Produced by uniquify
     /// when a call's callee resolves to a variable in scope.
     Apply {
         func: Box<Expr<'tcx>>,

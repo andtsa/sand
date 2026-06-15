@@ -1,5 +1,6 @@
 target/
 *.todo*
+*.old.md
 
 .DS_Store
 .idea/
@@ -15,3 +16,4 @@ temp/
 
 summary.md
 summary.toml
+filelist.txt

@@ -159,12 +159,12 @@ pub enum AstTypeError<'tcx> {
     LetPatternElseNotIrrefutable { range: Range },
 
     #[error(
-        "borrow at {range} would escape its scope: the value it refers to does not live long enough (Calculus §6.3)"
+        "borrow at {range} would escape its scope: the value it refers to does not live long enough"
     )]
     RegionEscape { range: Range },
 
     #[error(
-        "call at {range} does not satisfy the callee's lifetime constraint `'{longer} >= '{shorter}`: the argument lifetimes do not guarantee it (Calculus §1.1, §8.10)"
+        "call at {range} does not satisfy the callee's lifetime constraint `'{longer} >= '{shorter}`: the argument lifetimes do not guarantee it"
     )]
     RegionConstraintUnsatisfied {
         longer: String,

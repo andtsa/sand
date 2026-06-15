@@ -5,8 +5,8 @@
 //! specialised concrete copy is created on demand for each distinct
 //! instantiation it is used with, with `Ty::Param` substituted away and
 //! `Ty::App` replaced by the specialised enum's `Ty::Enum`. The result contains
-//! no `Ty::Param` or `Ty::App`, so MIR lowering and codegen — which are
-//! unchanged — only ever see concrete types.
+//! no `Ty::Param` or `Ty::App`, so MIR lowering and codegen (which are
+//! unchanged) only ever see concrete types.
 
 use crate::compiler::context::CompileCtx;
 use crate::compiler::structure::FunRef;
@@ -14,7 +14,6 @@ use crate::compiler::structure::Map;
 use crate::compiler::structure::ModuleRef;
 use crate::compiler::structure::UniqVar;
 use crate::compiler::structure::VarDeclType;
-use crate::lang::types::Kind;
 use crate::internal_bug;
 use crate::ir_types::typed_hir::Expr;
 use crate::ir_types::typed_hir::Expression;
@@ -24,7 +23,8 @@ use crate::ir_types::typed_hir::Statement;
 use crate::ir_types::typed_hir::TypedFunction;
 use crate::ir_types::typed_hir::TypedMatchArm;
 use crate::ir_types::typed_hir::TypedProgram;
-use crate::lang::types::EnumRef;
+use crate::lang::types::AdtRef;
+use crate::lang::types::Kind;
 use crate::lang::types::Region;
 use crate::lang::types::Ty;
 use crate::lang::types::TyKind;
@@ -72,11 +72,11 @@ struct Mono<'tcx> {
     /// `(generic fn, type args) -> specialised fn`.
     fn_instances: Map<(FunRef<'tcx>, Vec<Ty<'tcx>>), FunRef<'tcx>>,
     /// `(generic enum, type args) -> specialised enum`.
-    enum_instances: Map<(EnumRef<'tcx>, Vec<Ty<'tcx>>), EnumRef<'tcx>>,
-    /// The module of the function whose body is currently being rewritten — the
-    /// home for any lambda lifted out of it (Step 13).
+    enum_instances: Map<(AdtRef<'tcx>, Vec<Ty<'tcx>>), AdtRef<'tcx>>,
+    /// The module of the function whose body is currently being rewritten: the
+    /// home for any lambda lifted out of it.
     cur_module: Option<ModuleRef<'tcx>>,
-    /// Counter for unique lifted-lambda function names (Step 13).
+    /// Counter for unique lifted-lambda function names.
     lambda_counter: usize,
 }
 
@@ -119,8 +119,8 @@ impl<'tcx> Mono<'tcx> {
             })
             .collect();
         let ret_type = self.mono_ty(ctx, f.ret_type, mapping);
-        // Record this function's module for any lambda lifted out of its body
-        // (Step 13), saving/restoring across the (re-entrant) rewrite.
+        // Record this function's module for any lambda lifted out of its body,
+        // saving/restoring across the (re-entrant) rewrite.
         let prev_module = self.cur_module.replace(f.src_module);
         let body = self.rewrite_expr(ctx, &f.body, mapping);
         self.cur_module = prev_module;
@@ -148,9 +148,9 @@ impl<'tcx> Mono<'tcx> {
     fn request_enum(
         &mut self,
         ctx: &mut CompileCtx<'tcx>,
-        base_er: EnumRef<'tcx>,
+        base_er: AdtRef<'tcx>,
         args: Vec<Ty<'tcx>>,
-    ) -> EnumRef<'tcx> {
+    ) -> AdtRef<'tcx> {
         let key = (base_er, args.clone());
         if let Some(&spec) = self.enum_instances.get(&key) {
             return spec;
@@ -195,7 +195,7 @@ impl<'tcx> Mono<'tcx> {
         // Insert before resolving payloads so recursive enums terminate.
         self.enum_instances.insert(key, spec_er);
         // A specialisation of the `Unique` lang-item is a heap handle: record it
-        // so codegen frees its allocation on drop (Memory Step C.5).
+        // so codegen frees its allocation on drop.
         if ctx.unique_enum() == Some(base_er) {
             ctx.mark_unique_instance(spec_er);
         }
@@ -213,12 +213,12 @@ impl<'tcx> Mono<'tcx> {
     /// instantiation with its specialised concrete enum. The result is free of
     /// `Ty::Param` and `Ty::App`.
     /// Whether any variant payload of `er` still contains a generic
-    /// instantiation (`App`) or a type parameter (`Param`) — i.e. the enum,
+    /// instantiation (`App`) or a type parameter (`Param`); i.e. the enum,
     /// though referenced bare, has payloads that monomorphisation must still
     /// lower. (Used to specialise non-generic enums that embed generics, such
     /// as heaped node enums whose recursive fields are `Unique<…>`
     /// handles.)
-    fn enum_payload_needs_mono(ctx: &CompileCtx<'tcx>, er: EnumRef<'tcx>) -> bool {
+    fn enum_payload_needs_mono(ctx: &CompileCtx<'tcx>, er: AdtRef<'tcx>) -> bool {
         ctx.get_enum(er)
             .variants
             .iter()
@@ -255,8 +255,8 @@ impl<'tcx> Mono<'tcx> {
                 let spec_er = self.request_enum(ctx, base, args);
                 ctx.enum_ty(spec_er)
             }
-            // Function types (Step 13) survive monomorphisation (they are real
-            // runtime values — a fat pointer); substitute domain + codomain.
+            // Function types survive monomorphisation (they are real runtime
+            // values, a fat pointer); substitute domain + codomain.
             TyKind::Fn(a, r, m) => {
                 let a = self.mono_ty(ctx, *a, mapping);
                 let r = self.mono_ty(ctx, *r, mapping);
@@ -291,7 +291,7 @@ impl<'tcx> Mono<'tcx> {
                 ctx.enum_ty(spec_er)
             }
             // Region ascription `T @ 'r` has no runtime representation: erase to
-            // `T`. References ARE real pointers (R2): keep the `Ref`/`RefMut`
+            // `T`. References ARE real pointers: keep the `Ref`/`RefMut`
             // constructor (so codegen/MIR see "pointer to T"), canonicalising the
             // compile-time-only region to `'static` so distinct source regions
             // monomorphise to the same runtime type.
@@ -304,8 +304,7 @@ impl<'tcx> Mono<'tcx> {
                 let inner = self.mono_ty(ctx, *inner, mapping);
                 ctx.ref_mut_ty(Region::Static, inner)
             }
-            // Raw pointers have a real runtime representation (A): keep the `Ptr`
-            // constructor, substituting only the element type.
+            // keep the `Ptr` constructor, substituting only the element type.
             TyKind::Ptr(inner) => {
                 let inner = self.mono_ty(ctx, *inner, mapping);
                 ctx.ptr_ty(inner)
@@ -352,7 +351,7 @@ impl<'tcx> Mono<'tcx> {
                     .map(|e| self.rewrite_expr(ctx, e, mapping))
                     .collect(),
             ),
-            // Lambda lifting (Step 13): hoist the (monomorphised) body into a
+            // Lambda lifting: hoist the (monomorphised) body into a
             // fresh top-level function `λ(env: Ptr<EnvTy>, x): R` and replace the
             // lambda with a `Closure` referencing it. The body is rewritten first
             // so inner lambdas lift too. The lifted function unpacks its captures
@@ -371,11 +370,10 @@ impl<'tcx> Mono<'tcx> {
                     range,
                     is_mutable: param.is_mutable,
                 };
-                let mono_captures: Vec<(UniqVar<'tcx>, Ty<'tcx>)> =
-                    captures
-                        .iter()
-                        .map(|(v, t)| (*v, self.mono_ty(ctx, *t, mapping)))
-                        .collect();
+                let mono_captures: Vec<(UniqVar<'tcx>, Ty<'tcx>)> = captures
+                    .iter()
+                    .map(|(v, t)| (*v, self.mono_ty(ctx, *t, mapping)))
+                    .collect();
                 let mono_body = self.rewrite_expr(ctx, body, mapping);
                 let ret_type = mono_body.ty;
 
@@ -385,8 +383,7 @@ impl<'tcx> Mono<'tcx> {
                     [(_, t)] => *t,
                     many => ctx.intern_tuple(many.iter().map(|(_, t)| *t).collect()),
                 };
-                let env_param_var =
-                    ctx.fresh_synthetic_var("env", range, VarDeclType::Parameter);
+                let env_param_var = ctx.fresh_synthetic_var("env", range, VarDeclType::Parameter);
                 let env_ptr_ty = ctx.ptr_ty(env_ty);
                 let env_param = Parameter {
                     name: env_param_var,
@@ -423,11 +420,8 @@ impl<'tcx> Mono<'tcx> {
                             val: read,
                         });
                     } else {
-                        let et = ctx.fresh_synthetic_var(
-                            "env_tuple",
-                            range,
-                            VarDeclType::Declaration,
-                        );
+                        let et =
+                            ctx.fresh_synthetic_var("env_tuple", range, VarDeclType::Declaration);
                         statements.push(Statement::Declaration {
                             name: et,
                             range,
@@ -517,7 +511,7 @@ impl<'tcx> Mono<'tcx> {
                     args: new_args,
                 }
             }
-            // Deferred typeclass dispatch (Step 10b): the receiver type is now
+            // Deferred typeclass dispatch: the receiver type is now
             // concrete (the enclosing generic function has been specialised), so
             // resolve the instance and lower to a direct call of its method.
             Expression::MethodCall {
@@ -607,7 +601,7 @@ impl<'tcx> Mono<'tcx> {
 
     /// Resolve the specialised callee for a call. The callee's instantiation is
     /// recovered by unifying its (parametric) signature against the call's
-    /// argument and result types — taken in their *original*, `App`-preserving
+    /// argument and result types, taken in their *original*, `App`-preserving
     /// form with the caller's own substitution applied, so the structure needed
     /// to bind the callee's parameters survives. The recovered arguments are
     /// then fully monomorphised (`App` → concrete enum) to form the
@@ -620,8 +614,8 @@ impl<'tcx> Mono<'tcx> {
         orig_result_ty: Ty<'tcx>,
         caller_mapping: &Subst<'tcx>,
     ) -> FunRef<'tcx> {
-        // External (FFI) functions (Memory Step A) have no body to specialise;
-        // they are monomorphic C symbols. Pass the callee through unchanged.
+        // External (FFI) functions have no body to specialise; they are
+        // monomorphic C symbols. Pass the callee through unchanged.
         if ctx.is_extern(callee) {
             return callee;
         }
@@ -783,7 +777,7 @@ fn mangle_fn<'tcx>(ctx: &CompileCtx<'tcx>, name: &str, args: &[Ty<'tcx>]) -> Str
     format!("{name}{}", mangle_args(ctx, args))
 }
 
-fn mangle_enum<'tcx>(ctx: &CompileCtx<'tcx>, base: EnumRef<'tcx>, args: &[Ty<'tcx>]) -> String {
+fn mangle_enum<'tcx>(ctx: &CompileCtx<'tcx>, base: AdtRef<'tcx>, args: &[Ty<'tcx>]) -> String {
     format!("{}{}", ctx.get_enum(base).name, mangle_args(ctx, args))
 }
 
@@ -798,9 +792,9 @@ fn mangle_ty<'tcx>(ctx: &CompileCtx<'tcx>, ty: Ty<'tcx>) -> String {
             let inner: Vec<String> = elems.iter().map(|e| mangle_ty(ctx, *e)).collect();
             format!("Tup{}_{}", elems.len(), inner.join("_"))
         }
-        // function types survive monomorphisation (Step 13).
+        // function types survive monomorphisation.
         TyKind::Fn(a, r, _) => format!("Fn_{}_{}", mangle_ty(ctx, *a), mangle_ty(ctx, *r)),
-        // References are real pointers (R2) and may appear as type arguments.
+        // References are real pointers and may appear as type arguments.
         TyKind::Ref(_, inner) => format!("Ref_{}", mangle_ty(ctx, *inner)),
         TyKind::RefMut(_, inner) => format!("RefMut_{}", mangle_ty(ctx, *inner)),
         // Raw pointers survive monomorphisation (A); the element type is mangled.

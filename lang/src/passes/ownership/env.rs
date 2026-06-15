@@ -3,8 +3,8 @@
 
 // Ordered by `UniqVar` (its uniquification `idx`, assigned in a source-order
 // pre-order walk) so that iterating block-local bindings yields them in
-// declaration order — which `drop` insertion (Step B) reverses for scope-exit
-// drop order. The map is persistent, so per-branch snapshots stay cheap clones.
+// declaration order, which `drop` insertion reverses for scope-exit drop order.
+// The map is persistent, so per-branch snapshots stay cheap clones.
 use im::HashSet as Set;
 use im::OrdMap as Map;
 
@@ -22,8 +22,8 @@ pub enum OwnershipState {
 }
 
 /// the outstanding-borrow state of a place (variable), used to enforce the
-/// mutable-borrow exclusivity invariant (Calculus §1.2, Step 9b). A place may
-/// have any number of shared borrows *or* a single exclusive borrow, never
+/// mutable-borrow exclusivity invariant (Calculus: Ownership and Drop). A place
+/// may have any number of shared borrows *or* a single exclusive borrow, never
 /// both. `Mut` dominates `Shared` when merging branches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BorrowState {
@@ -47,7 +47,7 @@ pub struct OwnershipEnv<'tcx> {
     /// when it closes.
     borrows: Map<UniqVar<'tcx>, BorrowState>,
     /// the declared type of each in-scope variable, so scope-exit drop
-    /// insertion (Step B) can exempt `Copy` bindings. A variable's type is
+    /// insertion can exempt `Copy` bindings. A variable's type is
     /// fixed at declaration and never changes.
     types: Map<UniqVar<'tcx>, Ty<'tcx>>,
 }
@@ -102,7 +102,7 @@ impl<'tcx> OwnershipEnv<'tcx> {
 
     /// snapshot the outstanding borrows (taken on block entry).
     pub fn borrows_snapshot(&self) -> Map<UniqVar<'tcx>, BorrowState> {
-        self.borrows.clone()
+        self.borrows.clone() // clones are cheap over immutable data structures
     }
 
     /// restore the borrows to a snapshot (on block exit), releasing every
@@ -149,9 +149,9 @@ impl<'tcx> OwnershipEnv<'tcx> {
         merged
     }
 
-    /// Conservative join *and* the per-branch completing drops (Step B,
-    /// Calculus §6.11). The merged env is exactly [`merge`](Self::merge); in
-    /// addition, a variable that one branch left `Owned` but the merge makes
+    /// Conservative join *and* the per-branch completing drops (Calculus:
+    /// Ownership and Drop). The merged env is that of [`merge()`](Self::merge);
+    /// in addition, a variable that one branch left `Owned` but the merge makes
     /// `Moved` (because the *other* branch moved it) must be dropped on the
     /// owning branch, so it is uniformly consumed at the join. Returns
     /// `(merged, drop_on_left, drop_on_right)`, each drop list in
@@ -191,7 +191,6 @@ impl<'tcx> OwnershipEnv<'tcx> {
     ///
     /// use on block exit to drop block-local variables from the environment
     pub fn restrict_to(&mut self, vars: &Set<UniqVar<'tcx>>) {
-        // `im::OrdMap` has no `retain`; rebuild keeping only in-scope keys.
         self.states = self
             .states
             .iter()

@@ -40,17 +40,10 @@ pub struct SandLangErrorContext<'tcx> {
 pub enum SandLangErrorSource<'tcx> {
     #[error("parse error: {0}")]
     AstParseError(#[from] passes::build_ast::AstError),
-
-    // Note: no `#[from]` — QualifyError<'tcx> is non-'static so it cannot be
-    // an error "source". Use the manual From impl below instead.
     #[error("qualify error: {0}")]
     QualifyError(passes::qualify::error::QualifyError<'tcx>),
-
-    // Note: no `#[from]` — AstTypeError<'tcx> is non-'static so it cannot be
-    // an error "source". Use the manual From impl below instead.
     #[error("type error: {0}")]
     TypeError(passes::type_ast::AstTypeError<'tcx>),
-
     #[error("ownership error: {0}")]
     OwnershipError(#[from] passes::ownership::errors::OwnershipError),
 }
@@ -116,7 +109,7 @@ pub fn compile_hir<'proj>(
         SandLangErrorContext::with_module(e.module).wrap_err(e.error)
     })?;
 
-    // Heap lowering (Memory Step C.5): rewrite every `deriving Heaped` enum into
+    // Heap lowering: rewrite every `deriving Heaped` enum into
     // a `Unique<Node>` handle over the core-lib allocator *before* ownership, so
     // drops are inserted uniformly on the resulting handles, and before mono, so
     // the injected `unique_*` calls and node types are instantiated normally.

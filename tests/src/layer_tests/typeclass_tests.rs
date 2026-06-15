@@ -1,5 +1,4 @@
-//! Step 10 — typeclass declarations, instances, and dispatch (Calculus §7,
-//! §8.8–8.9).
+//! Typeclass declarations, instances, and dispatch (Calculus: Typeclasses).
 //!
 //! 10a covers declaration + registration + the coherence/orphan/superclass/
 //! completeness checks (no method dispatch yet); 10b covers calling methods.
@@ -88,7 +87,7 @@ fn impl_of_unknown_typeclass_is_rejected() {
 
 #[test]
 fn impl_for_a_reference_type_is_rejected() {
-    // a reference is not a coherence head — cannot carry an instance.
+    // a reference is not a coherence head: it cannot carry an instance.
     typecheck_fails(
         "typeclass Eq<T> { def eq(a: T, b: T): Bool := true } \n \
          impl Eq for &Int { def eq(a: Int, b: Int): Bool := true } \n \
@@ -249,8 +248,8 @@ fn generic_call_with_unsatisfied_constraint_is_rejected() {
 
 #[test]
 fn unsatisfied_constraint_message_names_the_originating_constraint() {
-    // Step 15: the "no instance" error must point at *which* `where` clause
-    // demanded the instance — the callee and the bound that required it.
+    // the "no instance" error must point at *which* `where` clause demanded the
+    // instance: the callee and the bound that required it.
     let (_ctx, err) = compile_err(
         "typeclass Show<T> { def show(x: T): Int } \n \
          impl Show for Int { def show(x: Int): Int := x } \n \

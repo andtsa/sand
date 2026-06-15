@@ -46,6 +46,16 @@ impl std::fmt::Debug for ModuleRef<'_> {
     }
 }
 
+/// A module's `use` imports. Source modules are kept by name and
+/// resolved to a [`ModuleRef`] lazily at name-resolution time.
+#[derive(Default)]
+pub struct ModuleImports {
+    /// `use src::name`: imported item name -> source module name.
+    pub explicit: std::collections::BTreeMap<String, String>,
+    /// `use src::*`: glob-imported source module names.
+    pub globs: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct CodeModule {
     pub(in crate::compiler) name: String,

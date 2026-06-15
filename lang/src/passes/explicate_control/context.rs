@@ -16,9 +16,9 @@ use crate::lang::types::Ty;
 use crate::lang::types::TyKind;
 
 /// One cell of the pattern matrix used by the Maranget decision-tree compiler
-/// ([`FnCx::compile_match_matrix`]). A `Wild` is a synthesised wildcard produced
-/// when a wildcard row is specialised against a constructor (it has no backing
-/// pattern node); `Pat` borrows a real pattern from an arm.
+/// ([`FnCx::compile_match_matrix`]). A `Wild` is a synthesised wildcard
+/// produced when a wildcard row is specialised against a constructor (it has no
+/// backing pattern node); `Pat` borrows a real pattern from an arm.
 #[derive(Clone, Copy)]
 enum Cell<'a, 'tcx> {
     Wild,
@@ -26,14 +26,14 @@ enum Cell<'a, 'tcx> {
 }
 
 impl<'a, 'tcx> Cell<'a, 'tcx> {
-    /// A cell that imposes no test and so cannot fail to match — a synthesised
-    /// wildcard, a source `_`, or a variable binding (binding extraction happens
-    /// separately at the matched arm, walking the original pattern).
+    /// A cell that imposes no test and so cannot fail to match: a synthesised
+    /// wildcard, a source `_`, or a variable binding (binding extraction
+    /// happens separately at the matched arm, walking the original
+    /// pattern).
     fn is_wild(self) -> bool {
         matches!(
             self,
-            Cell::Wild
-                | Cell::Pat(th::MatchPattern::Wildcard | th::MatchPattern::Binding { .. })
+            Cell::Wild | Cell::Pat(th::MatchPattern::Wildcard | th::MatchPattern::Binding { .. })
         )
     }
 }
@@ -69,9 +69,7 @@ fn remove<T: Clone>(v: &[T], idx: usize) -> Vec<T> {
 /// contributes its element patterns, a wildcard/binding contributes wildcards.
 fn expand_tuple_cell<'a, 'tcx>(cell: Cell<'a, 'tcx>, arity: usize) -> Vec<Cell<'a, 'tcx>> {
     match cell {
-        Cell::Pat(th::MatchPattern::Tuple { elems, .. }) => {
-            elems.iter().map(Cell::Pat).collect()
-        }
+        Cell::Pat(th::MatchPattern::Tuple { elems, .. }) => elems.iter().map(Cell::Pat).collect(),
         _ => vec![Cell::Wild; arity],
     }
 }
@@ -202,7 +200,7 @@ impl<'tcx> FnCx<'tcx> {
             th::Expression::Int(i) => Some(Operand::Const(Constant::Int(*i))),
             th::Expression::Bool(b) => Some(Operand::Const(Constant::Bool(*b))),
             th::Expression::Unit => Some(Operand::Const(Constant::Unit)),
-            // constructors — including nullary ones — are no longer constants:
+            // constructors, including nullary ones, are no longer constants:
             // they are `Aggregate([Const::Int(variant_idx), ...])` in MIR.
             _ => None,
         }
@@ -244,7 +242,7 @@ impl<'tcx> FnCx<'tcx> {
         self.new_block(Vec::new(), Terminator::Goto { target })
     }
 
-    /// Lower a block's scope-exit `drops` (Step B) to MIR `Statement::Drop`s,
+    /// Lower a block's scope-exit `drops` to MIR `Statement::Drop`s,
     /// one per variable, in the order given (already reverse-declaration
     /// order).
     fn drop_stmts(&self, drops: &[UniqVar<'tcx>], range: Range) -> Vec<Statement<'tcx>> {
@@ -263,7 +261,7 @@ impl<'tcx> FnCx<'tcx> {
             .collect()
     }
 
-    /// A continuation that runs `drops` then jumps to `cont` — used to drop a
+    /// A continuation that runs `drops` then jumps to `cont`, used to drop a
     /// block's bindings *after* its value flows to `cont`. Returns `cont`
     /// unchanged when there is nothing to drop.
     fn drop_cont(&mut self, drops: &[UniqVar<'tcx>], range: Range, cont: BlockId) -> BlockId {
@@ -290,15 +288,15 @@ impl<'tcx> FnCx<'tcx> {
     /// given that the value to match against is available as `source` (an
     /// already-materialized `Operand`, e.g. `Copy(scrut_place)`).
     ///
-    /// `Wildcard`s and direct `Binding`s need no intermediate storage —
+    /// `Wildcard`s and direct `Binding`s need no intermediate storage:
     /// they either discard the value (no statement emitted; sound because
-    /// decision D3 performs no partial-move tracking, so a discarded
-    /// sub-value simply remains owned by whatever already holds `source`)
+    /// there is no partial-move tracking, so a discarded sub-value simply
+    /// remains owned by whatever already holds `source`)
     /// or are assigned straight from `source`. Compound sub-patterns
     /// (`Tuple`, or a `Variant`'s payload) delegate to
     /// [`Self::lower_projected_pattern`], which materializes the projected
-    /// value into a fresh temp before recursing — see its doc comment for
-    /// why that's necessary.
+    /// value into a fresh temp before recursing (see its doc comment for
+    /// why that's necessary).
     pub(super) fn lower_pattern_bindings(
         &mut self,
         pattern: &th::MatchPattern<'tcx>,
@@ -310,7 +308,7 @@ impl<'tcx> FnCx<'tcx> {
             th::MatchPattern::Wildcard
             | th::MatchPattern::IntLit(_)
             | th::MatchPattern::BoolLit(_) => {
-                // no bindings — the check was already done in the dispatch
+                // no bindings; the check was already done in the dispatch
                 // chain
             }
             th::MatchPattern::Binding {
@@ -337,10 +335,10 @@ impl<'tcx> FnCx<'tcx> {
 
     /// bind `pattern` against the result of projecting `projection` out of
     /// `base`. simple patterns (`Binding`, `Wildcard`) consume the
-    /// `RValue::Field` directly — `Binding` is assigned straight from it,
+    /// `RValue::Field` directly: `Binding` is assigned straight from it,
     /// `Wildcard` discards it (no statement). compound patterns (`Tuple`,
     /// `Variant`) must first materialize the projection into a fresh temp,
-    /// because `RValue::Field` isn't an `Operand` — further projection needs
+    /// because `RValue::Field` isn't an `Operand`: further projection needs
     /// `Copy(Place)`/`Const`, so the intermediate value needs a `Place` to be
     /// copied from.
     ///
@@ -361,7 +359,7 @@ impl<'tcx> FnCx<'tcx> {
         let field = RValue::Field { base, index };
         match pattern {
             th::MatchPattern::Wildcard => {
-                // discard — D3, no partial-move tracking, no statement needed
+                // discard: no partial-move tracking, no statement needed
             }
             th::MatchPattern::Binding {
                 var,
@@ -395,12 +393,13 @@ impl<'tcx> FnCx<'tcx> {
                 self.lower_projected_pattern(inner_sub, base, 1, range, statements);
             }
             th::MatchPattern::Variant { payload: None, .. } => {
-                // nullary inner variant — no payload, so nothing to bind.
+                // nullary inner variant: no payload, so nothing to bind.
                 // The discriminant check was done in the dispatch chain.
             }
             th::MatchPattern::IntLit(_) | th::MatchPattern::BoolLit(_) => {
-                // A nested literal binds nothing; its equality test is emitted by
-                // the decision tree (which extracts this sub-occurrence itself).
+                // A nested literal binds nothing; its equality test is emitted
+                // by the decision tree (which extracts this
+                // sub-occurrence itself).
             }
         }
     }
@@ -435,7 +434,7 @@ impl<'tcx> FnCx<'tcx> {
             // A block with scope-exit drops: the value must be computed *before*
             // the drops run, and the drops *before* the `Return`. Route the value
             // through a temp (non-unit) or as an effect (unit), then drop, then
-            // return — so the drops land between value and `Return`.
+            // return, so the drops land between value and `Return`.
             th::Expression::Block {
                 statements,
                 expr: inner,
@@ -507,7 +506,7 @@ impl<'tcx> FnCx<'tcx> {
             }
 
             // `*reference = value`: evaluate `value` into a temp, then store it
-            // *through* the reference — `Assign { dst: Place::deref(ref), .. }`.
+            // *through* the reference (`Assign { dst: Place::deref(ref), .. }`).
             th::Statement::DerefAssign {
                 reference,
                 value,
@@ -665,7 +664,7 @@ impl<'tcx> FnCx<'tcx> {
             return self.lower_effect(expr, unreachable);
         }
         match &expr.expr {
-            // `&inner` (Calculus §3.2): a real pointer (R2) to the referent's
+            // `&inner`: a real pointer to the referent's
             // storage. A borrow of a *variable* points at that variable's local;
             // a borrow of a *temporary* materialises it into a fresh local first,
             // then points at that. The inverse of a `*` (`[Deref]`) projection.
@@ -681,7 +680,7 @@ impl<'tcx> FnCx<'tcx> {
                     self.lower_assign(inner, tmp, assign)
                 }
             }
-            // `*inner` (Calculus §3.2): a load through the reference — a `[Deref]`
+            // `*inner`: a load through the reference; a `[Deref]`
             // place reads the value the reference points at.
             th::Expression::Deref(inner) => {
                 if let th::Expression::Var(v) = &inner.expr {
@@ -748,7 +747,7 @@ impl<'tcx> FnCx<'tcx> {
                 payload,
                 ..
             } => {
-                // All enum values — including nullary variants — are Aggregates
+                // All enum values, including nullary variants, are Aggregates
                 // in MIR. field 0 is always the discriminant (variant index as
                 // Int); field 1 (if present) is the payload.
                 let disc = Operand::Const(Constant::Int(*variant_idx as i64));
@@ -867,7 +866,7 @@ impl<'tcx> FnCx<'tcx> {
                     .fold(final_bb, |k, (arg, tmp)| self.lower_assign(arg, tmp, k))
             }
 
-            // A lifted closure value (Step 13): a fat pointer to the lifted
+            // A lifted closure value: a fat pointer to the lifted
             // function plus its captured operands (the enclosing locals it
             // closes over), packed into the environment.
             th::Expression::Closure { func, captures } => {
@@ -883,7 +882,7 @@ impl<'tcx> FnCx<'tcx> {
                 self.new_block(vec![stmt], Terminator::Goto { target: cont })
             }
 
-            // Indirect call (Step 13): evaluate the callee and argument into
+            // Indirect call: evaluate the callee and argument into
             // temps, then call through the closure value.
             th::Expression::Apply { func, arg } => {
                 let func_tmp = self.fresh_temp("apply_callee", func.ty, func.range);
@@ -912,7 +911,7 @@ impl<'tcx> FnCx<'tcx> {
                 args,
                 type_args,
             } if fn_name.is_type_arg_intrinsic() => {
-                // `size_of::<T>()` — no value args; assign the size directly
+                // `size_of::<T>()`: no value args; assign the size directly
                 // (the concrete type is carried on `RValue::SizeOf`).
                 let stmt = self.assign_stmt(dst, RValue::SizeOf(type_args[0]), expr.range);
                 self.new_block(vec![stmt], Terminator::Goto { target: cont })
@@ -961,7 +960,7 @@ impl<'tcx> FnCx<'tcx> {
 
                 // for each arm: first emit an "extraction block" that binds the
                 // pattern's variables (registering their locals as a side
-                // effect — *before* lowering the body, since the body may
+                // effect, *before* lowering the body, since the body may
                 // reference them by `Var`/`var_operand`, which requires the
                 // local to already exist in `local_map`), then the body block,
                 // and chain extraction -> body. arms whose pattern binds
@@ -1012,23 +1011,24 @@ impl<'tcx> FnCx<'tcx> {
         }
     }
 
-    /// Compile a pattern matrix into a decision tree (Maranget, *Compiling
-    /// Pattern Matching to Good Decision Trees*, ML'08).
+    /// Compile a pattern matrix into a decision tree
+    /// (Maranget, *Compiling Pattern Matching to Good Decision Trees*, ML'08).
     ///
-    /// `occ` are the occurrences — the temps holding the sub-values currently
-    /// under scrutiny, one per matrix column — paired with their types. `rows`
+    /// `occ` are the occurrences: the temps holding the sub-values currently
+    /// under scrutiny, one per matrix column, paired with their types. `rows`
     /// is the matrix: each row is one source arm's pattern cells over those
     /// columns. Returns the entry block that routes control to the first
     /// matching arm's `arm_bbs` entry, or to `fail_bb` if nothing matches.
     ///
     /// At each step it selects the first column where the *first* row is
     /// refutable (guaranteeing progress on that row), switches on the
-    /// constructor there once, and recurses into the specialised sub-matrices —
+    /// constructor there once, and recurses into the specialised sub-matrices,
     /// so each occurrence is tested at most once along any path and common
     /// sub-trees are shared, unlike a per-arm backtracking chain. Variable
-    /// bindings are *not* handled here: they are extracted at the matched arm by
-    /// walking the original pattern from the scrutinee (see the `Match` arm), so
-    /// a binding cell is treated exactly like a wildcard for dispatch.
+    /// bindings are *not* handled here: they are extracted at the matched arm
+    /// by walking the original pattern from the scrutinee (see the `Match`
+    /// arm), so a binding cell is treated exactly like a wildcard for
+    /// dispatch.
     fn compile_match_matrix(
         &mut self,
         occ: &[(LocalId, Ty<'tcx>)],
@@ -1048,7 +1048,7 @@ impl<'tcx> FnCx<'tcx> {
         // Otherwise switch on the first column where the first row is refutable.
         let col = first.cells.iter().position(|c| !c.is_wild()).unwrap();
         // Sub-occurrence types come from the constructor patterns (or the tuple
-        // type), so the occurrence's own type is not needed here — only its local.
+        // type), so the occurrence's own type is not needed here, only its local.
         let occ_local = occ[col].0;
 
         match first.cells[col] {
@@ -1144,7 +1144,15 @@ impl<'tcx> FnCx<'tcx> {
                     .iter()
                     .map(|(vi, payload_ty)| {
                         self.specialize_variant(
-                            occ, rows, col, occ_local, *vi, *payload_ty, arm_bbs, fail_bb, range,
+                            occ,
+                            rows,
+                            col,
+                            occ_local,
+                            *vi,
+                            *payload_ty,
+                            arm_bbs,
+                            fail_bb,
+                            range,
                         )
                     })
                     .collect();
@@ -1153,13 +1161,8 @@ impl<'tcx> FnCx<'tcx> {
                 let disc = self.fresh_temp("match_disc", self.types.int, range);
                 let mut else_bb = default_bb;
                 for ((vi, _), target) in ctors.iter().zip(&ctor_bbs).rev() {
-                    else_bb = self.eq_branch(
-                        disc,
-                        Constant::Int(*vi as i64),
-                        *target,
-                        else_bb,
-                        range,
-                    );
+                    else_bb =
+                        self.eq_branch(disc, Constant::Int(*vi as i64), *target, else_bb, range);
                 }
                 self.new_block(
                     vec![self.assign_stmt(
@@ -1227,9 +1230,10 @@ impl<'tcx> FnCx<'tcx> {
         }
     }
 
-    /// Build the specialised sub-tree for one enum constructor `vi` of the column
-    /// `col` (occurrence `occ_local`): extract the payload (if any) into a fresh
-    /// occurrence and recurse on the rows that match `vi` or are wildcards.
+    /// Build the specialised sub-tree for one enum constructor `vi` of the
+    /// column `col` (occurrence `occ_local`): extract the payload (if any)
+    /// into a fresh occurrence and recurse on the rows that match `vi` or
+    /// are wildcards.
     #[allow(clippy::too_many_arguments)]
     fn specialize_variant(
         &mut self,
@@ -1448,7 +1452,7 @@ impl<'tcx> FnCx<'tcx> {
                     self.lower_pred(last, then_bb, else_bb)
                 } else {
                     // Compute the predicate into a temp, run the block's drops,
-                    // then branch — so drops land after the value, before the
+                    // then branch, so drops land after the value, before the
                     // branch on it.
                     let tmp = self.fresh_temp("pred_block_tmp", last.ty, last.range);
                     let stmts = self.drop_stmts(drops, expr.range);

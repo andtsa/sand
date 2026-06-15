@@ -1,17 +1,17 @@
-//! Typeclass and instance tables (Calculus §7, §8.8–8.9).
+//! Typeclass and instance tables (Calculus: Typeclasses).
 //!
 //! A `typeclass` is a named, module-owned item carrying a single type
 //! parameter, a set of method signatures (over that parameter), and an optional
 //! list of superclasses (`requires`). An `impl C for T` registers a concrete
-//! instance, keyed *globally* by `(class, head(T))` — instances form one
-//! coherent set and are never `use`d (module redesign principle 6).
+//! instance, keyed *globally* by `(class, head(T))`: instances form one
+//! coherent set and are never `use`d.
 
 use crate::compiler::structure::FunRef;
 use crate::compiler::structure::Map;
 use crate::compiler::structure::ModuleRef;
 use crate::compiler::structure::Range;
 use crate::compiler::structure::TypeParam;
-use crate::lang::types::EnumRef;
+use crate::lang::types::AdtRef;
 use crate::lang::types::Ty;
 use crate::lang::types::TypeParamId;
 
@@ -36,7 +36,7 @@ pub enum TypeHead<'tcx> {
     Int,
     Bool,
     Unit,
-    Enum(EnumRef<'tcx>),
+    Enum(AdtRef<'tcx>),
 }
 
 /// A typeclass method's signature, expressed over the class's type parameter
@@ -46,8 +46,7 @@ pub enum TypeHead<'tcx> {
 #[derive(Clone, Debug)]
 pub struct MethodDef<'tcx> {
     pub name: String,
-    /// the method's own generics (usually empty); the class parameter is
-    /// separate.
+    /// the method's own generics
     pub type_params: Vec<TypeParam>,
     pub param_tys: Vec<Ty<'tcx>>,
     pub ret_ty: Ty<'tcx>,

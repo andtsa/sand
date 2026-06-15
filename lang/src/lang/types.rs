@@ -3,26 +3,25 @@ use std::fmt;
 use std::hash::Hash;
 use std::hash::Hasher;
 
-use crate::compiler::structure::EnumDef;
+use crate::compiler::structure::AdtDef;
 
 /// The kind of a type reflects how its values may be used.
 ///
 /// This is the `{Owned, Borrowed, BorrowedMut, Never}` fragment of the kind
-/// lattice (Calculus §1): `Owned` is the top (a normal, fully-capable value)
-/// and `Never` is the bottom (the uninhabited kind of a diverging expression).
-/// `Borrowed` and `BorrowedMut` are mutually-incomparable borrow modes; the
-/// remaining mode (`InteriorMut`) is out of scope.
+/// lattice (Calculus: Kinds): `Owned` is the top (a normal, fully-capable
+/// value) and `Never` is the bottom (the uninhabited kind of a diverging
+/// expression). `Borrowed` and `BorrowedMut` are mutually-incomparable borrow
+/// modes; the remaining mode (`InteriorMut`) is out of scope.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Kind {
     /// A normal owned value.
     Owned,
-    /// A shared (immutable) borrow (Calculus §1.2). A borrowed value may be
-    /// used multiple times and is not consumed. The borrow's *region* lives
-    /// on the **type** (`&'r T`), not the kind: kinds record only
-    /// *capability*; regions belong to the type system and region escape is
-    /// checked on the type.
+    /// A shared (immutable) borrow. A borrowed value may be used multiple times
+    /// and is not consumed. The borrow's *region* lives on the **type**
+    /// (`&'r T`), not the kind: kinds record only *capability*; regions belong
+    /// to the type system and region escape is checked on the type.
     Borrowed,
-    /// An exclusive (mutable) borrow (Calculus §1.2). While it is live, no
+    /// An exclusive (mutable) borrow. While it is live, no
     /// other borrow of the same place may exist (the exclusivity invariant,
     /// enforced by the ownership pass). Its region lives on the type, as
     /// for `Borrowed`.
@@ -34,33 +33,35 @@ pub enum Kind {
     /// parameters): the kind of a thing that, applied to a type of kind `K₁`,
     /// yields a type of kind `K₂`, e.g. `Option : Owned -> Owned`. The arrow's
     /// domain/codomain are held in a context-side **kind interner** (canonical,
-    /// so equal arrows share one [`KindId`] and derived `Eq`/`Hash`/`Ord` on the
-    /// id are structural). `Kind` therefore stays `Copy` and lifetime-free while
-    /// the arrow space is fully general (nesting / multi-argument via currying).
+    /// so equal arrows share one [`KindId`] and derived `Eq`/`Hash`/`Ord` on
+    /// the id are structural). `Kind` therefore stays `Copy` and
+    /// lifetime-free while the arrow space is fully general (nesting /
+    /// multi-argument via currying).
     Arrow(KindId),
 }
 
-/// How a call uses a function value's captured environment
-/// 
-/// sand's single kind-annotated arrow (Calculus §3.1)
-/// (in place of Rust's three closure traits).
-/// `Reusable` is the bare-`->` default (the common case, and what
-/// higher-order functions like `fmap` need). Only `Reusable` is produced from
-/// surface syntax until closures land; the others are reserved.
+/// How a call uses a function value's captured environment.
+///
+/// This is sand's single kind-annotated arrow (Calculus: Types, the function
+/// arrow), standing in for Rust's three closure traits. `Reusable` is the
+/// bare-`->` default (the common case, and what higher-order functions like
+/// `fmap` need). Only `Reusable` is produced from surface syntax until closures
+/// land; the others are reserved.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum FnMode {
-    /// `→[Borrowed]`, ≈ Rust `Fn`: reads its environment; callable repeatedly.
+    /// `-[Borrowed]>`, ≈ Rust `Fn`: reads its environment; callable repeatedly.
     Reusable,
-    /// `→[BorrowedMut]`, ≈ Rust `FnMut`: may mutate its environment.
+    /// `-[BorrowedMut]>`, ≈ Rust `FnMut`: may mutate its environment.
     ReusableMut,
-    /// `→[Owned]`, ≈ Rust `FnOnce`: may consume its environment; callable once.
+    /// `-[Owned]>`, ≈ Rust `FnOnce`: may consume its environment; callable
+    /// once.
     Consuming,
 }
 
 impl FnMode {
-    /// Subsumption `self <: other` (Step 13): a function of mode `self` is usable
-    /// where mode `other` is expected. A reusable (`Fn`) closure can stand in for
-    /// any arrow; a mutating (`FnMut`) one for a consuming (`FnOnce`) slot —
+    /// Subsumption `self <: other`: a function of mode `self` is usable where
+    /// mode `other` is expected. A reusable (`Fn`) closure can stand in for any
+    /// arrow, and a mutating (`FnMut`) one for a consuming (`FnOnce`) slot,
     /// mirroring Rust's `Fn ⊆ FnMut ⊆ FnOnce`.
     pub fn usable_as(self, other: FnMode) -> bool {
         use FnMode::*;
@@ -78,11 +79,11 @@ impl FnMode {
 pub struct KindId(pub usize);
 
 impl Kind {
-    /// Subkinding `self <: other` (Calculus §1.2): "`self` is usable where
-    /// `other` is expected". `Never` is the bottom; `Owned` coerces to any
-    /// borrow mode (`SK-OwnedBorrowed` / `SK-OwnedBorrowedMut`); otherwise
-    /// kinds are subkinds only of themselves (the two borrow modes are
-    /// incomparable). Regions play no part — they live on the type.
+    /// Subkinding `self <: other` (Calculus: Kinds, subkinding): "`self` is
+    /// usable where `other` is expected". `Never` is the bottom; `Owned`
+    /// coerces to any borrow mode; otherwise kinds are subkinds only of
+    /// themselves (the two borrow modes are incomparable). Regions play no
+    /// part, they live on the type.
     pub fn is_subkind(self, other: Kind) -> bool {
         match (self, other) {
             (Kind::Never, _) => true,
@@ -92,9 +93,10 @@ impl Kind {
         }
     }
 
-    /// Least upper bound of two kinds (Calculus §1.4), used to merge the kinds
-    /// of the branches of an `if`/`match`. `Never` is the identity; any two
-    /// distinct non-`Never` kinds join to `Owned` (the top).
+    /// Least upper bound of two kinds (Calculus: Kinds, join), used to merge
+    /// the kinds of the branches of an `if`/`match`. `Never` is the
+    /// identity; any two distinct non-`Never` kinds join to `Owned` (the
+    /// top).
     pub fn join(self, other: Kind) -> Kind {
         match (self, other) {
             (Kind::Never, k) | (k, Kind::Never) => k,
@@ -112,26 +114,26 @@ impl Kind {
 pub struct TypeParamId(pub usize);
 
 /// How a type constructor's behaviour relates to a parameter's subtyping
-/// (Calculus §2.1). The system currently has no subtyping between concrete
-/// types, so variance is validated at the declaration site but has no effect
-/// on use-site checking yet.
+/// (Calculus: Types, variance). The system currently has no subtyping between
+/// concrete types, so variance is validated at the declaration site but has no
+/// effect on use-site checking yet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Variance {
-    /// `+` — covariant: the parameter appears only in producer positions.
+    /// `+` covariant: the parameter appears only in producer positions.
     Covariant,
-    /// `-` — contravariant: the parameter appears only in consumer positions.
+    /// `-` contravariant: the parameter appears only in consumer positions.
     Contravariant,
-    /// `∅` — invariant: the parameter appears in both (always sound).
+    /// `∅` invariant: the parameter appears in both (always sound).
     Invariant,
 }
 
-/// A region (lifetime) variable, interned per declaration scope (Calculus
-/// §1.1). Distinct names in the same scope get distinct ids.
+/// A region (lifetime) variable, interned per declaration scope (Calculus:
+/// Regions). Distinct names in the same scope get distinct ids.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RegionVar(pub usize);
 
 /// A region: either a variable `'r` or the permanent `'static` region that
-/// outlives everything (Calculus §1.1).
+/// outlives everything (Calculus: Regions).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Region {
     Var(RegionVar),
@@ -139,8 +141,8 @@ pub enum Region {
 }
 
 /// An outlives constraint `longer ≥ shorter`: region `longer` outlives region
-/// `shorter` (Calculus §1.1). Stored from `where` clauses and discharged by the
-/// region solver
+/// `shorter` (Calculus: Regions). Stored from `where` clauses and discharged by
+/// the region solver
 /// ([`outlives`](crate::compiler::context::CompileCtx::outlives)).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RegionConstraint {
@@ -148,11 +150,10 @@ pub struct RegionConstraint {
     pub shorter: Region,
 }
 
-/// Lifetime-elision rule scaffolding (Calculus §2.4). These describe how an
-/// omitted region in a function signature *would* be filled in. The data
-/// structures exist so later steps can record and apply elision, but elision is
-/// **not active**; every borrow's region is still explicit or the shared
-/// elided-borrow region. Region inference activates these in a later step.
+/// Lifetime-elision rule scaffolding. These describe how an omitted region in a
+/// function signature *would* be filled in. The data structures exist so
+/// elision can be recorded and applied, but elision is **not active**: every
+/// borrow's region is still explicit or the shared elided-borrow region.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ElisionRule {
     /// With exactly one input reference, every elided output region is that
@@ -162,45 +163,45 @@ pub enum ElisionRule {
     FreshPerInput,
 }
 
-/// A `Copy` handle to an arena-allocated [`EnumDef`].
+/// A `Copy` handle to an arena-allocated [`AdtDef`].
 ///
 /// Equality and hashing are by pointer identity: each distinct enum (named
 /// enums deduplicated by name, anonymous tag-unions by tag set) is allocated
 /// exactly once, so identical enum ↔ identical pointer. Ordering is by the
 /// monotonic registration `id` for deterministic iteration.
 #[derive(Copy, Clone)]
-pub struct EnumRef<'tcx>(pub(crate) &'tcx EnumDef<'tcx>);
+pub struct AdtRef<'tcx>(pub(crate) &'tcx AdtDef<'tcx>);
 
-impl<'tcx> EnumRef<'tcx> {
+impl<'tcx> AdtRef<'tcx> {
     /// Access the underlying enum definition.
     #[inline]
-    pub fn def(self) -> &'tcx EnumDef<'tcx> {
+    pub fn def(self) -> &'tcx AdtDef<'tcx> {
         self.0
     }
 }
 
-impl PartialEq for EnumRef<'_> {
+impl PartialEq for AdtRef<'_> {
     fn eq(&self, other: &Self) -> bool {
         std::ptr::eq(self.0, other.0)
     }
 }
-impl Eq for EnumRef<'_> {}
-impl Hash for EnumRef<'_> {
+impl Eq for AdtRef<'_> {}
+impl Hash for AdtRef<'_> {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        (self.0 as *const EnumDef<'_>).hash(state);
+        (self.0 as *const AdtDef<'_>).hash(state);
     }
 }
-impl PartialOrd for EnumRef<'_> {
+impl PartialOrd for AdtRef<'_> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
-impl Ord for EnumRef<'_> {
+impl Ord for AdtRef<'_> {
     fn cmp(&self, other: &Self) -> Ordering {
         self.0.id.cmp(&other.0.id)
     }
 }
-impl fmt::Debug for EnumRef<'_> {
+impl fmt::Debug for AdtRef<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "EnumRef({}, {})", self.0.id, self.0.name)
     }
@@ -217,14 +218,14 @@ pub enum TyKind<'tcx> {
     Bool,
     Unit,
     /// Placeholder "any" type for polymorphic intrinsics (e.g. `println`).
-    /// Will be retired in Step 10 once a `Display` typeclass is available.
+    /// To be retired once a `Display` typeclass is available.
     Top,
-    Enum(EnumRef<'tcx>),
+    Enum(AdtRef<'tcx>),
     /// Product type, arity >= 2 (arity-0 is `Unit`, arity-1 is plain grouping).
     /// The element slice is arena-allocated so `TyKind` stays `Copy`.
     Tuple(&'tcx [Ty<'tcx>]),
     /// A type parameter use site (the `T` in a generic signature/body). Opaque
-    /// until monomorphisation (Step 3) substitutes a concrete type for it.
+    /// until monomorphisation substitutes a concrete type for it.
     Param(TypeParamId),
     /// A **higher-kinded** type parameter applied to arguments, `F<A>`
     /// where `F` is a type *constructor* parameter (kind `Owned -> Owned`), not
@@ -233,41 +234,42 @@ pub enum TyKind<'tcx> {
     /// constructor for `F` (its `Subst` entry is the bare `Enum(er)`), turning
     /// `F<A>` into `App(er, A)`. Like `Param`, it never survives mono.
     ParamApp(TypeParamId, &'tcx [Ty<'tcx>]),
-    /// A function type `A -> B` (Step 13): a first-class function / closure
-    /// value. Unary (multi-argument via tuple or currying). The [`FnMode`]
-    /// records how a call uses the closure's captured environment — sand's single
-    /// kind-annotated arrow (Calculus §3.1) standing in for Rust's three closure
-    /// traits (`Fn`/`FnMut`/`FnOnce`). Arena-backed, so `TyKind` stays `Copy`.
-    /// The borrowing arrow's region (§3.1's `→[Borrowed 'r]`) is added with
-    /// closure escape-checking; until then only the mode is carried.
+    /// A function type `A -> B`: a first-class function / closure value. Unary
+    /// (multi-argument via tuple or currying). The [`FnMode`] records how a
+    /// call uses the closure's captured environment: sand's single
+    /// kind-annotated arrow (Calculus: Types, the function arrow) standing
+    /// in for Rust's three closure traits (`Fn`/`FnMut`/`FnOnce`).
+    /// Arena-backed, so `TyKind` stays `Copy`. The borrowing arrow's region
+    /// (`→[Borrowed 'r]`) will arrive with closure escape-checking; until
+    /// then only the mode is carried.
     Fn(Ty<'tcx>, Ty<'tcx>, FnMode),
     /// A generic enum applied to concrete (or still-parametric) type arguments,
     /// e.g. `Option<Int>`. The `EnumRef` is the generic base enum; the slice is
     /// its type arguments, one per declared parameter. Distinct argument lists
-    /// intern to distinct types. Monomorphisation (Step 3) replaces these with
+    /// intern to distinct types. Monomorphisation replaces these with
     /// specialised concrete enums.
     /// `Option<Int>` / `Holder<'a, T>`. Second slice = type arguments (one per
     /// declared type parameter); third slice = region arguments (one per
     /// declared region parameter, lifetimes-first). The region args carry
     /// the lifetimes a value of this type may borrow from, so `freeRegions`
-    /// exposes them to the escape check (R5). Distinct type *or* region
+    /// exposes them to the escape check. Distinct type *or* region
     /// arguments intern distinct. Monomorphisation drops the region args
     /// (regions are compile-time).
-    App(EnumRef<'tcx>, &'tcx [Ty<'tcx>], &'tcx [Region]),
-    /// A type ascribed to a region, `T @ 'r` (Calculus §2.3). Carries the same
-    /// kind as its inner type. Regions have no runtime representation, so
-    /// monomorphisation erases this back to the inner `T`.
+    App(AdtRef<'tcx>, &'tcx [Ty<'tcx>], &'tcx [Region]),
+    /// A type ascribed to a region, `T @ 'r` (Calculus: Types). Carries the
+    /// same kind as its inner type. Regions have no runtime representation,
+    /// so monomorphisation erases this back to the inner `T`.
     Region(Ty<'tcx>, Region),
-    /// A shared reference `&'r T` (Calculus §2.3), of kind `Borrowed 'r`.
+    /// A shared reference `&'r T` (Calculus: Types), of kind `Borrowed 'r`.
     /// Immutable shared borrows have no distinct runtime representation in this
     /// phase, so monomorphisation erases `&'r T` to `T`.
     Ref(Region, Ty<'tcx>),
-    /// An exclusive (mutable) reference `&'r mut T` (Calculus §2.3), of kind
+    /// An exclusive (mutable) reference `&'r mut T` (Calculus: Types), of kind
     /// `BorrowedMut 'r`. Like `Ref`, borrows have no distinct runtime
     /// representation yet, so monomorphisation erases `&'r mut T` to `T`.
     RefMut(Region, Ty<'tcx>),
-    /// A raw pointer `Ptr<T>` (Memory Step A): address-sized, `Copy`, *outside*
-    /// the affine / region / borrow discipline. Unlike `Ref`, a `Ptr` carries
+    /// A raw pointer `Ptr<T>`: address-sized, `Copy`, *outside* the affine /
+    /// region / borrow discipline. Unlike `Ref`, a `Ptr` carries
     /// no region and has a real runtime representation (`ptr`), so it survives
     /// monomorphisation (only the element type `T` is substituted). Deref is
     /// the `unsafe` operation; use is confined to the core library.
@@ -297,7 +299,7 @@ impl<'tcx> Ty<'tcx> {
             TyKind::Region(t, _) => t.is_copy(),
             // shared references are freely copyable (immutable, no ownership).
             TyKind::Ref(..) => true,
-            // raw pointers are `Copy` and outside the affine discipline (A).
+            // raw pointers are `Copy` and outside the affine discipline.
             TyKind::Ptr(_) => true,
             _ => false,
         }
@@ -340,8 +342,7 @@ impl<'tcx> Ty<'tcx> {
     /// (region-blind). Used at type-checking boundaries while regions live on
     /// the type but are validated separately by the escape check (on free
     /// regions), not by use-site comparison. Full region-aware subtyping
-    /// (covariant `&`, invariant `&mut`) replaces this in the
-    /// Reference-Representation step.
+    /// (covariant `&`, invariant `&mut`) is what eventually replaces this.
     pub fn eq_modulo_regions(self, other: Ty<'tcx>) -> bool {
         if self.type_eq(other) {
             return true;
@@ -367,7 +368,7 @@ impl<'tcx> Ty<'tcx> {
                 xs.iter().zip(*ys).all(|(x, y)| x.eq_modulo_regions(*y))
             }
             // `self` is the actual type, `other` the expected; a function value
-            // may stand in for a more-permissive arrow (Step 13 subsumption).
+            // may stand in for a more-permissive arrow (arrow subsumption).
             (TyKind::Fn(a1, r1, m1), TyKind::Fn(a2, r2, m2)) if m1.usable_as(*m2) => {
                 a1.eq_modulo_regions(*a2) && r1.eq_modulo_regions(*r2)
             }
@@ -375,10 +376,10 @@ impl<'tcx> Ty<'tcx> {
         }
     }
 
-    /// Collect the free regions appearing in this type into `out` (Calculus
-    /// §6.3 `freeRegions`). Used by the escape check: a value crossing a
-    /// scope boundary must not name a region introduced at or inside that
-    /// scope.
+    /// Collect the free regions appearing in this type into `out` (the
+    /// `freeRegions` of the Calculus escape check). Used by the escape check: a
+    /// value crossing a scope boundary must not name a region introduced at or
+    /// inside that scope.
     pub fn free_regions(self, out: &mut Vec<crate::lang::types::Region>) {
         match self.kind() {
             TyKind::Ref(r, t) | TyKind::RefMut(r, t) => {
@@ -398,7 +399,7 @@ impl<'tcx> Ty<'tcx> {
                 for a in args.iter() {
                     a.free_regions(out);
                 }
-                // the lifetimes this ADT instantiation borrows from (R5): exposing
+                // the lifetimes this ADT instantiation borrows from: exposing
                 // them lets the escape check catch an ADT holding a local borrow.
                 for r in regions.iter() {
                     out.push(*r);

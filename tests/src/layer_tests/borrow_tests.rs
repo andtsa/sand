@@ -1,9 +1,9 @@
-//! Step 7 — shared borrows: the `Borrowed` kind, `&'r T` reference types, and
-//! `&e` borrow expressions (Calculus §1, §2.3, §3.2, §6.2).
+//! Shared borrows: the `Borrowed` kind, `&'r T` reference types, and
+//! `&e` borrow expressions (Calculus: Kinds, Types, Terms).
 //!
 //! Borrows are immutable and have no distinct runtime representation yet, so
 //! monomorphisation erases `&'r T` to `T` and borrows lower transparently.
-//! The block-region escape check is deferred to Step 8.
+//! The block-region escape check is exercised separately.
 
 use lang::ir_types::typed_hir::Expression;
 use lang::lang::types::Kind;
@@ -65,9 +65,9 @@ fn borrowing_an_int_then_a_bool() {
 #[test]
 fn borrowing_does_not_move_a_non_copy_value() {
     // `&e` borrows `e` without moving it: once the borrow's scope ends, `e` is
-    // still owned and may be consumed (Calculus §6.2). The borrow is scoped to an
-    // inner block so it is released before `e` is matched — a value may not be
-    // moved *while* borrowed (Calculus §6.2, item 12).
+    // still owned and may be consumed. The borrow is scoped to an inner block so
+    // it is released before `e` is matched (a value may not be moved *while*
+    // borrowed).
     typecheck(
         "type E = A | B \n \
          def f(e: E): Int := { { let r = &e; 0 }; match e { E#A => 1, E#B => 2 } } \n \
@@ -78,7 +78,7 @@ fn borrowing_does_not_move_a_non_copy_value() {
 #[test]
 fn move_while_borrowed_is_rejected() {
     // a value may not be moved while a borrow of it is live: `match e` consumes
-    // `e` while `r` still borrows it (Calculus §6.2).
+    // `e` while `r` still borrows it.
     typecheck_fails(
         "type E = A | B \n \
          def f(e: E): Int := { let r = &e; match e { E#A => 1, E#B => 2 } } \n \
@@ -120,7 +120,7 @@ fn borrow_program_runs() {
 
 #[test]
 fn borrowed_value_still_usable_at_runtime() {
-    // borrow `x`, then return `x` — the borrow is transparent, so the value is
+    // borrow `x`, then return `x`: the borrow is transparent, so the value is
     // unaffected.
     assert_eq!(
         run_both("def f(x: Int): Int := { let r = &x; x } \n def main(): Int := f(42)"),

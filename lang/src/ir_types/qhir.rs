@@ -80,8 +80,8 @@ pub enum Statement<'tcx> {
         val: Expr<'tcx>,
     },
 
-    /// Write-through `*reference = value` (Calculus §3.2). `reference : &mut
-    /// T`.
+    /// Write-through `*reference = value` (Calculus: write-through).
+    /// `reference : &mut T`.
     DerefAssign {
         reference: Expr<'tcx>,
         value: Expr<'tcx>,
@@ -125,14 +125,14 @@ pub enum Expression<'tcx> {
     IntrinsicCall {
         fn_name: Intrinsic,
         args: Vec<Expr<'tcx>>,
-        /// Explicit turbofish type arguments (Memory Step C). Empty except for
-        /// type-argument intrinsics like `size_of::<T>()`.
+        /// Explicit turbofish type arguments. Empty except for type-argument
+        /// intrinsics like `size_of::<T>()`.
         type_args: Vec<Ty<'tcx>>,
     },
-    /// A call to a typeclass method (Step 10). The instance is unresolved here
-    /// — type-checking picks it from the argument types (rewriting to
-    /// `Call`, or to a deferred `typed_hir::MethodCall` when the receiver
-    /// is a type parameter).
+    /// A call to a typeclass method. The instance is unresolved here:
+    /// type-checking picks it from the argument types (rewriting to `Call`, or
+    /// to a deferred `typed_hir::MethodCall` when the receiver is a type
+    /// parameter).
     MethodCall {
         class: TypeclassRef,
         method: String,
@@ -143,7 +143,7 @@ pub enum Expression<'tcx> {
     Bool(bool),
     Unit,
     /// borrow `&e` (shared) or `&mut e` (exclusive, the `bool` is `true`)
-    /// (Calculus §3.2).
+    /// (Calculus: Terms, borrow).
     Borrow(Box<Expr<'tcx>>, bool),
     /// dereference `*e`: read through a reference (`&T`/`&mut T` -> T).
     /// Transparent at runtime (borrows are erased), so it lowers like `Borrow`.
@@ -153,7 +153,7 @@ pub enum Expression<'tcx> {
         expr: Option<Box<Expr<'tcx>>>,
     },
     Constructor {
-        enum_ref: EnumRef<'tcx>,
+        enum_ref: AdtRef<'tcx>,
         variant_idx: usize,
         payload: Option<Box<Expr<'tcx>>>,
     },
@@ -166,17 +166,17 @@ pub enum Expression<'tcx> {
         arms: Vec<QMatchArm<'tcx>>,
     },
     Tuple(Vec<Expr<'tcx>>),
-    /// A lambda `fn (x: T) -> e` (Step 13). The parameter is uniquified; the
-    /// body is resolved in a scope extended with it. `mode` is the arrow's
-    /// calling mode.
+    /// A lambda `fn (x: T) -> e`. The parameter is uniquified; the body is
+    /// resolved in a scope extended with it. `mode` is the arrow's calling
+    /// mode.
     Lambda {
         param: Parameter<'tcx>,
         body: Box<Expr<'tcx>>,
         mode: crate::lang::types::FnMode,
     },
     /// Application of a function *value* (indirect call): `f(arg)` where `f`
-    /// resolved to a local of function type rather than a named function
-    /// (Step 13). Distinct from [`Expression::Call`].
+    /// resolved to a local of function type rather than a named function.
+    /// Distinct from [`Expression::Call`].
     Apply {
         func: Box<Expr<'tcx>>,
         arg: Box<Expr<'tcx>>,
@@ -198,7 +198,7 @@ pub struct QMatchArm<'tcx> {
 pub enum QPattern<'tcx> {
     /// fully resolved enum variant: `T::A` -> (EnumRef, 0)
     Variant {
-        enum_ref: EnumRef<'tcx>,
+        enum_ref: AdtRef<'tcx>,
         variant_idx: usize,
         payload: Option<Box<QPattern<'tcx>>>,
     },

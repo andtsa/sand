@@ -1,12 +1,12 @@
-//! Step 8a — region (lifetime) parameter plumbing (Calculus §8.4, §8.10).
+//! Region (lifetime) parameter plumbing (Calculus: Generic parameters).
 //!
 //! Declarations may carry region parameters (`def f<'r>(...)`, `type Ref<'r,
 //! a>`) mixed with type parameters, and functions may carry `where 'r >= 's`
-//! outlives constraints. This step is *structural*: regions resolve against the
-//! declaring item's scope and are stored on the IR, but nothing is enforced yet
-//! — the escape check and the outlives solver arrive in Step 8b. Regions are
-//! still erased by monomorphisation, so region-parametric code compiles and
-//! runs unchanged.
+//! outlives constraints. This layer is *structural*: regions resolve against
+//! the declaring item's scope and are stored on the IR, but nothing is enforced
+//! here; the escape check and the outlives solver are tested separately.
+//! Regions are still erased by monomorphisation, so region-parametric code
+//! compiles and runs unchanged.
 
 use lang::lang::types::Region;
 use lang::lang::types::TyKind;
@@ -51,8 +51,7 @@ fn region_ascription_uses_a_declared_region() {
 fn region_parametric_function_definition_type_checks() {
     // a region-parametric helper type-checks; regions are erased by
     // monomorphisation. (Calling it with an *elided* borrow needs region
-    // inference at the call site, which arrives in Step 8b — so `main` does not
-    // call it here.)
+    // inference at the call site, so `main` does not call it here.)
     typecheck("def id<'r>(x: &'r Int): Int := 0 \n def main(): Int := 0");
 }
 

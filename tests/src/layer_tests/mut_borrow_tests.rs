@@ -1,10 +1,10 @@
-//! Step 9a — exclusive (mutable) borrows: the `BorrowedMut` kind, `&'r mut T`
+//! Exclusive (mutable) borrows: the `BorrowedMut` kind, `&'r mut T`
 //! reference types, `&mut e` borrow expressions, and `let &mut x = e` bindings
-//! (Calculus §1.2, §2.3, §3.2).
+//! (Calculus: Kinds, Types, Terms).
 //!
-//! This phase is structural: mutable borrows parse, type-check, and (like
+//! This layer is structural: mutable borrows parse, type-check, and (like
 //! shared borrows) are erased by monomorphisation, so they lower transparently.
-//! The exclusivity invariant is enforced in Step 9b.
+//! The exclusivity invariant is enforced by the ownership pass.
 
 use lang::ir_types::typed_hir::Expression;
 use lang::lang::types::Kind;
@@ -74,8 +74,8 @@ fn passing_a_mut_borrow_to_a_mut_reference_parameter_type_checks() {
 #[test]
 fn mut_borrowing_does_not_move_a_non_copy_value() {
     // `&mut e` borrows `e` without moving it; once the borrow's (inner-block)
-    // scope ends, `e` is still owned and may be consumed — a value may not be
-    // moved while borrowed (Calculus §6.2).
+    // scope ends, `e` is still owned and may be consumed (a value may not be
+    // moved while borrowed).
     typecheck(
         "type E = A | B \n \
          def f(mut e: E): Int := { { let r = &mut e; 0 }; match e { E#A => 1, E#B => 2 } } \n \
@@ -110,8 +110,8 @@ fn mut_borrowed_value_still_usable_at_runtime() {
     );
 }
 
-// ── escape check applies to mutable borrows too (Step 8b machinery)
-// ───────────
+// ── escape check applies to mutable borrows too
+// ───────────────────────────
 
 #[test]
 fn returning_a_mut_borrow_of_a_local_is_rejected() {
@@ -121,12 +121,12 @@ fn returning_a_mut_borrow_of_a_local_is_rejected() {
 #[test]
 fn returning_a_mut_borrow_of_a_by_value_parameter_is_rejected() {
     // a by-value parameter lives in the frame, so a `&mut` of it would dangle
-    // when the call returns (Calculus §6.3, frame boundary). A `&'a mut` tied to
+    // when the call returns (Calculus: The Escape Check). A `&'a mut` tied to
     // a lifetime parameter is returnable.
     typecheck_fails("def f(mut x: Int): &mut Int := { &mut x } \n def main(): Int := 0");
 }
 
-// ── Step 9b: the exclusivity invariant
+// ── the exclusivity invariant
 // ────────────────────────────────────────
 
 #[test]

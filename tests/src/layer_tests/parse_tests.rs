@@ -135,8 +135,8 @@ fn parse_comparison_operators() {
 #[test]
 fn parse_boolean_operators() {
     parse("def f(a: Bool, b: Bool): Bool := a and b");
-    parse("def f(a: Bool, b: Bool): Bool := a | b");
-    parse("def f(a: Bool, b: Bool): Bool := a # b");
+    parse("def f(a: Bool, b: Bool): Bool := a or b");
+    parse("def f(a: Bool, b: Bool): Bool := a xor b");
 }
 
 #[test]

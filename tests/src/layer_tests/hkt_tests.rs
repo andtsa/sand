@@ -1,11 +1,12 @@
-//! Step 11 — higher-kinded type parameters.
+//! Higher-kinded type parameters.
 //!
 //! A type parameter may have a constructor kind (`F : Owned -> Owned`) and be
-//! applied (`F<A>`). A typeclass can then quantify over a type constructor, with
-//! instances given per constructor (`impl Container for Opt`). The instance is
-//! recovered from an argument's type by unifying `F<A>` against the concrete
-//! `Opt<Int>`. (Functor/Monad — whose methods need function types — wait for
-//! Step 13; these arrow-free classes exercise the HKT machinery itself.)
+//! applied (`F<A>`). A typeclass can then quantify over a type constructor,
+//! with instances given per constructor (`impl Container for Opt`). The
+//! instance is recovered from an argument's type by unifying `F<A>` against the
+//! concrete `Opt<Int>`. (Functor/Monad, whose methods need function types, are
+//! exercised elsewhere; these arrow-free classes exercise the HKT machinery
+//! itself.)
 
 use lang::ir_types::typed_hir::Expression;
 
@@ -99,9 +100,7 @@ fn hkt_over_a_nested_constructor_argument() {
 #[test]
 fn applying_a_value_parameter_is_rejected() {
     // `T : Owned` is not a constructor, so `T<A>` is a kind error.
-    typecheck_fails(
-        "typeclass Bad<T> { def f<A>(x: T<A>): A } \n def main(): Int := 0",
-    );
+    typecheck_fails("typeclass Bad<T> { def f<A>(x: T<A>): A } \n def main(): Int := 0");
 }
 
 #[test]
@@ -123,7 +122,7 @@ fn constructor_arity_mismatch_is_rejected() {
     );
 }
 
-// ── Step 13: the `Functor`/`Applicative`/`Monad` hierarchy (from `core.sand`)
+// ── the `Functor`/`Applicative`/`Monad` hierarchy (from `core.sand`)
 // instantiated for `Option`, exercising HKT instances whose methods take and
 // return lambdas. The codegen path is covered by `examples/monad.sand`; these
 // assert HIR/MIR interpreter agreement. ──────────────────────────────────────

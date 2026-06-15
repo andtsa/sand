@@ -56,7 +56,7 @@ fn typecheck_boolean_and() {
 
 #[test]
 fn typecheck_boolean_or() {
-    typecheck("def main(): Bool := true | false");
+    typecheck("def main(): Bool := true or false");
 }
 
 #[test]

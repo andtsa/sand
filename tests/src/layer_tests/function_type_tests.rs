@@ -1,9 +1,9 @@
-//! Step 13 (milestone 1) — function *types* `A -> B`.
+//! Function *types* `A -> B`.
 //!
-//! This milestone adds the type former only — there are no lambda *values* yet,
-//! so these tests exercise parsing, right-associativity, threading through
-//! composite/generic types, and the application mismatch. Bare `->` is the
-//! reusable arrow (Calculus §3.1 `→[Borrowed]`, ≈ Rust `Fn`).
+//! These tests cover the type former on its own (no lambda *values*):
+//! parsing, right-associativity, threading through composite/generic types, and
+//! the application mismatch. Bare `->` is the reusable arrow (Calculus: Types,
+//! the function arrow; `→[Borrowed]`, ≈ Rust `Fn`).
 
 use crate::common::parse;
 use crate::common::typecheck;
@@ -36,7 +36,7 @@ fn function_type_in_a_tuple_payload() {
 
 #[test]
 fn function_type_as_a_generic_argument() {
-    // `Box<Int -> Bool>` — a function type as a type argument; exercises the
+    // `Box<Int -> Bool>`: a function type as a type argument; exercises the
     // `Fn` threading through `App` + monomorphisation/mangling.
     let (ctx, _p) = typecheck(
         "type Box<a> = B(a) \n \
@@ -48,8 +48,7 @@ fn function_type_as_a_generic_argument() {
 
 #[test]
 fn function_type_with_a_generic_parameter() {
-    let (ctx, _p) =
-        typecheck("def f<T>(g: T -> Int): Int := 0 \n def main(): Int := 0");
+    let (ctx, _p) = typecheck("def f<T>(g: T -> Int): Int := 0 \n def main(): Int := 0");
     std::mem::forget(ctx);
 }
 

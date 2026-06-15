@@ -49,9 +49,9 @@ pub fn check<'tcx>(
             env.declare(param.name, param.ty);
         }
 
-        // Rebuild the body with scope-exit drops elaborated (Step B). Then drop
-        // any owned, non-`Copy` parameter at function exit — params are the only
-        // bindings live before the body, so an empty "pre" set selects them.
+        // Rebuild the body with scope-exit drops elaborated. Then drop any owned,
+        // non-`Copy` parameter at function exit: params are the only bindings
+        // live before the body, so an empty "pre" set selects them.
         let new_body = checker.check_expr(&func.body, &mut env)?;
         let param_drops = checker.scope_exit_drops(&env, &HashSet::new());
         func.body = attach_drops(new_body, param_drops);
@@ -91,8 +91,8 @@ fn attach_drops<'tcx>(mut expr: Expr<'tcx>, drops: Vec<UniqVar<'tcx>>) -> Expr<'
 struct OwnershipChecker<'a, 'tcx> {
     ctx: &'a CompileCtx<'tcx>,
     module: ModuleRef<'tcx>,
-    /// the current function's `where T : C` constraints — a `where T : Copy`
-    /// makes a parameter of type `T` implicitly copyable (Step 14c).
+    /// the current function's `where T : C` constraints: a `where T : Copy`
+    /// makes a parameter of type `T` implicitly copyable.
     type_constraints: Vec<crate::compiler::structure::TypeConstraint>,
 }
 
@@ -219,9 +219,9 @@ impl<'tcx> OwnershipChecker<'_, 'tcx> {
             Expression::Int(_) | Expression::Bool(_) | Expression::Unit => expr.expr.clone(),
 
             // A borrow does not consume its referent: borrowing a variable is a
-            // non-consuming read, so the variable stays usable (Calculus §6.2,
-            // `Var-Borrow`). Borrowing a *variable* records an outstanding borrow
-            // and enforces the exclusivity invariant (Step 9b): a `&mut x`
+            // non-consuming read, so the variable stays usable.
+            // Borrowing a *variable* records an outstanding borrow
+            // and enforces the exclusivity invariant: a `&mut x`
             // requires no other live borrow of `x`, and a `&x` may not coexist
             // with a live `&mut x`. Borrowing a temporary owns it exclusively, so
             // it just checks the sub-expression that produces it.
@@ -276,7 +276,7 @@ impl<'tcx> OwnershipChecker<'_, 'tcx> {
 
             Expression::Tuple(elems) => Expression::Tuple(self.check_exprs(elems, env)?),
 
-            // A lambda body is its own scope (Step 13): the parameter and the
+            // A lambda body is its own scope: the parameter and the
             // captured variables are live within it. Captures are owned by the
             // closure (its environment), so they are *not* dropped at body exit
             // (only the parameter + body-local bindings are); moving a (non-Copy)
@@ -321,11 +321,11 @@ impl<'tcx> OwnershipChecker<'_, 'tcx> {
                 }
             }
 
-            // Indirect call (Step 13): a *consuming* (`-[Owned]>`, ≈ FnOnce)
-            // closure is consumed by the call (callable once); a reusable
-            // (`->`) or mutating (`-[BorrowedMut]>`) closure is not — calling it
-            // is a non-consuming read of the callee, so it can be called
-            // repeatedly. (FnMut's exclusive-env enforcement is deferred.)
+            // Indirect call: a *consuming* (`-[Owned]>`, ≈ FnOnce) closure is
+            // consumed by the call (callable once); a reusable (`->`) or mutating
+            // (`-[BorrowedMut]>`) closure is not. Calling one of those is a
+            // non-consuming read of the callee, so it can be called repeatedly.
+            // (FnMut's exclusive-env enforcement is deferred.)
             Expression::Apply { func, arg } => {
                 let consuming = matches!(
                     func.ty.kind(),
@@ -352,8 +352,8 @@ impl<'tcx> OwnershipChecker<'_, 'tcx> {
                     match env.get(v) {
                         Some(OwnershipState::Owned) => {
                             // A value may not be moved while a borrow of it is
-                            // live (Calculus §6.2): once references are real
-                            // pointers, `let r = &x; move(x); *r` is a
+                            // live: once references are real pointers,
+                            // `let r = &x; move(x); *r` is a
                             // use-after-free no scope boundary catches.
                             if env.borrow_state(v).is_some() {
                                 return Err(self.err(OwnershipError::MoveWhileBorrowed {
@@ -426,8 +426,8 @@ impl<'tcx> OwnershipChecker<'_, 'tcx> {
                 let t = self.check_expr(t, &mut then_env)?;
                 let f = self.check_expr(f, &mut else_env)?;
 
-                // Completing drops (Step B, Calculus §6.11): a value owned on one
-                // branch but moved on the other is dropped on the owning branch,
+                // Completing drops (Calculus: Ownership and Drop): a value owned
+                // on one branch but moved on the other is dropped on the owning branch,
                 // so it is uniformly consumed at the merge.
                 let (merged, drop_in_then, drop_in_else) =
                     OwnershipEnv::merge_with_drops(&then_env, &else_env);
@@ -476,8 +476,8 @@ impl<'tcx> OwnershipChecker<'_, 'tcx> {
             } => {
                 // snapshot which variables existed before the block (to remove
                 // block-local variables on exit) and which borrows were live (to
-                // release borrows created inside the block on exit — a borrow's
-                // lifetime is lexical, Step 9b).
+                // release borrows created inside the block on exit, since a
+                // borrow's lifetime is lexical).
                 let pre_block_vars = env.var_keys();
                 let pre_block_borrows = env.borrows_snapshot();
 
@@ -508,15 +508,15 @@ impl<'tcx> OwnershipChecker<'_, 'tcx> {
                 let scrutinee = Box::new(self.check_expr(scrutinee, env)?);
 
                 // snapshot pre-arm variables so pattern bindings (scoped to their
-                // arm) can be removed again — mirrors `Block`.
+                // arm) can be removed again, mirroring `Block`.
                 let pre_arm_vars = env.var_keys();
 
                 let checked: Vec<(TypedMatchArm<'tcx>, OwnershipEnv<'tcx>)> = arms
                     .iter()
                     .map(|arm| {
                         let mut arm_env = env.clone();
-                        // per decision D3: the scrutinee is fully consumed above,
-                        // so each pattern-bound sub-value starts as a fresh,
+                        // the scrutinee is fully consumed above, so each
+                        // pattern-bound sub-value starts as a fresh,
                         // independently-`Owned` binding (like a `let`).
                         Self::declare_pattern_bindings(&arm.pattern, &mut arm_env);
                         let body = self.check_expr(&arm.body, &mut arm_env)?;
@@ -576,7 +576,7 @@ impl<'tcx> OwnershipChecker<'_, 'tcx> {
     }
 
     /// recursively declare every variable bound by `pattern` as freshly
-    /// `Owned` in `env` (decision D3 — see `Match` arm handling above).
+    /// `Owned` in `env` (see the `Match` arm handling above).
     fn declare_pattern_bindings(pattern: &MatchPattern<'tcx>, env: &mut OwnershipEnv<'tcx>) {
         match pattern {
             MatchPattern::Wildcard | MatchPattern::IntLit(_) | MatchPattern::BoolLit(_) => {}

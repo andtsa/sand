@@ -1,12 +1,12 @@
 //! a simple interpreter for the typed_hir IR
 //!
-//! ## Store model (R4)
+//! ## Store model
 //!
 //! Runtime values live in a graph of mutable **cells** so that references
 //! behave like the real pointers the LLVM backend emits, faithful to the
-//! Calculus's `BorrowedMut` semantics (§3.2, §6.4): a mutable borrow denotes a
+//! Calculus's `BorrowedMut` semantics: a mutable borrow denotes a
 //! *storage location*, and a write through it (`*r = e`) mutates that location
-//! observably to every alias — including across function calls.
+//! observably to every alias, including across function calls.
 //!
 //! Each variable binding owns a [`Cell`]; a reference value ([`Value::Ref`]) is
 //! a *shared handle* to a cell. `&e` / `&mut e` evaluate the operand *as a
@@ -32,7 +32,7 @@ use crate::compiler::structure::UniqVar;
 use crate::ir_types::typed_hir::*;
 use crate::lang::intrinsics::Intrinsic;
 use crate::lang::ops::*;
-use crate::lang::types::EnumRef;
+use crate::lang::types::AdtRef;
 use crate::lang::types::Kind;
 use crate::lang::types::TyKind;
 
@@ -63,14 +63,14 @@ pub enum InterpError {
 type Cell<'tcx> = Rc<RefCell<Value<'tcx>>>;
 
 /// The interpreter's runtime value domain. Mirrors the value-shaped subset of
-/// `Expression`, plus [`Value::Ref`] — a reference handle into the cell store.
+/// `Expression`, plus [`Value::Ref`], a reference handle into the cell store.
 #[derive(Debug, Clone, PartialEq)]
 enum Value<'tcx> {
     Int(i64),
     Bool(bool),
     Unit,
     Constructor {
-        enum_ref: EnumRef<'tcx>,
+        enum_ref: AdtRef<'tcx>,
         variant_idx: usize,
         payload: Option<Box<Value<'tcx>>>,
     },
@@ -78,9 +78,9 @@ enum Value<'tcx> {
     /// A reference: a shared handle to the cell it points at. Produced by a
     /// borrow expression, consumed by `*r` reads and `*r = e` writes.
     Ref(Cell<'tcx>),
-    /// A function value / closure (Step 13): the lifted top-level function and a
+    /// A function value / closure: the lifted top-level function and a
     /// pointer to its captured environment (a `Ref` to a cell holding the env
-    /// value — `Unit`, the single capture, or a tuple). Calling it runs `func`
+    /// value: `Unit`, the single capture, or a tuple). Calling it runs `func`
     /// with the env pointer followed by the argument.
     Closure {
         func: FunRef<'tcx>,
@@ -189,7 +189,7 @@ impl<'tcx> TypedProgram<'tcx> {
             Expression::Block {
                 statements,
                 expr,
-                // drops are no-ops until Step C; the HIR interpreter ignores them.
+                // drops are runtime no-ops; the HIR interpreter ignores them.
                 ..
             } => {
                 statements
@@ -201,7 +201,7 @@ impl<'tcx> TypedProgram<'tcx> {
             }
 
             Expression::Call { fn_name, args } => {
-                // External (FFI) functions (Memory Step A) have no body; dispatch
+                // External (FFI) functions have no body; dispatch
                 // the known C symbols to simulated-heap built-ins.
                 if ctx.is_extern(*fn_name) {
                     let vals = args
@@ -234,7 +234,7 @@ impl<'tcx> TypedProgram<'tcx> {
                 args,
                 type_args,
             } => {
-                // `size_of::<T>()` (Step C): no value args; the size comes from
+                // `size_of::<T>()`: no value args; the size comes from
                 // the type argument (a layout-free interpreter approximation).
                 if fn_name.is_type_arg_intrinsic() {
                     return Ok(Value::Int(crate::lang::intrinsics::interp_size_of(
@@ -294,9 +294,9 @@ impl<'tcx> TypedProgram<'tcx> {
                 let mut vals = captures
                     .iter()
                     .map(|(v, _)| {
-                        env.get(v)
-                            .map(|c| c.borrow().clone())
-                            .ok_or_else(|| InterpError::UndefinedVariable(ctx.uniq_variable_name(v)))
+                        env.get(v).map(|c| c.borrow().clone()).ok_or_else(|| {
+                            InterpError::UndefinedVariable(ctx.uniq_variable_name(v))
+                        })
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 let env_value = match vals.len() {
@@ -340,8 +340,7 @@ impl<'tcx> TypedProgram<'tcx> {
                 for arm in arms {
                     // try-and-fall-back: clone `env`, attempt to match *and*
                     // bind in one recursive pass; only `Variant` sub-checks
-                    // can fail (every other pattern form is irrefutable, see
-                    // decision D1 in DESTRUCTURING_PATTERNS.todo.md), so a
+                    // can fail (every other pattern form is irrefutable), so a
                     // failed attempt simply discards its (partially-bound)
                     // env clone and moves on to the next arm.
                     let mut arm_env = env.clone();
@@ -440,10 +439,9 @@ impl<'tcx> TypedProgram<'tcx> {
 ///
 /// only `Variant` patterns can fail to match (by tag mismatch), every other
 /// pattern form (`Wildcard`, `Binding`, `Tuple`) is irrefutable by
-/// construction (decision D1 in `DESTRUCTURING_PATTERNS.todo.md`: only
-/// bindings, wildcards, and recursive tuple-destructuring are allowed in
-/// sub-pattern position, so once the top-level tag matches every sub-pattern
-/// is guaranteed to match too).
+/// construction: only bindings, wildcards, and recursive tuple-destructuring
+/// are allowed in sub-pattern position, so once the top-level tag matches every
+/// sub-pattern is guaranteed to match too.
 fn bind_pattern<'tcx>(
     pattern: &MatchPattern<'tcx>,
     value: &Value<'tcx>,
@@ -516,9 +514,9 @@ fn eval_stmt<'tcx>(
             let v = prog.eval_expr(&val.expr, env, ctx, output)?;
             *slot.borrow_mut() = v;
         }
-        // Write-through `*r = e` (Calculus §3.2): evaluate the reference to the
-        // cell it points at and store the new value into it — observable to every
-        // alias, matching the LLVM `store` through the pointer.
+        // Write-through `*r = e` (Calculus: write-through): evaluate the
+        // reference to the cell it points at and store the new value into it,
+        // observable to every alias, matching the LLVM `store` through the pointer.
         Statement::DerefAssign {
             reference, value, ..
         } => {
@@ -752,7 +750,7 @@ fn eval_intrinsic<'tcx>(
                 ))),
             }
         }
-        // Raw-pointer ops (Memory Step A). A `Ptr<T>` is a cell handle, like a
+        // Raw-pointer ops. A `Ptr<T>` is a cell handle, like a
         // reference: `read`/`write` load/store the cell, `cast` is identity.
         Intrinsic::PtrRead => {
             debug_assert_eq!(vals.len(), 1, "__ptr_read expects 1 arg");
@@ -781,7 +779,7 @@ fn eval_intrinsic<'tcx>(
             debug_assert_eq!(vals.len(), 1, "__ptr_cast expects 1 arg");
             Ok(vals.into_iter().next().unwrap())
         }
-        // No-op until types acquire destructors (Step C).
+        // No-op for types without destructors.
         Intrinsic::DropInPlace => Ok(Value::Unit),
         // `size_of` is handled in the `IntrinsicCall` arm (it needs the type
         // argument, which `eval_intrinsic` does not receive).
@@ -789,8 +787,8 @@ fn eval_intrinsic<'tcx>(
     }
 }
 
-/// Execute a known external (FFI) function in the HIR interpreter (Memory Step
-/// A). `malloc` allocates a fresh interpreter cell and returns a `Value::Ref`
+/// Execute a known external (FFI) function in the HIR interpreter.
+/// `malloc` allocates a fresh interpreter cell and returns a `Value::Ref`
 /// handle to it; `free` is a no-op (the `Rc` drop reclaims it). The cell starts
 /// at `Unit` (the HIR cell has no uninitialised state).
 fn eval_extern<'tcx>(symbol: &str, _vals: Vec<Value<'tcx>>) -> Result<Value<'tcx>, InterpError> {

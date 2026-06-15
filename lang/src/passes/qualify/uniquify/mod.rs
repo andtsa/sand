@@ -211,7 +211,7 @@ fn uniquify_expr<'tcx>(
 
         // `Block` introduces a new lexical scope and contains `Statement`
         // children rather than bare `Expr`s, so it sits outside what
-        // `traverse_subexprs` can express — handle its scoping explicitly.
+        // `traverse_subexprs` can express; handle its scoping explicitly.
         Expression::Block { statements, expr } => {
             u.enter_scope();
 
@@ -236,10 +236,10 @@ fn uniquify_expr<'tcx>(
         }
 
         // `Match` patterns can introduce bindings (`Circle(r)`, `(a, b)`)
-        // that are scoped to their arm's body — exactly like `Block`
+        // that are scoped to their arm's body, exactly like `Block`
         // introduces scoped locals. Each arm therefore gets its own scope:
         // walk the pattern first (minting `Decl -> Uniq` bindings via
-        // `bind_var`, and rejecting names bound twice within one pattern —
+        // `bind_var`, and rejecting names bound twice within one pattern;
         // see `UniquifyError::DuplicateBindingInPattern`), then uniquify the
         // body in that scope, then pop it before moving to the next arm.
         Expression::Match { scrutinee, arms } => {
@@ -268,7 +268,7 @@ fn uniquify_expr<'tcx>(
             })
         }
 
-        // A lambda introduces a fresh scope binding its parameter (Step 13),
+        // A lambda introduces a fresh scope binding its parameter,
         // like a one-parameter function body.
         Expression::Lambda { param, body, mode } => {
             u.enter_scope();
@@ -290,9 +290,9 @@ fn uniquify_expr<'tcx>(
             })
         }
 
-        // A call whose callee is a *bound local variable* — and is *not* the
-        // name of a function — is an indirect call: apply the function value
-        // (Step 13). A function of the same name takes precedence in call
+        // A call whose callee is a *bound local variable* (and is *not* the
+        // name of a function) is an indirect call: apply the function value.
+        // A function of the same name takes precedence in call
         // position (so a local may shadow a function as a value without
         // shadowing it as a callee). Closures are unary, so this fires only for
         // a single argument; anything else falls through to function resolution.
@@ -322,8 +322,8 @@ fn uniquify_expr<'tcx>(
             })
         }
 
-        // Every other node — `If`, `While`, `BinOp`, `UnOp`, `Call`,
-        // and the constructor/literal leaves — is handled uniformly by the
+        // Every other node (`If`, `While`, `BinOp`, `UnOp`, `Call`,
+        // and the constructor/literal leaves) is handled uniformly by the
         // `subexprs` traversal: recurse into each child with `uniquify_expr`
         // and let it rebuild the node around the results. This is
         // `traverseOf subexprs (uniquifyExpr u)` in lens terms, and replaces
@@ -333,9 +333,9 @@ fn uniquify_expr<'tcx>(
 }
 
 /// Recursively walks a match-arm pattern, minting fresh `Uniq` bindings for
-/// every `Binding` leaf (scoped to the arm — the caller must have already
+/// every `Binding` leaf (scoped to the arm, so the caller must have already
 /// pushed a fresh scope) and rejecting names that are bound more than once
-/// within the *same* pattern (`(x, x)`, `Pair(x, x)`) — see
+/// within the *same* pattern (`(x, x)`, `Pair(x, x)`); see
 /// `UniquifyError::DuplicateBindingInPattern`. All other nodes are recursed
 /// into structurally and otherwise passed through unchanged (their
 /// `type_name`/`variant` string fields are resolved later, in `qualify`).

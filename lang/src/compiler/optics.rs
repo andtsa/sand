@@ -4,8 +4,7 @@
 //! structures ("functional references") that let you `get`, `set`, or
 //! `traverse` into a substructure without writing the surrounding
 //! pattern-match boilerplate by hand. This module collects the optics used
-//! by the `qualify`/`uniquify` passes, following the classic Haskell `lens`
-//! hierarchy:
+//! by the `qualify`/`uniquify` passes
 //!
 //! ```text
 //!                 Traversal

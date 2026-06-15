@@ -1,4 +1,4 @@
-//! Step 14 — `Clone` / `Copy` integration (Calculus §7.4).
+//! `Clone` / `Copy` integration (Calculus: Typeclasses).
 //!
 //! `Copy` (a marker requiring `Clone`) drives implicit duplication: the
 //! ownership pass treats a `Copy` value as not-consumed on use, so it can be

@@ -1,4 +1,4 @@
-//! region-parameterized ADTs (Calculus §2.3, §6.3).
+//! region-parameterized ADTs (Calculus: Types, The Escape Check).
 //!
 //! A reference stored in an ADT payload must be tied to a region parameter of
 //! the type (`type Holder<'a> = H(&'a T)`); the region is threaded into the

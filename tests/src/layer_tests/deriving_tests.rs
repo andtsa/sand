@@ -1,4 +1,4 @@
-//! Memory Step C.1 — `deriving` + recursive-type legality (K-HeapedRec).
+//! `deriving` + recursive-type legality (Calculus, `K-HeapedRec`).
 //!
 //! A (mutually) recursive `type` must `deriving Heaped` (else its values
 //! would be infinite-sized and leak); a non-recursive type must not; and only
@@ -32,7 +32,7 @@ fn generic_recursive_type_with_deriving_is_accepted() {
 
 #[test]
 fn non_recursive_type_may_derive_heaped() {
-    // A non-recursive type may opt onto the heap (e.g. a large payload) — it is
+    // A non-recursive type may opt onto the heap (e.g. a large payload); it is
     // allowed, not required.
     let (ctx, _p) =
         typecheck("type Big = One((Int, Int, Int)) | Two deriving Heaped \n def main(): Int := 0");
@@ -60,12 +60,12 @@ fn mutually_recursive_types_with_deriving_are_accepted() {
     std::mem::forget(ctx);
 }
 
-// ── C.4: the `Unique<T>` strategy functions (core-lib, over `Ptr`) ──────────
+// ── the `Unique<T>` strategy functions (core-lib, over `Ptr`) ───────────────
 //
 // `unique_alloc` moves a value onto the heap and `unique_release` drops it,
-// using only the Step-A `Ptr`/FFI substrate (real `malloc`/`free` under
-// codegen; cell-graph allocations under the interpreters). These are the sole
-// allocation/deallocation sites that `deriving Heaped` lowers onto (C.5).
+// using only the `Ptr`/FFI substrate (real `malloc`/`free` under codegen;
+// cell-graph allocations under the interpreters). These are the sole
+// allocation/deallocation sites that `deriving Heaped` lowers onto.
 
 fn run_both(src: &str) -> Expression<'static> {
     let (hir, mir) = run_hir_and_mir(src);
@@ -111,7 +111,7 @@ fn unique_handles_are_independent() {
     );
 }
 
-// ── C.5: heap lowering — recursive `deriving Heaped` enums end to end ────────
+// ── heap lowering: recursive `deriving Heaped` enums end to end ──────────────
 //
 // After lowering, a recursive enum is a `Unique<Node>` handle: construction
 // allocates, a consuming `match` takes the node and frees the husk, and a value
@@ -171,7 +171,7 @@ fn heaped_value_dropped_unconsumed() {
 #[test]
 fn match_bound_subtree_dropped_in_branch() {
     // A subtree moved out of a consuming match is dropped on the branch that
-    // does not consume it (Step B completing drop → C.5 release). The result is
+    // does not consume it (a completing drop, then release). The result is
     // unaffected, and both interpreters agree (see `examples/expr.sand` for the
     // full, compiled, leak-checked version).
     assert_eq!(
@@ -217,7 +217,7 @@ fn unique_take_over_an_aggregate_payload() {
 
 #[test]
 fn unique_alloc_over_an_aggregate_payload() {
-    // The payload type need not be a primitive — a tuple round-trips too.
+    // The payload type need not be a primitive; a tuple round-trips too.
     assert_eq!(
         run_both(
             "def main(): Int := { \n \

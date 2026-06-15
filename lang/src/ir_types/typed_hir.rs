@@ -84,8 +84,8 @@ pub enum Statement<'tcx> {
         val: Expr<'tcx>,
     },
 
-    /// Write-through `*reference = value` (Calculus §3.2). `reference : &mut
-    /// T`, `value : T`.
+    /// Write-through `*reference = value` (Calculus: write-through).
+    /// `reference : &mut T`, `value : T`.
     DerefAssign {
         reference: Expr<'tcx>,
         value: Expr<'tcx>,
@@ -134,15 +134,15 @@ pub enum Expression<'tcx> {
     IntrinsicCall {
         fn_name: Intrinsic,
         args: Vec<Expr<'tcx>>,
-        /// Explicit turbofish type arguments (Memory Step C); monomorphised
-        /// alongside the rest. Empty except for `size_of::<T>()` and friends.
+        /// Explicit turbofish type arguments, monomorphised alongside the rest.
+        /// Empty except for `size_of::<T>()` and friends.
         type_args: Vec<Ty<'tcx>>,
     },
     /// A typeclass method call whose instance is **not yet known** because the
     /// receiver is a type parameter (under a `where T : C` bound).
     /// Monomorphisation resolves it to a concrete `Call` once `self_ty` is
-    /// concrete (Step 10b); concrete calls are resolved to `Call` already
-    /// during type-checking, so this never survives mono.
+    /// concrete; concrete calls are resolved to `Call` already during
+    /// type-checking, so this never survives mono.
     MethodCall {
         class: TypeclassRef,
         method: String,
@@ -154,7 +154,7 @@ pub enum Expression<'tcx> {
     Bool(bool),
     Unit,
     /// borrow `&e` (shared) or `&mut e` (exclusive, the `bool` is `true`)
-    /// (Calculus §3.2).
+    /// (Calculus: Terms, borrow).
     Borrow(Box<Expr<'tcx>>, bool),
     /// dereference `*e`: read through a reference (`&T`/`&mut T` -> T).
     /// Transparent at runtime (borrows are erased), so it lowers like `Borrow`.
@@ -162,17 +162,17 @@ pub enum Expression<'tcx> {
     Block {
         statements: Vec<Statement<'tcx>>,
         expr: Option<Box<Expr<'tcx>>>,
-        /// Scope-exit drops (Memory Step B, Calculus §6.11): the owned,
+        /// Scope-exit drops (Calculus: Ownership and Drop): the owned,
         /// non-`Copy` bindings this block must drop *after* its value
         /// is computed, in reverse declaration order. Filled by the
         /// ownership pass (empty until then); also carries an
         /// `if`/`match` branch's *completing* drops.
-        /// The HIR interpreter ignores it (drops are no-ops until Step C);
+        /// The HIR interpreter ignores it (drops are runtime no-ops there);
         /// explicate lowers it to first-class MIR `Statement::Drop`.
         drops: Vec<UniqVar<'tcx>>,
     },
     Constructor {
-        enum_ref: EnumRef<'tcx>,
+        enum_ref: AdtRef<'tcx>,
         variant_idx: usize,
         payload: Option<Box<Expr<'tcx>>>,
     },
@@ -181,26 +181,26 @@ pub enum Expression<'tcx> {
         arms: Vec<TypedMatchArm<'tcx>>,
     },
     Tuple(Vec<Expr<'tcx>>),
-    /// A lambda `fn (x: T) -> e` (Step 13): a function value of type
-    /// `param.ty -> body.ty`. `captures` lists the enclosing variables the body
-    /// uses (empty in the non-capturing milestone).
+    /// A lambda `fn (x: T) -> e`: a function value of type `param.ty ->
+    /// body.ty`. `captures` lists the enclosing variables the body uses (empty
+    /// in the non-capturing milestone).
     Lambda {
         param: Parameter<'tcx>,
         body: Box<Expr<'tcx>>,
-        /// Enclosing variables the body closes over (with their types), captured
-        /// by move. Empty for a non-capturing lambda.
+        /// Enclosing variables the body closes over (with their types),
+        /// captured by move. Empty for a non-capturing lambda.
         captures: Vec<(UniqVar<'tcx>, Ty<'tcx>)>,
     },
-    /// Application of a function value (indirect call) `func(arg)` (Step 13).
+    /// Application of a function value (indirect call) `func(arg)`.
     Apply {
         func: Box<Expr<'tcx>>,
         arg: Box<Expr<'tcx>>,
     },
-    /// A lifted closure value (Step 13, milestone 2b): a `Lambda` after
-    /// lambda-lifting, referencing the synthesised top-level function `func` and
-    /// the captured locals it closes over (empty in the non-capturing
-    /// milestone). Produced by `passes::lift_lambdas` on the MIR/codegen path
-    /// only — the HIR interpreter still runs `Lambda` directly.
+    /// A lifted closure value: a `Lambda` after lambda-lifting, referencing the
+    /// synthesised top-level function `func` and the captured locals it closes
+    /// over (empty in the non-capturing milestone). Produced by
+    /// `passes::lift_lambdas` on the MIR/codegen path only; the HIR interpreter
+    /// still runs `Lambda` directly.
     Closure {
         func: FunRef<'tcx>,
         captures: Vec<(UniqVar<'tcx>, Ty<'tcx>)>,
@@ -226,7 +226,7 @@ pub enum MatchPattern<'tcx> {
         /// and needs the type to correctly allocate extraction temporaries when
         /// this pattern appears in a *nested* (sub-pattern) position.
         ty: Ty<'tcx>,
-        enum_ref: EnumRef<'tcx>,
+        enum_ref: AdtRef<'tcx>,
         variant_idx: usize,
         /// `Some((payload_ty, sub_pattern))` when the pattern destructures
         /// the variant's payload. `payload_ty` is the variant's *declared*

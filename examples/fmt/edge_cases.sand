@@ -1,5 +1,4 @@
 // edge_cases.sand
-// tricky formatting: inconsistent spacing, odd indentation, semicolons, empty blocks
 
 def   no_space_params(x:Int,y:Int,z:Int):Int:=x+y+z
 

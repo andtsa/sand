@@ -17,6 +17,7 @@
 pub mod compile;
 pub mod error;
 pub mod fmt;
+pub mod run;
 
 use clap::ArgAction;
 use clap::Parser;
@@ -28,6 +29,8 @@ use crate::compile::CompileArgs;
 use crate::compile::compile;
 use crate::fmt::FmtArgs;
 use crate::fmt::fmt;
+use crate::run::RunArgs;
+use crate::run::run;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -47,10 +50,15 @@ pub struct SandCLI {
 
 #[derive(Subcommand, Debug)]
 pub enum SandCommand {
+    /// Compile (a) Sand source file(s) to an executable
     #[command()]
     Compile(CompileArgs),
+    /// Consistently format Sand source files
     #[command()]
     Fmt(FmtArgs),
+    /// Run a Sand source file with the interpreter
+    #[command()]
+    Run(RunArgs),
 }
 
 fn main() -> Result<(), anyhow::Error> {
@@ -82,6 +90,7 @@ fn main() -> Result<(), anyhow::Error> {
     match args.command {
         SandCommand::Compile(compile_args) => compile(compile_args, args.dry)?,
         SandCommand::Fmt(fmt_args) => fmt(fmt_args)?,
+        SandCommand::Run(run_args) => run(run_args, args.dry)?,
     }
 
     Ok(())

@@ -23,11 +23,11 @@ use crate::passes::type_ast::errors::TypeError;
 use crate::passes::type_ast::infer::infer_function;
 
 /// Type-checking environment: each in-scope variable maps to its type, the kind
-/// of the value bound to it, whether it is mutable, and the *home region* — the
+/// of the value bound to it, whether it is mutable, and the *home region*: the
 /// lexical scope (function or block) it was bound in. The home region drives
-/// the borrow escape check (Step 8b): a borrow `&v` lives in `v`'s home region,
+/// the borrow escape check: a borrow `&v` lives in `v`'s home region,
 /// and a block may not yield a value borrowing a region introduced inside it
-/// (Calculus §6.3).
+/// (Calculus: The Escape Check).
 type TypeEnv<'tcx> = im::HashMap<UniqVar<'tcx>, (Ty<'tcx>, Kind, bool, Region)>;
 
 impl<'tcx> typed_hir::TypedProgram<'tcx> {

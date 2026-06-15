@@ -2,8 +2,7 @@
 type Inner = X | Y
 type Outer = A(Inner) | B
 
-// This IS exhaustive: A(X) + A(Y) covers all of A, B covers B.
-// Does the compiler accept it?
+// this is exhaustive and should be accepted
 def f(o: Outer): Int :=
     match o {
         Outer#A(Inner#X) => 1,

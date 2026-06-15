@@ -1,4 +1,4 @@
-//! Memory Step A — minimal FFI (`extern def`) and the `Ptr<T>` substrate.
+//! Minimal FFI (`extern def`) and the `Ptr<T>` substrate.
 //!
 //! An `extern def` declares a bodyless C-ABI function bound to a symbol of the
 //! same name. It is registered with a real signature so calls resolve through
@@ -55,7 +55,7 @@ fn reachable_extern_call_lowers_to_mir() {
     // `malloc` is reachable from `main`, so monomorphisation visits the call.
     // The extern guard must return the callee unchanged (it has no body to
     // specialise) and explication must emit the call. We lower to MIR but do
-    // not interpret — running `malloc` is A.3.
+    // not interpret here (running `malloc` is covered elsewhere).
     let (ctx, ast) = compile_hir(
         "extern def malloc(size: Int): Ptr<Unit>; \n \
          def main(): Int := { let p: Ptr<Unit> = malloc(8); 0 }",
@@ -69,7 +69,7 @@ fn reachable_extern_call_lowers_to_mir() {
 
 #[test]
 fn alloc_write_read_free_roundtrips() {
-    // The Step A acceptance shape: allocate a cell, cast the raw pointer to a
+    // The acceptance shape: allocate a cell, cast the raw pointer to a
     // typed one, store a value, read it back, and free. Both interpreters must
     // agree on the recovered value.
     assert_eq!(
@@ -105,12 +105,12 @@ fn ptr_write_then_read_returns_stored_value() {
     );
 }
 
-// ── drop_in_place (no-op substrate, Step A) ──────────────────────────────
+// ── drop_in_place (no-op substrate) ──────────────────────────────────────
 
 #[test]
 fn drop_in_place_is_a_noop() {
-    // `__drop_in_place` accepts any type and yields unit; it is inert until
-    // types acquire destructors in Step C. Here it consumes an `Int`.
+    // `__drop_in_place` accepts any type and yields unit; it is inert for a
+    // type without a destructor. Here it consumes an `Int`.
     assert_eq!(
         run_both("def main(): Int := { let n: Int = 42; __drop_in_place(n); n }"),
         Expression::Int(42)
