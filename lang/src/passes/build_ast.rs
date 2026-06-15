@@ -299,10 +299,10 @@ pub fn build_program<'i, 'run>(
 
     // The front end runs as a collect-then-resolve sequence:
     //
-    //  1. a. collect declarations, register enum *skeletons* + `use` imports;
-    //     b. resolve enum payloads, now that every skeleton exists, so forward /
-    //        recursive payload types (`type Tree = Node((Tree, Tree))`) resolve;
-    //     c. variance soundness, declared variance vs. payload positions;
+    //  1. a. collect declarations, register enum *skeletons* + `use` imports; b.
+    //     resolve enum payloads, now that every skeleton exists, so forward /
+    //     recursive payload types (`type Tree = Node((Tree, Tree))`) resolve; c.
+    //     variance soundness, declared variance vs. payload positions;
     //
     //  2. build function bodies, names resolve against the collected decls.
     let collected = collect_declarations(ctx, &children, default_module, file)?;

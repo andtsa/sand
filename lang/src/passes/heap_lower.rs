@@ -14,8 +14,8 @@
 //!     the program, so a heaped `E<a>` becomes `Unique<E$Node<a>>`.
 //!   * **Construct**: `E#C(p)` becomes `unique_alloc(E$Node#C(p))`.
 //!   * **Consuming match**: `match s { … }` (when `s` is heaped and some arm
-//!     inspects a variant) becomes `{ let n = unique_take(s); match n { .. } }`,
-//!     the patterns retargeted to the node enum. Every payload position is
+//!     inspects a variant) becomes `{ let n = unique_take(s); match n { .. }
+//!     }`, the patterns retargeted to the node enum. Every payload position is
 //!     bound (wildcards become fresh bindings) so ownership's scope-exit drops
 //!     reclaim any field the arm does not move out, with no leak.
 //!

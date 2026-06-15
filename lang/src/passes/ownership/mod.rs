@@ -27,35 +27,59 @@ use env::OwnershipState;
 use errors::OwnershipCheckError;
 use errors::OwnershipError;
 use im::HashSet;
+use rayon::prelude::*;
 
 use crate::compiler::context::CompileCtx;
+use crate::compiler::structure::FunRef;
+use crate::compiler::structure::Map;
 use crate::compiler::structure::ModuleRef;
 use crate::compiler::structure::UniqVar;
 use crate::ir_types::typed_hir::*;
 
+type CheckResult<'tcx> = Result<(FunRef<'tcx>, TypedFunction<'tcx>), OwnershipCheckError<'tcx>>;
+
 pub fn check<'tcx>(
     ctx: &CompileCtx<'tcx>,
     mut program: TypedProgram<'tcx>,
-) -> Result<TypedProgram<'tcx>, OwnershipCheckError<'tcx>> {
-    for func in program.functions.values_mut() {
-        let checker = OwnershipChecker {
-            ctx,
-            module: func.src_module,
-            type_constraints: func.type_constraints.clone(),
-        };
+) -> Result<TypedProgram<'tcx>, Vec<OwnershipCheckError<'tcx>>> {
+    let functions = program.functions;
 
-        let mut env = OwnershipEnv::new();
-        for param in &func.parameters {
-            env.declare(param.name, param.ty);
-        }
+    let results = functions
+        .into_par_iter()
+        .map(|(name, mut func)| {
+            let checker = OwnershipChecker {
+                ctx,
+                module: func.src_module,
+                type_constraints: func.type_constraints.clone(),
+            };
 
-        // Rebuild the body with scope-exit drops elaborated. Then drop any owned,
-        // non-`Copy` parameter at function exit: params are the only bindings
-        // live before the body, so an empty "pre" set selects them.
-        let new_body = checker.check_expr(&func.body, &mut env)?;
-        let param_drops = checker.scope_exit_drops(&env, &HashSet::new());
-        func.body = attach_drops(new_body, param_drops);
+            let mut env = OwnershipEnv::new();
+            func.parameters.iter().for_each(|param| {
+                env.declare(param.name, param.ty);
+            });
+
+            // Rebuild the body with scope-exit drops elaborated. Then drop any owned,
+            // non-`Copy` parameter at function exit: params are the only bindings
+            // live before the body, so an empty "pre" set selects them.
+            let new_body = checker.check_expr(&func.body, &mut env)?;
+            let param_drops = checker.scope_exit_drops(&env, &HashSet::new());
+            func.body = attach_drops(new_body, param_drops);
+            Ok((name, func))
+        })
+        .collect::<Vec<CheckResult<'tcx>>>();
+
+    let (errors, functions): (Vec<CheckResult<'tcx>>, Vec<CheckResult<'tcx>>) =
+        results.into_iter().partition(Result::is_err);
+
+    if !errors.is_empty() {
+        return Err(errors
+            .into_iter()
+            .map(Result::unwrap_err)
+            .collect::<Vec<_>>());
     }
+
+    program.functions = Map::from_iter(functions.into_iter().map(Result::unwrap));
+
     Ok(program)
 }
 

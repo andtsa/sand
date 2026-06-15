@@ -3,6 +3,7 @@
 mod adts;
 mod debug;
 mod functions;
+pub mod mtl;
 mod projects;
 mod type_params;
 mod typeclasses;

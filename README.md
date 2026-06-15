@@ -10,28 +10,23 @@ a compiler for a small statically-typed, expression-oriented language with an af
 - llvm-21 (`brew install llvm@21`, `apt-get install llvm-21`, https://github.com/llvm/llvm-project/releases/tag/llvmorg-21.1.8)
 - `cc`
 
-1. [install rust](https://rust-lang.org/tools/install/)
-2. clone & cd in the repo
-3. `cargo build` to compile the compiler & all utilities
+- `git clone https://github.com/andtsa/sand && cd sand`
+- `cargo build` to compile the compiler & all utilities
 
 now you have the 2 main binaries: `target/debug/sand-cli` and `target/debug/sand-lsp`, as well as several other utility binaries in `target/debug/`.
 
 ### `sand-cli`
-use it to compile `.sand` files to executables:
 ```sh
-sand-cli compile <path-to-file.sand> --output <output-file>
-```
-or multiple files at once:
-```sh
+# use it to compile `.sand` files to executables:
+sand-cli compile <path-to-file.sand> --output <output-file> -v # -v or -vv for verbose output
+# or multiple files at once:
 sand-cli compile <path-to-file.sand> <path-to-other-file.sand> ...
-```
-dump the AST to stdout:
-```sh
+# dump the AST to stdout:
 sand-cli compile <path-to-file.sand> --print-ast
-```
-or emit LLVM IR:
-```sh
+# or emit LLVM IR:
 sand-cli compile <path-to-file.sand> --emit-llvm
+# ... and more
+sand-cli --help
 ```
 
 for projects with multiple files, a `sand.toml` can be used to group them together:
@@ -356,6 +351,122 @@ a continuation-passing lowering of the expression tree into basic blocks.
 this code is adapted (effectively 1-1) from the explicate control assignment of CS4555 Compiler Construction.
 
 ---
+
+## Functional Techniques
+
+<details>
+<summary>Persistence</summary>
+
+Persistence is used very effectively in several places in the IR transformations.
+
+Most notably, in the [Ownership pass](lang/src/passes/ownership/env.rs),
+the `OwnershipEnv` state holds the ownership state for each variable.
+When exploring branches of if/match statements, the state is cloned to preserve the state before the branch.
+Since `im` uses a persistent map, cloning is cheap, and we can access the shared
+history from within each branch without any additional overhead.
+```rust
+#[derive(Debug, Clone, Default)]
+pub struct OwnershipEnv<'tcx> {
+    states: Map<UniqVar<'tcx>, OwnershipState>,
+    borrows: Map<UniqVar<'tcx>, BorrowState>,
+    types: Map<UniqVar<'tcx>, Ty<'tcx>>,
+}
+
+pub fn merge(left: &Self, right: &Self) -> Self {
+    let mut merged = left.clone();
+    // merge with right's states, borrows, and types
+```
+</details>
+
+<details>
+<summary>Lenses/Optics</summary>
+There's two main places where optics are used:
+
+1. over the multiple variants of [HirVar](lang/src/ir_types/hhir.rs)
+```rust
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub enum HirVar<'tcx> {
+    Decl(OriginalVarRef<'tcx>),
+    Unqualified(String),
+    Uniq(UniqVar<'tcx>),
+}
+```
+using the prism defined in [`lang::compiler::optics`](lang/src/compiler/optics.rs) to review/expect the `Uniq` variant after the [qualify pass](lang/src/passes/qualify/mod.rs).
+
+2. traversals over the AST IRs:
+  - [`traverse_subexprs`](lang/src/ir_types/hhir.rs)
+</details>
+
+<details>
+<summary>Concurrency</summary>
+
+The pipeline can be roughly partitioned into 2 phases:
+1. building the context
+2. using the context
+
+(context here being [`CompileCtx`](lang/src/compiler/context/compile.rs))
+
+during the first phase, the code is very much sequential,
+since the passes need an `&mut CompileCtx` to work.
+
+the second phase though is completely parallelizable,
+since the `CompileCtx` is now immutable after the first phase,
+and the previously interior-mutable `Arenas` are now read-only.
+
+the two examples I will highlight are:
+
+1. Ownership check:
+```rust
+pub fn check<'tcx>(
+    ctx: &CompileCtx<'tcx>,
+    mut program: TypedProgram<'tcx>,
+) -> Result<TypedProgram<'tcx>, Vec<OwnershipCheckError<'tcx>>> {
+    let functions = program.functions;
+    let results = functions
+        .into_par_iter()
+        .map(|(name, mut func)| {
+            let checker = OwnershipChecker {
+                ctx,
+                module: func.src_module,
+                type_constraints: func.type_constraints.clone(),
+            };
+            let mut env = OwnershipEnv::new();
+            func.parameters.iter().for_each(|param| {
+                env.declare(param.name, param.ty);
+            });
+            let new_body = checker.check_expr(&func.body, &mut env)?;
+            let param_drops = checker.scope_exit_drops(&env, &HashSet::new());
+            func.body = attach_drops(new_body, param_drops);
+            Ok((name, func))
+        })
+        .collect::<Vec<CheckResult<'tcx>>>();
+    let (errors, functions): (Vec<CheckResult<'tcx>>, Vec<CheckResult<'tcx>>) =
+        results.into_iter().partition(Result::is_err);
+    if !errors.is_empty() {
+        return Err(errors
+            .into_iter()
+            .map(Result::unwrap_err)
+            .collect::<Vec<_>>());
+    }
+    program.functions = Map::from_iter(functions.into_iter().map(Result::unwrap));
+    Ok(program)
+}
+```
+and 
+2. explicate control:
+```rust
+pub fn from_typed_program(prog: &th::TypedProgram<'tcx>, ctx: &CompileCtx<'tcx>) -> Self {
+    let functions = prog
+        .functions
+        .par_iter() // here the change was literally just `iter()` -> `par_iter()`
+        .map(|(name, func)| (*name, lower_function(func, ctx)))
+        .collect();
+
+    Self { functions }
+}
+```
+
+</details>
 
 ## Project Layout
 
