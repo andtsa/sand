@@ -153,6 +153,18 @@ fn dump_expr<'tcx>(out: &mut String, expr: &Expr<'tcx>, ctx: &CompileCtx<'tcx>, 
                 dump_expr(out, e, ctx, level + 1);
             }
         }
+        Expression::Lambda { param, body, .. } => {
+            let _ = writeln!(out, "lambda {}", ctx.uniq_variable_name(&param.name));
+            dump_expr(out, body, ctx, level + 1);
+        }
+        Expression::Apply { func, arg } => {
+            let _ = writeln!(out, "apply");
+            dump_expr(out, func, ctx, level + 1);
+            dump_expr(out, arg, ctx, level + 1);
+        }
+        Expression::Closure { func, .. } => {
+            let _ = writeln!(out, "closure {}", ctx.original_fun_name(*func));
+        }
         Expression::Match { scrutinee, arms } => {
             let _ = writeln!(out, "match");
             dump_expr(out, scrutinee, ctx, level + 1);

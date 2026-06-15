@@ -11,6 +11,7 @@
 use crate::compiler::context::CompileCtx;
 use crate::compiler::structure::FunRef;
 use crate::compiler::structure::Map;
+use crate::compiler::structure::ModuleRef;
 use crate::internal_bug;
 use crate::ir_types::typed_hir::Expr;
 use crate::ir_types::typed_hir::Expression;
@@ -38,6 +39,8 @@ pub fn monomorphise<'tcx>(
         output: Map::new(),
         fn_instances: Map::new(),
         enum_instances: Map::new(),
+        cur_module: None,
+        lambda_counter: 0,
     };
 
     // Non-generic functions are the roots; generic functions are reached only
@@ -67,6 +70,11 @@ struct Mono<'tcx> {
     fn_instances: Map<(FunRef<'tcx>, Vec<Ty<'tcx>>), FunRef<'tcx>>,
     /// `(generic enum, type args) -> specialised enum`.
     enum_instances: Map<(EnumRef<'tcx>, Vec<Ty<'tcx>>), EnumRef<'tcx>>,
+    /// The module of the function whose body is currently being rewritten — the
+    /// home for any lambda lifted out of it (Step 13).
+    cur_module: Option<ModuleRef<'tcx>>,
+    /// Counter for unique lifted-lambda function names (Step 13).
+    lambda_counter: usize,
 }
 
 impl<'tcx> Mono<'tcx> {
@@ -108,7 +116,11 @@ impl<'tcx> Mono<'tcx> {
             })
             .collect();
         let ret_type = self.mono_ty(ctx, f.ret_type, mapping);
+        // Record this function's module for any lambda lifted out of its body
+        // (Step 13), saving/restoring across the (re-entrant) rewrite.
+        let prev_module = self.cur_module.replace(f.src_module);
         let body = self.rewrite_expr(ctx, &f.body, mapping);
+        self.cur_module = prev_module;
 
         self.output.insert(
             spec_fr,
@@ -337,6 +349,51 @@ impl<'tcx> Mono<'tcx> {
                     .map(|e| self.rewrite_expr(ctx, e, mapping))
                     .collect(),
             ),
+            // Lambda lifting (Step 13, milestone 2b): hoist the (monomorphised)
+            // body into a fresh top-level function and replace the lambda with a
+            // `Closure` referencing it. The body is rewritten first so any inner
+            // lambdas are lifted too. Captures are empty (non-capturing
+            // milestone). Runs on every backend path (both interpreters and
+            // codegen see lifted closures).
+            Expression::Lambda { param, body, .. } => {
+                let mono_param = Parameter {
+                    name: param.name,
+                    ty: self.mono_ty(ctx, param.ty, mapping),
+                    range: param.range,
+                    is_mutable: param.is_mutable,
+                };
+                let mono_body = self.rewrite_expr(ctx, body, mapping);
+                let ret_type = mono_body.ty;
+                let module = self.cur_module.expect("lambda outside a function body");
+                self.lambda_counter += 1;
+                let name = format!("$lambda{}", self.lambda_counter);
+                let fr = ctx.register_mono_function(name, module, param.range);
+                self.output.insert(
+                    fr,
+                    TypedFunction {
+                        name: fr,
+                        range: param.range,
+                        type_params: Vec::new(),
+                        region_params: Vec::new(),
+                        where_constraints: Vec::new(),
+                        type_constraints: Vec::new(),
+                        parameters: vec![mono_param],
+                        ret_type,
+                        body: mono_body,
+                        src_module: module,
+                    },
+                );
+                Expression::Closure {
+                    func: fr,
+                    captures: Vec::new(),
+                }
+            }
+            Expression::Apply { func, arg } => Expression::Apply {
+                func: self.boxed(ctx, func, mapping),
+                arg: self.boxed(ctx, arg, mapping),
+            },
+            // `Closure` is produced *by* this pass; the input never contains it.
+            Expression::Closure { .. } => internal_bug!("Closure in monomorphisation input"),
             Expression::IntrinsicCall {
                 fn_name,
                 args,

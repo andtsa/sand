@@ -17,6 +17,18 @@ pub fn type_error_to_diagnostic<'tcx>(
     use crate::passes::type_ast::AstTypeError::*;
     let mut diagnostics = SandDiagnostics::default();
     match err {
+        NotCallable { range, .. } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    message: err.to_string(),
+                    range: *range,
+                    file: Some(file),
+                    ..Default::default()
+                },
+            );
+        }
         UnboundVariable { name, range } => {
             let message = format!("unbound variable '{}'", name);
 

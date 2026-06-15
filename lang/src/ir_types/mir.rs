@@ -224,4 +224,19 @@ pub enum RValue<'tcx> {
         fn_name: Intrinsic,
         args: Vec<Operand>,
     },
+
+    /// A closure value (Step 13): a fat pointer `{ fn_ptr, env_ptr }` to the
+    /// lifted top-level function `fn_name`. `env` holds the captured operands
+    /// (empty / null env in the non-capturing milestone).
+    Closure {
+        fn_name: FunRef<'tcx>,
+        env: Vec<Operand>,
+    },
+
+    /// Indirect call of a function value (Step 13): call the closure `callee`
+    /// (a `Fn`-typed operand) with `args`.
+    CallIndirect {
+        callee: Operand,
+        args: Vec<Operand>,
+    },
 }

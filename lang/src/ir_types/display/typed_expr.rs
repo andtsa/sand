@@ -323,6 +323,31 @@ impl<'fmt, 'tcx> Iterator for TypedExprFormatter<'fmt, 'tcx> {
                         return Some((method.clone(), Nothing));
                     }
 
+                    Lambda { param, body, .. } => {
+                        // emission order: fn (x) -> body
+                        self.stack.push(Exp(&body.expr));
+                        return Some((
+                            format!("fn ({}) -> ", self.ctx.uniq_variable_name(&param.name)),
+                            Nothing,
+                        ));
+                    }
+
+                    Apply { func, arg } => {
+                        // emission order: func ( arg )
+                        self.stack.push(Token(")".into(), Nothing));
+                        self.stack.push(Exp(&arg.expr));
+                        self.stack.push(Token("(".into(), Nothing));
+                        self.stack.push(Exp(&func.expr));
+                        continue;
+                    }
+
+                    Closure { func, .. } => {
+                        return Some((
+                            format!("<closure {}>", self.ctx.original_fun_name(*func)),
+                            Nothing,
+                        ));
+                    }
+
                     Block {
                         statements, expr, ..
                     } => {

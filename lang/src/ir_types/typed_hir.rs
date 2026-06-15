@@ -181,6 +181,28 @@ pub enum Expression<'tcx> {
         arms: Vec<TypedMatchArm<'tcx>>,
     },
     Tuple(Vec<Expr<'tcx>>),
+    /// A lambda `fn (x: T) -> e` (Step 13): a function value of type
+    /// `param.ty -> body.ty`. `captures` lists the enclosing variables the body
+    /// uses (empty in the non-capturing milestone).
+    Lambda {
+        param: Parameter<'tcx>,
+        body: Box<Expr<'tcx>>,
+        captures: Vec<UniqVar<'tcx>>,
+    },
+    /// Application of a function value (indirect call) `func(arg)` (Step 13).
+    Apply {
+        func: Box<Expr<'tcx>>,
+        arg: Box<Expr<'tcx>>,
+    },
+    /// A lifted closure value (Step 13, milestone 2b): a `Lambda` after
+    /// lambda-lifting, referencing the synthesised top-level function `func` and
+    /// the captured locals it closes over (empty in the non-capturing
+    /// milestone). Produced by `passes::lift_lambdas` on the MIR/codegen path
+    /// only — the HIR interpreter still runs `Lambda` directly.
+    Closure {
+        func: FunRef<'tcx>,
+        captures: Vec<UniqVar<'tcx>>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

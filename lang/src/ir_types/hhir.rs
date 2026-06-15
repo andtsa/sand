@@ -34,7 +34,7 @@ pub enum HirFnCall {
     External { module: String, name: String },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Parameter<'tcx> {
     pub name: HirVar<'tcx>,
     pub ty: Ty<'tcx>,
@@ -229,6 +229,14 @@ impl<'tcx> Expr<'tcx> {
             Expression::Tuple(elems) => {
                 Expression::Tuple(elems.iter().map(&mut f).collect::<Result<_, _>>()?)
             }
+            Expression::Lambda { param, body } => Expression::Lambda {
+                param: param.clone(),
+                body: Box::new(f(body)?),
+            },
+            Expression::Apply { func, arg } => Expression::Apply {
+                func: Box::new(f(func)?),
+                arg: Box::new(f(arg)?),
+            },
             Expression::Tag { variant, payload } => Expression::Tag {
                 variant: variant.clone(),
                 payload: payload.as_deref().map(&mut f).transpose()?.map(Box::new),
@@ -312,6 +320,19 @@ pub enum Expression<'tcx> {
         arms: Vec<HirMatchArm<'tcx>>,
     },
     Tuple(Vec<Expr<'tcx>>),
+    /// A lambda `fn (x: T) -> e` (Step 13). The parameter mirrors a function
+    /// parameter (name + declared type); the body is a full expression.
+    Lambda {
+        param: Parameter<'tcx>,
+        body: Box<Expr<'tcx>>,
+    },
+    /// Application of a function *value* (indirect call): `f(arg)` where `f` is a
+    /// bound local rather than a named function (Step 13). Produced by uniquify
+    /// when a call's callee resolves to a variable in scope.
+    Apply {
+        func: Box<Expr<'tcx>>,
+        arg: Box<Expr<'tcx>>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

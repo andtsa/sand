@@ -2238,12 +2238,52 @@ fn build_expr<'run>(
         Rule::power => build_power(ctx, pair, src),
         Rule::unary => build_unary(ctx, pair, src),
         Rule::primary => build_primary(ctx, pair, src),
+        Rule::lambda_expr => build_lambda(ctx, pair, src),
         other => Err(AstError::UnexpectedRule {
             expected: "expression-like rule",
             got: other,
             range,
         }),
     }
+}
+
+/// Build a lambda `fn (x: T) -> e` (Step 13).
+/// `lambda_expr = { "fn" ~ lambda_param ~ "->" ~ expression }`,
+/// `lambda_param = { "(" ~ mut_kw? ~ identifier ~ ":" ~ type_ ~ ")" }`.
+fn build_lambda<'run>(
+    ctx: &mut CompileCtx<'run>,
+    pair: Pair<Rule>,
+    src: &str,
+) -> Result<Expr<'run>, AstError> {
+    assert_eq!(pair.as_rule(), Rule::lambda_expr);
+    let range = Range::from(&pair);
+    let mut inner = pair.into_inner();
+    let param_pair = inner.next().missing("lambda parameter", range)?;
+    let body_pair = inner.next().missing("lambda body", range)?;
+
+    // lambda_param = { "(" ~ mut_kw? ~ identifier ~ ":" ~ type_ ~ ")" }
+    let prange = Range::from(&param_pair);
+    let mut pparts = param_pair.into_inner().peekable();
+    let is_mutable = pparts.peek().map(|p| p.as_rule()) == Some(Rule::mut_kw);
+    if is_mutable {
+        pparts.next();
+    }
+    let name = pparts.next().missing("lambda parameter name", prange)?;
+    let ty_pair = pparts.next().missing("lambda parameter type", prange)?;
+    let ty = build_type(ctx, ty_pair)?;
+    let var = HirVar::Decl(ctx.new_original_variable(&name, Rule::parameter)?);
+    let param = Parameter {
+        name: var,
+        ty,
+        range: prange,
+        is_mutable,
+    };
+
+    let body = Box::new(build_expr(ctx, body_pair, src)?);
+    Ok(Expr {
+        expr: Expression::Lambda { param, body },
+        range,
+    })
 }
 
 // generic left-assoc binary fold helper

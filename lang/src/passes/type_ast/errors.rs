@@ -39,6 +39,8 @@ pub(crate) fn required_by_suffix(class: &str, origin: &Option<ConstraintOrigin>)
 pub enum AstTypeError<'tcx> {
     #[error("unbound variable '{name}' at {range}")]
     UnboundVariable { name: String, range: Range },
+    #[error("cannot call a value of non-function type {ty} at {range}")]
+    NotCallable { ty: Ty<'tcx>, range: Range },
     #[error("cannot assign to immutable variable '{name}' at {range}")]
     ImmutableAssignment { name: String, range: Range },
     #[error("undefined function '{name}' at {range}")]

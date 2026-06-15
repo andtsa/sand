@@ -374,6 +374,58 @@ impl<'ctx> LlvmCodegen<'ctx> {
             RValue::Aggregate(fields) => self.emit_aggregate(fields, dst_ty, fn_ctx),
 
             RValue::Field { base, index } => self.emit_field(base, *index, dst_ty, fn_ctx),
+
+            // A closure value (Step 13): the fat pointer `{ fn_ptr, env_ptr }`.
+            // Non-capturing → null environment.
+            RValue::Closure { fn_name, env } => {
+                debug_assert!(env.is_empty(), "closure captures arrive in a later milestone");
+                let func = fns[fn_name];
+                let fn_ptr = func.as_global_value().as_pointer_value();
+                let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+                let struct_ty = self.context.struct_type(&[ptr_ty.into(), ptr_ty.into()], false);
+                let s = self
+                    .builder
+                    .build_insert_value(struct_ty.get_undef(), fn_ptr, 0, "clos_fn")?;
+                let s = self.builder.build_insert_value(
+                    s.into_struct_value(),
+                    ptr_ty.const_null(),
+                    1,
+                    "clos_env",
+                )?;
+                Ok(s.into_struct_value().into())
+            }
+
+            // Indirect call (Step 13): extract the fn pointer from the closure
+            // fat pointer and call through it. (Captures/env are passed in a
+            // later milestone.)
+            RValue::CallIndirect { callee, args } => {
+                let closure = self.emit_operand(callee, fn_ctx)?.into_struct_value();
+                let fn_ptr = self
+                    .builder
+                    .build_extract_value(closure, 0, "fn_ptr")?
+                    .into_pointer_value();
+                let arg_vals: Vec<llvm::BasicMetadataValueEnum> = args
+                    .iter()
+                    .map(|a| self.emit_operand(a, fn_ctx).map(Into::into))
+                    .collect::<Result<_, _>>()?;
+                let cctx = fn_ctx.compile_ctx;
+                let arg_types: Vec<inkwell::types::BasicMetadataTypeEnum> = args
+                    .iter()
+                    .map(|a| self.llvm_type(cctx, Self::operand_ty(a, fn_ctx)).into())
+                    .collect();
+                let fn_type = if matches!(dst_ty.kind(), TyKind::Unit) {
+                    self.context.void_type().fn_type(&arg_types, false)
+                } else {
+                    self.llvm_type(cctx, dst_ty).fn_type(&arg_types, false)
+                };
+                let call =
+                    self.builder
+                        .build_indirect_call(fn_type, fn_ptr, &arg_vals, "indirect")?;
+                Ok(call
+                    .try_as_basic_value()
+                    .basic()
+                    .unwrap_or_else(|| self.context.struct_type(&[], false).const_zero().into()))
+            }
         }
     }
 

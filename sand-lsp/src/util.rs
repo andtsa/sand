@@ -92,6 +92,11 @@ pub(crate) fn find_in_expr<'a, 'tcx>(expr: &'a Expr<'tcx>, pos: Pos) -> Option<&
             payload.as_deref().and_then(|p| find_in_expr(p, pos))
         }
         Expression::Tuple(elems) => elems.iter().find_map(|e| find_in_expr(e, pos)),
+        Expression::Lambda { body, .. } => find_in_expr(body, pos),
+        Expression::Apply { func, arg } => {
+            find_in_expr(func, pos).or_else(|| find_in_expr(arg, pos))
+        }
+        Expression::Closure { .. } => None,
         Expression::Match { scrutinee, arms } => find_in_expr(scrutinee, pos)
             .or_else(|| arms.iter().find_map(|arm| find_in_expr(&arm.body, pos))),
     };

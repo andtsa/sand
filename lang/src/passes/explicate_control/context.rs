@@ -961,6 +961,45 @@ impl<'tcx> FnCx<'tcx> {
                     .fold(final_bb, |k, (arg, tmp)| self.lower_assign(arg, tmp, k))
             }
 
+            // A lifted closure value (Step 13): a fat pointer to the lifted
+            // function. Non-capturing milestone → empty environment.
+            th::Expression::Closure { func, captures } => {
+                debug_assert!(captures.is_empty(), "closure captures arrive in a later milestone");
+                let stmt = self.assign_stmt(
+                    dst,
+                    RValue::Closure {
+                        fn_name: *func,
+                        env: Vec::new(),
+                    },
+                    expr.range,
+                );
+                self.new_block(vec![stmt], Terminator::Goto { target: cont })
+            }
+
+            // Indirect call (Step 13): evaluate the callee and argument into
+            // temps, then call through the closure value.
+            th::Expression::Apply { func, arg } => {
+                let func_tmp = self.fresh_temp("apply_callee", func.ty, func.range);
+                let arg_tmp = self.fresh_temp("apply_arg", arg.ty, arg.range);
+                let final_bb = self.new_block(
+                    vec![self.assign_stmt(
+                        dst,
+                        RValue::CallIndirect {
+                            callee: Operand::Copy(Self::place(func_tmp)),
+                            args: vec![Operand::Copy(Self::place(arg_tmp))],
+                        },
+                        expr.range,
+                    )],
+                    Terminator::Goto { target: cont },
+                );
+                let after_arg = self.lower_assign(arg, arg_tmp, final_bb);
+                self.lower_assign(func, func_tmp, after_arg)
+            }
+
+            th::Expression::Lambda { .. } => {
+                internal_bug!("lambda should have been lifted during monomorphisation")
+            }
+
             th::Expression::IntrinsicCall {
                 fn_name,
                 args,
