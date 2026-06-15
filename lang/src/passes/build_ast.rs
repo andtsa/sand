@@ -1383,6 +1383,10 @@ fn collect_referenced_enums<'tcx>(ty: Ty<'tcx>, out: &mut Vec<EnumRef<'tcx>>) {
         TyKind::Region(t, _) | TyKind::Ref(_, t) | TyKind::RefMut(_, t) | TyKind::Ptr(t) => {
             collect_referenced_enums(*t, out);
         }
+        TyKind::Fn(a, r, _) => {
+            collect_referenced_enums(*a, out);
+            collect_referenced_enums(*r, out);
+        }
         _ => {}
     }
 }
@@ -1502,11 +1506,14 @@ fn check_variance<'run>(ctx: &CompileCtx<'run>, er: EnumRef<'run>) -> Result<(),
 fn ty_mentions_param(ty: Ty<'_>, id: TypeParamId) -> bool {
     match ty.kind() {
         TyKind::Param(p) => *p == id,
+        TyKind::ParamApp(p, args) => *p == id || args.iter().any(|a| ty_mentions_param(*a, id)),
         TyKind::Tuple(elems) => elems.iter().any(|e| ty_mentions_param(*e, id)),
         TyKind::App(_, args, _) => args.iter().any(|a| ty_mentions_param(*a, id)),
-        TyKind::Region(inner, _) | TyKind::Ref(_, inner) | TyKind::RefMut(_, inner) => {
-            ty_mentions_param(*inner, id)
-        }
+        TyKind::Region(inner, _)
+        | TyKind::Ref(_, inner)
+        | TyKind::RefMut(_, inner)
+        | TyKind::Ptr(inner) => ty_mentions_param(*inner, id),
+        TyKind::Fn(a, r, _) => ty_mentions_param(*a, id) || ty_mentions_param(*r, id),
         _ => false,
     }
 }
@@ -1638,18 +1645,34 @@ fn resolve_lifetime(ctx: &CompileCtx<'_>, lt: &Pair<Rule>) -> Result<Region, Ast
 }
 
 /// Build a type, applying an optional `@ 'r` region ascription (Calculus §2.3).
-/// `type_ = { core_type ~ ("@" ~ lifetime)? }`.
+/// `type_ = { fn_type | core_type ~ ("@" ~ lifetime)? }`.
 fn build_type<'run>(ctx: &mut CompileCtx<'run>, pair: Pair<Rule>) -> Result<Ty<'run>, AstError> {
     assert_eq!(pair.as_rule(), Rule::type_);
     let range = Range::from(&pair);
     let mut inner = pair.into_inner();
-    let core = inner.next().missing("core type", range)?;
-    let mut ty = build_core_type(ctx, core)?;
+    let first = inner.next().missing("type", range)?;
+    if first.as_rule() == Rule::fn_type {
+        return build_fn_type(ctx, first);
+    }
+    let mut ty = build_core_type(ctx, first)?;
     if let Some(lt) = inner.next() {
         let region = resolve_lifetime(ctx, &lt)?;
         ty = ctx.region_ty(ty, region);
     }
     Ok(ty)
+}
+
+/// Build a function type `A -> B` (Step 13). Bare `->` is the *reusable* arrow;
+/// `fn_type = { core_type ~ "->" ~ type_ }`, right-associative via the codomain.
+fn build_fn_type<'run>(ctx: &mut CompileCtx<'run>, pair: Pair<Rule>) -> Result<Ty<'run>, AstError> {
+    assert_eq!(pair.as_rule(), Rule::fn_type);
+    let range = Range::from(&pair);
+    let mut inner = pair.into_inner();
+    let dom_pair = inner.next().missing("function domain type", range)?;
+    let cod_pair = inner.next().missing("function codomain type", range)?;
+    let dom = build_core_type(ctx, dom_pair)?;
+    let cod = build_type(ctx, cod_pair)?;
+    Ok(ctx.fn_ty(dom, cod, FnMode::Reusable))
 }
 
 fn build_core_type<'run>(

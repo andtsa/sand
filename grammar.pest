@@ -55,10 +55,20 @@ core_type = {
 // `mut` keyword marks an exclusive (mutable) borrow (Step 9).
 borrow_type = { "&" ~ lifetime? ~ mut_kw? ~ core_type }
 
+// a function type `A -> B`. Unary and right-associative
+// (`A -> B -> C` is `A -> (B -> C)`); the codomain is a full `type_` so it may
+// itself be a function type. The domain is a `core_type`: a nested arrow in the
+// domain (`(A -> B) -> C`) needs the parenthesised form, a later extension. Bare
+// `->` is the *reusable* arrow (Calculus §3.1's `→[Borrowed]`, ≈ Rust `Fn`); the
+// consuming (`FnOnce`) and mutating (`FnMut`) arrows get distinct syntax when
+// closures land.
+fn_type = { core_type ~ "->" ~ type_ }
+
 // a type, optionally ascribed to a region: `Int`, `Int @ 'r` (Calculus §2.3).
 // the `@ 'r` suffix is parsed here (rather than a left-recursive `region_type`)
-// so the grammar stays a valid PEG.
-type_ = { core_type ~ ("@" ~ lifetime)? }
+// so the grammar stays a valid PEG. A function type is tried first (it needs the
+// `->`), falling back to an ascribed core type.
+type_ = { fn_type | core_type ~ ("@" ~ lifetime)? }
 
 // keywords (prevent them from being identifiers)
 KEYWORD = { "if" | "then" | "else" | "let" | "def" | "true" | "false" | "Unit" | "Int" | "Bool" | "while" | "do" | "module" | "mut" | "type" | "match" | "and" | "where" | "use" | "typeclass" | "impl" | "requires" | "for" | "extern" | "deriving" }

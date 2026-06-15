@@ -47,6 +47,12 @@ pub fn subst<'tcx>(ctx: &mut CompileCtx<'tcx>, ty: Ty<'tcx>, mapping: &Subst<'tc
             let inner = subst(ctx, *inner, mapping);
             ctx.ptr_ty(inner)
         }
+        // function types substitute their domain + codomain (Step 13).
+        TyKind::Fn(a, r, m) => {
+            let a = subst(ctx, *a, mapping);
+            let r = subst(ctx, *r, mapping);
+            ctx.fn_ty(a, r, *m)
+        }
         // `F<A>`: substitute the arguments, then apply the constructor
         // `F` is bound to. A binding to the bare `Enum(er)` reconstructs the
         // concrete `App(er, ...)`; a binding to another type-constructor parameter
@@ -147,6 +153,10 @@ pub fn unify<'tcx>(
         (TyKind::RefMut(_, di), TyKind::RefMut(_, ai)) => unify(ctx, *di, *ai, mapping),
         (TyKind::Region(di, _), TyKind::Region(ai, _)) => unify(ctx, *di, *ai, mapping),
         (TyKind::Ptr(di), TyKind::Ptr(ai)) => unify(ctx, *di, *ai, mapping),
+        (TyKind::Fn(da, dr, dm), TyKind::Fn(aa, ar, am)) if dm == am => {
+            unify(ctx, *da, *aa, mapping)?;
+            unify(ctx, *dr, *ar, mapping)
+        }
         _ => {
             if declared.type_eq(actual) {
                 Ok(())

@@ -6,6 +6,7 @@
 
 use lang::ir_types::typed_hir::Expression;
 
+use crate::common::compile_err;
 use crate::common::run_hir;
 use crate::common::run_mir_as_expr;
 use crate::common::typecheck;
@@ -243,5 +244,26 @@ fn generic_call_with_unsatisfied_constraint_is_rejected() {
          impl ToInt for Int { def to_int(x: Int): Int := x } \n \
          def use_it<T>(x: T): Int where T : ToInt := to_int(x) \n \
          def main(): Int := use_it(true)",
+    );
+}
+
+#[test]
+fn unsatisfied_constraint_message_names_the_originating_constraint() {
+    // Step 15: the "no instance" error must point at *which* `where` clause
+    // demanded the instance — the callee and the bound that required it.
+    let (_ctx, err) = compile_err(
+        "typeclass Show<T> { def show(x: T): Int } \n \
+         impl Show for Int { def show(x: Int): Int := x } \n \
+         def twice<T>(x: T): Int where T : Show := show(x) + show(x) \n \
+         def main(): Int := twice(true)",
+    );
+    let msg = err.to_string();
+    assert!(
+        msg.contains("no instance of typeclass 'Show' for type Bool"),
+        "missing the base diagnostic, got: {msg}"
+    );
+    assert!(
+        msg.contains("required by `where T : Show` on `twice`"),
+        "message does not name the originating constraint, got: {msg}"
     );
 }

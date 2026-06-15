@@ -1013,6 +1013,14 @@ impl<'ctx> LlvmCodegen<'ctx> {
                 .context
                 .ptr_type(inkwell::AddressSpace::default())
                 .into(),
+            // A function value (Step 13) is a fat pointer `{ fn_ptr, env_ptr }`
+            // (the env is null for a capture-free function). Closures/lambdas are
+            // a later phase; the layout is fixed here so a `Fn`-typed signature
+            // already has a representation.
+            TyKind::Fn(..) => {
+                let ptr = self.context.ptr_type(inkwell::AddressSpace::default());
+                self.context.struct_type(&[ptr.into(), ptr.into()], false).into()
+            }
             _ => internal_bug!("no LLVM type for {:?}", ty),
         }
     }

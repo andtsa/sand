@@ -12,6 +12,29 @@ pub struct TypeError<'tcx> {
     pub module: ModuleRef<'tcx>,
 }
 
+/// Identifies the `where T : C` constraint that demanded a typeclass instance
+/// at a call site: the callee's name and the constrained type parameter (the
+/// `T`). Used to enrich [`AstTypeError::TypeclassNoInstance`] so the diagnostic
+/// can say *which* constraint required the missing instance.
+#[derive(Debug, Clone)]
+pub struct ConstraintOrigin {
+    /// the callee function's name (e.g. `twice`)
+    pub fun: String,
+    /// the constrained type parameter's name (e.g. `T`)
+    pub param: String,
+}
+
+/// Render the trailing "required by `where T : C` on `f`" clause for a
+/// [`AstTypeError::TypeclassNoInstance`], or the empty string when the missing
+/// instance did not originate from a callee's `where` clause. Shared by the
+/// error's `Display` and the diagnostic conversion so both read identically.
+pub(crate) fn required_by_suffix(class: &str, origin: &Option<ConstraintOrigin>) -> String {
+    match origin {
+        Some(o) => format!(", required by `where {} : {class}` on `{}`", o.param, o.fun),
+        None => String::new(),
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum AstTypeError<'tcx> {
     #[error("unbound variable '{name}' at {range}")]
@@ -155,11 +178,20 @@ pub enum AstTypeError<'tcx> {
         range: Range,
     },
 
-    #[error("no instance of typeclass '{class}' for type {ty} at {range}")]
+    #[error(
+        "no instance of typeclass '{class}' for type {ty} at {range}{}",
+        required_by_suffix(class, .required_by)
+    )]
     TypeclassNoInstance {
         class: String,
         ty: Ty<'tcx>,
         range: Range,
+        /// When the missing instance was demanded by a callee's `where T : C`
+        /// clause at a call site, this names the constraint that required it
+        /// (callee + bound parameter) so the diagnostic can point at the
+        /// originating constraint. `None` for method-call dispatch failures,
+        /// where there is no such enclosing clause.
+        required_by: Option<ConstraintOrigin>,
     },
 
     #[error(

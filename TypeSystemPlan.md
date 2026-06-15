@@ -1274,6 +1274,31 @@ producing `Box<T> @ 'static`.
 
 ## Step 13 — Lambda Expressions and First-Class Functions
 
+> **Status: 🚧 IN PROGRESS — milestone 1 (function *types*) done.** 737 tests,
+> clippy clean. `TyKind::Fn(arg, ret, FnMode)` + grammar `A -> B` (unary,
+> right-associative; bare `->` = the **reusable** arrow) threaded through
+> `subst`/`unify`/`mono`/`eq`/`Display`/`mangle`/`llvm_type` (fat-pointer
+> `{fn_ptr, env_ptr}` layout) + recursion/variance helpers. Tests:
+> `function_type_tests.rs` (parse, right-assoc, in tuple/enum/generic-arg
+> positions, application mismatch). No lambda *values* yet.
+>
+> **Key design decision — sand has ONE kind-annotated arrow, not Rust's four.**
+> Rust splits a thin capture-free `fn` pointer from three closure *traits*
+> (`Fn`/`FnMut`/`FnOnce`, which classify how a call uses the captured
+> environment). Sand collapses this into a single arrow `A →[K] B` carrying a
+> [`FnMode`] (`Reusable`=`Fn`/`→[Borrowed]`, `ReusableMut`=`FnMut`/`→[BorrowedMut]`,
+> `Consuming`=`FnOnce`/`→[Owned]`) per Calculus §3.1; the `Fn ⊆ FnMut ⊆ FnOnce`
+> subsumption reuses kind subtyping, and a capture-free function is just the
+> empty-env case of the fat pointer — so no separate `fn` type and no traits.
+> Bare `->` defaults to `Reusable` (the common case, and what `fmap`/`bind` need
+> — `Consuming` ≈ `FnOnce` is once-callable). Only `Reusable` is surface-producible
+> until closures land; the borrowing arrow's region (§3.1's `'r`) is also deferred
+> to the closures phase (nothing to escape-check without closure values).
+>
+> **Remaining milestones:** lambda expressions + indirect call + capture analysis
+> + fat-pointer codegen; borrowing/consuming closures; the variance follow-up;
+> then `Functor`/`Applicative`/`Monad` in `core.sand` (the HKT payoff).
+
 **Goal**: Add lambda expressions as values. Functions become first-class
 — they can be passed as arguments, stored in data structures, and
 returned.
@@ -1423,6 +1448,26 @@ default-method example already hit "can't use a generic value twice without
 ---
 
 ## Step 15 — `where` Clause Constraint Checking
+
+> **Status: ✅ DONE (already implemented across Steps 8b / 10b / 14c).** All
+> scope items are live and tested:
+> - **Call-site `where T : C`** — verified against the solved type arguments in
+>   function-call inference (`check_type_constraint`, `infer.rs`); a concrete
+>   type needs a registered instance, an abstract one must be re-constrained in
+>   the caller (the bound propagates upward). Tested:
+>   `typeclass_tests.rs` (satisfied + `generic_call_with_unsatisfied_constraint_is_rejected`).
+> - **Superclass-at-impl** — `check_superclass_instances` enforces that an
+>   `impl B for X` with `B requires A` has `impl A for X`. Tested:
+>   `typeclass_tests.rs` (`superclass_instance_required/present`, unknown superclass).
+> - **`where 'r >= 's` at call sites** — `instantiate_call_regions` + the
+>   outlives solver. Tested: `region_inference_tests.rs`
+>   (`satisfied`/`violated_where_clause`, `caller_where_clause_discharges_callee_constraint`).
+>
+> Remaining (minor, optional): the unsatisfied-instance error names the class +
+> type but not the *constraint that required it*; constraints on a parameter not
+> inferrable from arguments are silently skipped (such a function is uncallable
+> without turbofish anyway). Out of scope as before: constraint inference /
+> implicit instance search.
 
 **Goal**: Activate `where` clause checking at call sites. Functions
 with typeclass constraints can only be called with types that satisfy
