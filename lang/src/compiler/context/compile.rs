@@ -35,8 +35,8 @@ use crate::compiler::structure::UniqVar;
 use crate::compiler::structure::VarName;
 use crate::internal_bug;
 use crate::ir_types::hhir::HirVar;
-use crate::lang::types::CommonTypes;
 use crate::lang::types::AdtRef;
+use crate::lang::types::CommonTypes;
 use crate::lang::types::FnMode;
 use crate::lang::types::Kind;
 use crate::lang::types::KindId;
@@ -1272,12 +1272,7 @@ impl<'tcx> CompileCtx<'tcx> {
     /// variant that was registered (with `payload: None`) by
     /// [`Self::register_enum`]. Uses the variant's `Cell` so the shared,
     /// arena-allocated `AdtDef` does not need to be mutably re-borrowed.
-    pub fn set_variant_payload(
-        &mut self,
-        er: AdtRef<'tcx>,
-        variant_idx: usize,
-        payload: Ty<'tcx>,
-    ) {
+    pub fn set_variant_payload(&mut self, er: AdtRef<'tcx>, variant_idx: usize, payload: Ty<'tcx>) {
         er.0.variants[variant_idx].payload.set(Some(payload));
     }
 
@@ -1920,4 +1915,9 @@ fn collect_region_bindings(
         }
         _ => {}
     }
+}
+
+fn _assert() {
+    fn s<T: Sync>() {}
+    s::<CompileCtx>();
 }

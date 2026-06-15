@@ -191,6 +191,8 @@ impl<'tcx> OwnershipEnv<'tcx> {
     ///
     /// use on block exit to drop block-local variables from the environment
     pub fn restrict_to(&mut self, vars: &Set<UniqVar<'tcx>>) {
+        // im::OrdMap doesnt have `retain` :(
+        // filter achieves the same result
         self.states = self
             .states
             .iter()

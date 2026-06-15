@@ -109,6 +109,6 @@ pub fn run(args: RunArgs, dry_run: bool) -> Result<(), CliError> {
     let mir = MirProgram::from_typed_program(&ast, &ctx);
 
     mir.interpret(&ctx)?;
-    
+
     Ok(())
 }

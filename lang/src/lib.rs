@@ -115,8 +115,11 @@ pub fn compile_hir<'proj>(
     // the injected `unique_*` calls and node types are instantiated normally.
     let typed_program = passes::heap_lower::lower(ctx, typed_program);
 
-    let typed_program = passes::ownership::check(ctx, typed_program)
-        .map_err(|e| SandLangErrorContext::with_module(e.module).wrap_err(e.error))?;
+    // TODO: handle multiple errors
+    let typed_program = passes::ownership::check(ctx, typed_program).map_err(|e| {
+        // SAFETY: ownership only returns non-empty error list.
+        SandLangErrorContext::with_module(e[0].module).wrap_err(e.into_iter().next().unwrap().error)
+    })?;
 
     // Monomorphisation erases all type parameters, so every later pass (MIR
     // lowering, codegen) only sees concrete types.

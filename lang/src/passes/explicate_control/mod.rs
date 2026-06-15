@@ -3,6 +3,8 @@
 
 pub mod context;
 
+use rayon::prelude::*;
+
 use crate::compiler::context::CompileCtx;
 use crate::internal_bug;
 use crate::ir_types::mir::*;
@@ -13,7 +15,7 @@ impl<'tcx> MirProgram<'tcx> {
     pub fn from_typed_program(prog: &th::TypedProgram<'tcx>, ctx: &CompileCtx<'tcx>) -> Self {
         let functions = prog
             .functions
-            .iter()
+            .par_iter()
             .map(|(name, func)| (*name, lower_function(func, ctx)))
             .collect();
 
