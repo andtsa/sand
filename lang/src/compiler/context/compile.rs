@@ -1017,6 +1017,7 @@ impl<'tcx> CompileCtx<'tcx> {
                 name: spec.name.clone(),
                 range: spec.range,
                 variance: spec.variance,
+                explicit_variance: spec.explicit_variance,
                 kind: spec.kind,
             });
         }
@@ -1048,6 +1049,7 @@ impl<'tcx> CompileCtx<'tcx> {
                 name: spec.name.clone(),
                 range: spec.range,
                 variance: spec.variance,
+                explicit_variance: spec.explicit_variance,
                 kind: spec.kind,
             });
         }

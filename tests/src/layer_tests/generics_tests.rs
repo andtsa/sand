@@ -490,6 +490,60 @@ fn contravariant_on_phantom_param_is_accepted() {
     typecheck("type Phantom<-a> = Red | Green \n def main(): Int := 0");
 }
 
+// ── Step 13 variance follow-up: function arrows are the first consumer
+// (contravariant) positions, and applications compose nested variance. ────────
+
+#[test]
+fn contravariant_param_in_function_argument_is_accepted() {
+    // `a` occurs only in a function *argument* (consumer) position, so it may be
+    // declared contravariant.
+    typecheck("type Sink<-a> = MkSink(a -> Int) \n def main(): Int := 0");
+}
+
+#[test]
+fn covariant_param_in_function_argument_is_unsound() {
+    // a consumer position cannot be declared covariant.
+    typecheck_fails("type Bad<+a> = MkBad(a -> Int) \n def main(): Int := 0");
+}
+
+#[test]
+fn covariant_param_in_function_result_is_accepted() {
+    // a function *result* is a producer position.
+    typecheck("type Src<+a> = MkSrc(Int -> a) \n def main(): Int := 0");
+}
+
+#[test]
+fn param_in_both_function_positions_must_be_inferred_invariant() {
+    // `a` occurs in both argument and result of `a -> a`, so neither explicit
+    // polarity is sound — only the (unannotated) inferred-invariant default is.
+    typecheck_fails("type Endo<+a> = MkEndo(a -> a) \n def main(): Int := 0");
+    typecheck_fails("type Endo<-a> = MkEndo(a -> a) \n def main(): Int := 0");
+    typecheck("type Endo<a> = MkEndo(a -> a) \n def main(): Int := 0");
+}
+
+#[test]
+fn nested_application_composes_variance() {
+    // `a` sits under `Sink`'s contravariant parameter, so within `Relay` it is in
+    // a contravariant position: `-a` is sound, `+a` is not.
+    typecheck(
+        "type Sink<-a> = MkSink(a -> Int) \n \
+         type Relay<-a> = MkRelay(Sink<a>) \n def main(): Int := 0",
+    );
+    typecheck_fails(
+        "type Sink<-a> = MkSink(a -> Int) \n \
+         type Relay<+a> = MkRelay(Sink<a>) \n def main(): Int := 0",
+    );
+}
+
+#[test]
+fn doubly_nested_contravariance_cancels() {
+    // `a` under two contravariant parameters flips twice back to covariant.
+    typecheck(
+        "type Sink<-a> = MkSink(a -> Int) \n \
+         type SinkSink<+a> = MkSS(Sink<Sink<a>>) \n def main(): Int := 0",
+    );
+}
+
 #[test]
 fn kind_argument_mismatch_is_rejected() {
     // the parameter requires kind `Never`, but `Int` has kind `Owned`.

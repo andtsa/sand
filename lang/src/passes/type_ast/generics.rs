@@ -153,7 +153,9 @@ pub fn unify<'tcx>(
         (TyKind::RefMut(_, di), TyKind::RefMut(_, ai)) => unify(ctx, *di, *ai, mapping),
         (TyKind::Region(di, _), TyKind::Region(ai, _)) => unify(ctx, *di, *ai, mapping),
         (TyKind::Ptr(di), TyKind::Ptr(ai)) => unify(ctx, *di, *ai, mapping),
-        (TyKind::Fn(da, dr, dm), TyKind::Fn(aa, ar, am)) if dm == am => {
+        // `declared` is the expected type, `actual` the supplied one; the actual
+        // arrow may be more permissive (Step 13 subsumption).
+        (TyKind::Fn(da, dr, dm), TyKind::Fn(aa, ar, am)) if am.usable_as(*dm) => {
             unify(ctx, *da, *aa, mapping)?;
             unify(ctx, *dr, *ar, mapping)
         }

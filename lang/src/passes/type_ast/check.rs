@@ -19,6 +19,7 @@ use crate::passes::type_ast::generics::subst;
 use crate::passes::type_ast::infer::escape_check;
 use crate::passes::type_ast::infer::infer;
 use crate::passes::type_ast::infer::infer_constructor;
+use crate::passes::type_ast::infer::infer_method_call;
 use crate::passes::type_ast::infer::infer_ptr_op;
 use crate::passes::type_ast::infer::infer_statement;
 use crate::passes::type_ast::infer::join_region_ty;
@@ -152,28 +153,11 @@ fn type_check_match_arms_inner<'tcx>(
     forced_expected: Option<Ty<'tcx>>,
     range: Range,
 ) -> Result<Vec<typed_hir::TypedMatchArm<'tcx>>, AstTypeError<'tcx>> {
-    let mut covered_variants: std::collections::BTreeSet<usize> = Default::default();
-    // duplicate-detection set for Int literal patterns (BTreeSet<i64> because
-    // `covered_variants` is `usize` and can't represent negative integers).
-    let mut covered_int_lits: std::collections::BTreeSet<i64> = Default::default();
-    // Nested-enum exhaustiveness tracking: for outer variant arms whose payload is
-    // a direct enum pattern (refutable), record which inner variant indices
-    // have been covered (irrefutably).  After the arm loop we promote
-    // fully-covered outer variants into `covered_variants`.
-    // key   = outer variant_idx
-    // value = (inner EnumRef, set of covered inner variant_idx)
-    let mut nested_enum_coverage: std::collections::BTreeMap<
-        usize,
-        (EnumRef<'tcx>, std::collections::BTreeSet<usize>),
-    > = Default::default();
-    // an "irrefutable pattern" is one that is statically guaranteed to match
-    // any value of the scrutinee's type — `Wildcard`, `Binding`, or (for
-    // tuple scrutinees) `Tuple` patterns whose element patterns are all
-    // irrefutable too (guaranteed by D1: only bindings/wildcards/tuples are
-    // allowed in sub-pattern position, and tuples are product types with no
-    // internal refutability). seeing one means every subsequent arm is dead.
-    let mut irrefutable_seen = false;
     let mut typed_arms: Vec<typed_hir::TypedMatchArm> = Vec::with_capacity(arms.len());
+    // Patterns translated so far, for the incremental reachability (usefulness)
+    // check: an arm is reachable iff its pattern matches some value none of the
+    // preceding arms' patterns do.
+    let mut prior_patterns: Vec<typed_hir::MatchPattern<'tcx>> = Vec::with_capacity(arms.len());
     // the type all arm bodies must produce
     let mut result_ty: Option<Ty<'tcx>> = forced_expected;
     // substitutions from the scrutinee's instantiation (empty for plain enums),
@@ -183,10 +167,6 @@ fn type_check_match_arms_inner<'tcx>(
         .unwrap_or_default();
 
     for arm in arms {
-        if irrefutable_seen {
-            return Err(AstTypeError::UnreachableMatchArm { range: arm.range });
-        }
-
         let mut bindings: PatternBindings<'tcx> = Vec::new();
 
         // validate & translate the pattern (always at "top level" — the
@@ -209,33 +189,6 @@ fn type_check_match_arms_inner<'tcx>(
                         found_enum: ctx.get_enum(*pat_er).name.clone(),
                         range: arm.range,
                     });
-                }
-                // Only register this arm as "covering" the outer variant when the
-                // payload sub-pattern is irrefutable.  A refutable inner pattern
-                // (e.g. `E#A(E#B)`) does not fully cover the outer variant — the
-                // caller still needs a wildcard/binding catch-all, and multiple arms
-                // can share the same outer variant with different inner patterns.
-                if !qpattern_payload_is_refutable(payload.as_deref()) {
-                    if !covered_variants.insert(*variant_idx) {
-                        let variant_name =
-                            ctx.get_enum(enum_ref).variants[*variant_idx].name.clone();
-                        return Err(AstTypeError::DuplicateMatchPattern {
-                            pattern: variant_name,
-                            range: arm.range,
-                        });
-                    }
-                } else {
-                    // Payload is refutable.  Try to track which inner-enum variant this
-                    // arm covers, so that multiple arms can collectively exhaust an inner
-                    // enum and together count as covering the outer variant.
-                    record_nested_enum_coverage(
-                        ctx,
-                        enum_ref,
-                        *variant_idx,
-                        payload.as_deref(),
-                        arm.range,
-                        &mut nested_enum_coverage,
-                    )?;
                 }
                 let typed_payload = check_variant_payload_pattern(
                     ctx,
@@ -268,24 +221,6 @@ fn type_check_match_arms_inner<'tcx>(
                         range: arm.range,
                     }
                 })?;
-                // Same coverage logic: only insert if the inner pattern is irrefutable.
-                if !qpattern_payload_is_refutable(payload.as_deref()) {
-                    if !covered_variants.insert(idx) {
-                        return Err(AstTypeError::DuplicateMatchPattern {
-                            pattern: variant.clone(),
-                            range: arm.range,
-                        });
-                    }
-                } else {
-                    record_nested_enum_coverage(
-                        ctx,
-                        enum_ref,
-                        idx,
-                        payload.as_deref(),
-                        arm.range,
-                        &mut nested_enum_coverage,
-                    )?;
-                }
                 let typed_payload = check_variant_payload_pattern(
                     ctx,
                     enum_ref,
@@ -304,10 +239,7 @@ fn type_check_match_arms_inner<'tcx>(
                 }
             }
             qhir::QPattern::Tuple(sub_patterns) => {
-                let typed =
-                    check_tuple_pattern(ctx, sub_patterns, scrutinee_ty, arm.range, &mut bindings)?;
-                irrefutable_seen = true;
-                typed
+                check_tuple_pattern(ctx, sub_patterns, scrutinee_ty, arm.range, &mut bindings)?
             }
             qhir::QPattern::IntLit(n) => {
                 // Int literal patterns are only valid against an Int scrutinee.
@@ -320,16 +252,7 @@ fn type_check_match_arms_inner<'tcx>(
                         range: arm.range,
                     });
                 }
-                // duplicate detection
-                if !covered_int_lits.insert(*n) {
-                    return Err(AstTypeError::DuplicateMatchPattern {
-                        pattern: n.to_string(),
-                        range: arm.range,
-                    });
-                }
                 typed_hir::MatchPattern::IntLit(*n)
-                // note: NOT setting irrefutable_seen — Int literals are
-                // refutable
             }
             qhir::QPattern::BoolLit(b) => {
                 // Bool literal patterns are only valid against a Bool scrutinee.
@@ -342,32 +265,26 @@ fn type_check_match_arms_inner<'tcx>(
                         range: arm.range,
                     });
                 }
-                // track coverage: false = 0, true = 1
-                let idx = *b as usize;
-                if !covered_variants.insert(idx) {
-                    return Err(AstTypeError::DuplicateMatchPattern {
-                        pattern: b.to_string(),
-                        range: arm.range,
-                    });
-                }
                 typed_hir::MatchPattern::BoolLit(*b)
-                // note: NOT setting irrefutable_seen — Bool literals are
-                // refutable
             }
             qhir::QPattern::Binding { var, range: brange } => {
                 bindings.push((*var, scrutinee_ty, *brange));
-                irrefutable_seen = true;
                 typed_hir::MatchPattern::Binding {
                     var: *var,
                     ty: scrutinee_ty,
                     range: *brange,
                 }
             }
-            qhir::QPattern::Wildcard => {
-                irrefutable_seen = true;
-                typed_hir::MatchPattern::Wildcard
-            }
+            qhir::QPattern::Wildcard => typed_hir::MatchPattern::Wildcard,
         };
+
+        // Reachability: this arm is dead if its pattern matches no value the
+        // preceding arms leave uncovered (catches both exact duplicates and
+        // any arm shadowed by an earlier catch-all or constructor set).
+        if !arm_is_reachable(ctx, scrutinee_ty, &prior_patterns, &match_pattern) {
+            return Err(AstTypeError::UnreachableMatchArm { range: arm.range });
+        }
+        prior_patterns.push(match_pattern.clone());
 
         // extend the env with this arm's pattern bindings (immutable — D4).
         // Bindings live in the current lexical scope (the enclosing block).
@@ -395,181 +312,314 @@ fn type_check_match_arms_inner<'tcx>(
         });
     }
 
-    // Nested-enum promotion: if all inner variants for a given outer variant are
-    // covered by arms with refutable payloads, count the outer variant as covered.
-    for (&outer_vi, (inner_er, inner_covered)) in &nested_enum_coverage {
-        if !covered_variants.contains(&outer_vi) {
-            let num_inner = ctx.get_enum(*inner_er).variants.len();
-            if inner_covered.len() == num_inner {
-                covered_variants.insert(outer_vi);
-            }
-        }
+    // Exhaustiveness: the match covers every value iff the all-wildcard row is
+    // *not* useful against the arms (no uncovered witness exists). Works
+    // uniformly for enums, bools, ints, tuples, and arbitrarily nested patterns.
+    let witnesses = exhaustiveness_witnesses(ctx, scrutinee_ty, &prior_patterns);
+    if !witnesses.is_empty() {
+        return Err(AstTypeError::NonExhaustiveMatch {
+            enum_name: enum_ref
+                .map(|er| ctx.get_enum(er).name.clone())
+                .unwrap_or_else(|| ctx.display_ty(scrutinee_ty).to_string()),
+            uncovered: witnesses,
+            range,
+        });
     }
-
-    // exhaustiveness:
-    //  - enum scrutinees: require every variant to be covered, unless an
-    //    irrefutable pattern (wildcard/binding) was seen
-    //  - tuple scrutinees: every legal pattern is irrefutable (D1), so a single arm
-    //    is always exhaustive — `irrefutable_seen` is guaranteed `true` by the time
-    //    we get here (every branch above that can apply to a tuple scrutinee sets
-    //    it), so there is nothing further to check.
-    check_exhaustiveness(
-        ctx,
-        scrutinee_ty,
-        enum_ref,
-        &covered_variants,
-        irrefutable_seen,
-        range,
-    )?;
 
     Ok(typed_arms)
 }
 
-/// When an outer variant arm has a **refutable** payload, attempt to record the
-/// specific inner-enum variant that this arm covers, so that multiple arms that
-/// together exhaust an inner enum can collectively count as covering the outer
-/// variant (nested-enum exhaustiveness, todo 7).
-///
-/// Only fires when:
-/// - the outer variant's declared payload type is a direct enum (not wrapped in
-///   a tuple)
-/// - the payload pattern is a `Variant` or `Tag` whose own payload is
-///   irrefutable
-///
-/// On a duplicate inner variant (same (outer_vi, inner_vi) pair already
-/// recorded), returns an error.
-fn record_nested_enum_coverage<'tcx>(
-    ctx: &CompileCtx<'tcx>,
-    outer_er: EnumRef<'tcx>,
-    outer_vi: usize,
-    payload: Option<&qhir::QPattern<'tcx>>,
-    arm_range: Range,
-    nested: &mut std::collections::BTreeMap<
-        usize,
-        (EnumRef<'tcx>, std::collections::BTreeSet<usize>),
-    >,
-) -> Result<(), AstTypeError<'tcx>> {
-    // The outer variant's declared payload type must be a direct enum.
-    let outer_payload_ty = ctx.get_enum(outer_er).variants[outer_vi].payload.get();
-    let Some(payload_ty) = outer_payload_ty else {
-        return Ok(());
-    };
-    let inner_er = match payload_ty.kind() {
-        TyKind::Enum(er) => *er,
-        _ => return Ok(()), // payload is not an enum — nothing to track
-    };
-    // Resolve the inner variant index from the payload pattern.
-    let inner_vi = match payload {
-        Some(qhir::QPattern::Variant {
-            variant_idx: vi,
-            payload: inner_p,
-            ..
-        }) => {
-            if qpattern_payload_is_refutable(inner_p.as_deref()) {
-                return Ok(()); // 3+ level nesting: skip for now
-            }
-            *vi
-        }
-        Some(qhir::QPattern::Tag {
-            variant: name,
-            payload: inner_p,
-        }) => {
-            if qpattern_payload_is_refutable(inner_p.as_deref()) {
-                return Ok(()); // 3+ level nesting: skip for now
-            }
-            match ctx.lookup_variant(inner_er, name) {
-                Some(vi) => vi,
-                None => return Ok(()), // unknown tag — type error reported elsewhere
-            }
-        }
-        _ => return Ok(()), // not a direct variant/tag payload
-    };
-    // Record the inner variant.  Duplicate = same inner variant seen twice.
-    let entry = nested
-        .entry(outer_vi)
-        .or_insert_with(|| (inner_er, std::collections::BTreeSet::new()));
-    if !entry.1.insert(inner_vi) {
-        let outer_name = ctx.get_enum(outer_er).variants[outer_vi].name.clone();
-        let inner_name = ctx.get_enum(inner_er).variants[inner_vi].name.clone();
-        return Err(AstTypeError::DuplicateMatchPattern {
-            pattern: format!("{}({})", outer_name, inner_name),
-            range: arm_range,
-        });
-    }
-    Ok(())
+// ── Pattern usefulness (Maranget, ML'08) ─────────────────────────────────────
+//
+// A single algorithm drives both reachability and exhaustiveness, over the same
+// pattern matrix the decision-tree lowering uses. `useful(P, q)` answers: does
+// the row `q` match some value that no row of the matrix `P` matches? Then:
+//   - arm `i` is **reachable** iff its row is useful against arms `0..i`;
+//   - the match is **exhaustive** iff the all-wildcard row is *not* useful
+//     against every arm (an uncovered value would be a witness of usefulness).
+// This subsumes the old ad-hoc coverage sets and correctly handles refutable
+// patterns nested in tuples / at arbitrary depth.
+
+/// A constructor identifying one "shape" a value of a column type can take.
+#[derive(Clone, PartialEq)]
+enum Ctor {
+    /// enum variant by index.
+    Variant(usize),
+    Int(i64),
+    Bool(bool),
+    /// the sole constructor of a tuple type (arity = tuple width).
+    Tuple,
 }
 
-/// Verify that a match expression's arm set is exhaustive.
-///
-/// - `enum_ref = Some(er)`: scrutinee is an enum; every variant index in
-///   `0..num_variants` must appear in `covered` unless `has_irrefutable` is
-///   true (a wildcard/binding arm matches everything remaining).
-/// - `enum_ref = None`, `scrutinee_ty = Bool`: exhaustive iff `has_irrefutable`
-///   or both `false` (0) and `true` (1) appear in `covered`.
-/// - `enum_ref = None`, `scrutinee_ty = Int`: exhaustive iff `has_irrefutable`
-///   (Int is unbounded; literal arms alone can never cover all values).
-/// - `enum_ref = None`, otherwise (Tuple etc.): trivially exhaustive.
-fn check_exhaustiveness<'tcx>(
+/// A normalised pattern for the usefulness matrix: either a wildcard (covering
+/// `Binding`/`Wildcard`) or a constructor applied to sub-patterns. Carries no
+/// type information — column types are tracked alongside the matrix.
+#[derive(Clone)]
+enum Pat {
+    Wild,
+    Ctor { ctor: Ctor, args: Vec<Pat> },
+}
+
+/// Normalise a typed pattern into a [`Pat`] (dropping bindings to wildcards —
+/// bindings impose no test; variable extraction happens at the matched arm).
+fn to_pat(p: &typed_hir::MatchPattern<'_>) -> Pat {
+    match p {
+        typed_hir::MatchPattern::Wildcard | typed_hir::MatchPattern::Binding { .. } => Pat::Wild,
+        typed_hir::MatchPattern::Variant {
+            variant_idx,
+            payload,
+            ..
+        } => Pat::Ctor {
+            ctor: Ctor::Variant(*variant_idx),
+            args: payload.iter().map(|(_, sub)| to_pat(sub)).collect(),
+        },
+        typed_hir::MatchPattern::Tuple { elems, .. } => Pat::Ctor {
+            ctor: Ctor::Tuple,
+            args: elems.iter().map(to_pat).collect(),
+        },
+        typed_hir::MatchPattern::IntLit(n) => Pat::Ctor {
+            ctor: Ctor::Int(*n),
+            args: Vec::new(),
+        },
+        typed_hir::MatchPattern::BoolLit(b) => Pat::Ctor {
+            ctor: Ctor::Bool(*b),
+            args: Vec::new(),
+        },
+    }
+}
+
+/// The complete set of constructors for `ty`, or `None` if the type has no
+/// finite signature that literal patterns could exhaust (e.g. `Int`, or a type
+/// that cannot be matched refutably at all). A `Some` signature means a match is
+/// exhaustive once every listed constructor is covered.
+fn type_signature<'tcx>(ctx: &CompileCtx<'tcx>, ty: Ty<'tcx>) -> Option<Vec<Ctor>> {
+    if let Some((er, _, _)) = enum_instantiation(ctx, ty) {
+        let n = ctx.get_enum(er).variants.len();
+        return Some((0..n).map(Ctor::Variant).collect());
+    }
+    match ty.kind() {
+        TyKind::Bool => Some(vec![Ctor::Bool(false), Ctor::Bool(true)]),
+        TyKind::Tuple(_) => Some(vec![Ctor::Tuple]),
+        _ => None,
+    }
+}
+
+/// The field types introduced by specialising `ty`'s column on `ctor` (the
+/// sub-occurrences). Empty for nullary constructors.
+fn ctor_field_tys<'tcx>(
+    ctx: &mut CompileCtx<'tcx>,
+    ty: Ty<'tcx>,
+    ctor: &Ctor,
+) -> Vec<Ty<'tcx>> {
+    match ctor {
+        Ctor::Variant(vi) => match enum_instantiation(ctx, ty) {
+            Some((er, inst, region_inst)) => {
+                match ctx.get_enum(er).variants[*vi].payload.get() {
+                    Some(p) => {
+                        let p = subst(ctx, p, &inst);
+                        vec![ctx.region_subst_ty(p, &region_inst)]
+                    }
+                    None => Vec::new(),
+                }
+            }
+            None => Vec::new(),
+        },
+        Ctor::Tuple => match ty.kind() {
+            TyKind::Tuple(tys) => tys.to_vec(),
+            _ => Vec::new(),
+        },
+        Ctor::Int(_) | Ctor::Bool(_) => Vec::new(),
+    }
+}
+
+/// Render a constructor (with already-rendered argument strings) as a pattern,
+/// for non-exhaustiveness witnesses.
+fn render_ctor<'tcx>(
     ctx: &CompileCtx<'tcx>,
-    scrutinee_ty: Ty<'tcx>,
-    enum_ref: Option<EnumRef<'tcx>>,
-    covered: &std::collections::BTreeSet<usize>,
-    has_irrefutable: bool,
-    range: Range,
-) -> Result<(), AstTypeError<'tcx>> {
-    if has_irrefutable {
-        return Ok(());
-    }
-    if let Some(enum_ref) = enum_ref {
-        let enum_def = ctx.get_enum(enum_ref);
-        let num_variants = enum_def.variants.len();
-        if covered.len() < num_variants {
-            let uncovered: Vec<String> = (0..num_variants)
-                .filter(|i| !covered.contains(i))
-                .map(|i| enum_def.variants[i].name.clone())
-                .collect();
-            return Err(AstTypeError::NonExhaustiveMatch {
-                enum_name: enum_def.name.clone(),
-                uncovered,
-                range,
-            });
-        }
-        return Ok(());
-    }
-    // Tuple (or unit) — trivially exhaustive (the single irrefutable arm was
-    // required). Int — literal arms alone cannot be exhaustive; a wildcard or
-    // binding is required. Bool — exhaustive iff both false (0) and true (1)
-    // are covered.
-    match scrutinee_ty.kind() {
-        TyKind::Bool => {
-            if covered.contains(&0) && covered.contains(&1) {
-                Ok(())
+    ty: Ty<'tcx>,
+    ctor: &Ctor,
+    args: &[String],
+) -> String {
+    match ctor {
+        Ctor::Variant(vi) => {
+            let name = match enum_instantiation(ctx, ty) {
+                Some((er, _, _)) => ctx.get_enum(er).variants[*vi].name.clone(),
+                None => format!("#{vi}"),
+            };
+            if args.is_empty() {
+                name
             } else {
-                let uncovered: Vec<&str> = [(0usize, "false"), (1, "true")]
-                    .iter()
-                    .filter(|(i, _)| !covered.contains(i))
-                    .map(|(_, name)| *name)
-                    .collect();
-                Err(AstTypeError::NonExhaustiveMatch {
-                    enum_name: "Bool".to_string(),
-                    uncovered: uncovered.into_iter().map(str::to_string).collect(),
-                    range,
-                })
+                format!("{name}({})", args.join(", "))
             }
         }
-        TyKind::Int => {
-            // Int is unbounded; literal arms alone cannot be exhaustive.
-            Err(AstTypeError::NonExhaustiveMatch {
-                enum_name: "Int".to_string(),
-                uncovered: vec!["(all other integers)".to_string()],
-                range,
-            })
-        }
-        _ => {
-            // Tuple / Unit / etc. — trivially exhaustive once any arm is present.
-            Ok(())
+        Ctor::Tuple => format!("({})", args.join(", ")),
+        Ctor::Bool(b) => b.to_string(),
+        Ctor::Int(n) => n.to_string(),
+    }
+}
+
+/// Distinct head constructors appearing in column 0 of the matrix.
+fn head_ctors(matrix: &[Vec<Pat>]) -> Vec<Ctor> {
+    let mut out: Vec<Ctor> = Vec::new();
+    for row in matrix {
+        if let Pat::Ctor { ctor, .. } = &row[0]
+            && !out.contains(ctor)
+        {
+            out.push(ctor.clone());
         }
     }
+    out
+}
+
+/// Specialise the matrix on `ctor`: keep rows whose head is `ctor` (expanding
+/// its sub-patterns into the leading columns) or a wildcard (expanding to
+/// wildcards), dropping rows headed by a different constructor.
+fn specialize<'tcx>(
+    ctx: &mut CompileCtx<'tcx>,
+    matrix: &[Vec<Pat>],
+    col_tys: &[Ty<'tcx>],
+    ctor: &Ctor,
+    head_ty: Ty<'tcx>,
+) -> (Vec<Vec<Pat>>, Vec<Ty<'tcx>>) {
+    let field_tys = ctor_field_tys(ctx, head_ty, ctor);
+    let arity = field_tys.len();
+    let mut new_tys = field_tys;
+    new_tys.extend_from_slice(&col_tys[1..]);
+
+    let mut rows = Vec::new();
+    for row in matrix {
+        let rest = &row[1..];
+        match &row[0] {
+            Pat::Ctor { ctor: c, args } if c == ctor => {
+                let mut new_row = args.clone();
+                new_row.extend_from_slice(rest);
+                rows.push(new_row);
+            }
+            Pat::Wild => {
+                let mut new_row = vec![Pat::Wild; arity];
+                new_row.extend_from_slice(rest);
+                rows.push(new_row);
+            }
+            _ => {} // different constructor — does not match
+        }
+    }
+    (rows, new_tys)
+}
+
+/// The default matrix: rows headed by a wildcard, with column 0 dropped.
+fn default_matrix<'tcx>(
+    matrix: &[Vec<Pat>],
+    col_tys: &[Ty<'tcx>],
+) -> (Vec<Vec<Pat>>, Vec<Ty<'tcx>>) {
+    let rows = matrix
+        .iter()
+        .filter(|row| matches!(row[0], Pat::Wild))
+        .map(|row| row[1..].to_vec())
+        .collect();
+    (rows, col_tys[1..].to_vec())
+}
+
+/// `useful(P, q)` — `Some(witness)` if `q` matches a value no row of `P` does
+/// (the witness is one such value, rendered per column), `None` otherwise.
+fn useful<'tcx>(
+    ctx: &mut CompileCtx<'tcx>,
+    matrix: &[Vec<Pat>],
+    col_tys: &[Ty<'tcx>],
+    q: &[Pat],
+) -> Option<Vec<String>> {
+    // Base case: no columns. Useful iff the matrix has no rows.
+    if col_tys.is_empty() {
+        return matrix.is_empty().then(Vec::new);
+    }
+    let head_ty = col_tys[0];
+
+    match &q[0] {
+        Pat::Ctor { ctor, args } => {
+            let (sp, sp_tys) = specialize(ctx, matrix, col_tys, ctor, head_ty);
+            let mut q2 = args.clone();
+            q2.extend_from_slice(&q[1..]);
+            useful(ctx, &sp, &sp_tys, &q2).map(|w| wrap_witness(ctx, head_ty, ctor, w))
+        }
+        Pat::Wild => {
+            let used = head_ctors(matrix);
+            let sig = type_signature(ctx, head_ty);
+            let complete = sig
+                .as_ref()
+                .is_some_and(|all| all.iter().all(|c| used.contains(c)));
+            if complete {
+                // Every constructor is present: q is useful iff it is useful for
+                // at least one of them.
+                for ctor in sig.unwrap() {
+                    let arity = ctor_field_tys(ctx, head_ty, &ctor).len();
+                    let (sp, sp_tys) = specialize(ctx, matrix, col_tys, &ctor, head_ty);
+                    let mut q2 = vec![Pat::Wild; arity];
+                    q2.extend_from_slice(&q[1..]);
+                    if let Some(w) = useful(ctx, &sp, &sp_tys, &q2) {
+                        return Some(wrap_witness(ctx, head_ty, &ctor, w));
+                    }
+                }
+                None
+            } else {
+                // The column is not covered: recurse on the default matrix and
+                // prepend a witness for a value the present constructors miss.
+                let (dp, dp_tys) = default_matrix(matrix, col_tys);
+                let w_rest = useful(ctx, &dp, &dp_tys, &q[1..])?;
+                let head = match &sig {
+                    Some(all) => match all.iter().find(|c| !used.contains(c)) {
+                        Some(missing) => {
+                            let arity = ctor_field_tys(ctx, head_ty, missing).len();
+                            render_ctor(ctx, head_ty, missing, &vec!["_".to_string(); arity])
+                        }
+                        None => "_".to_string(),
+                    },
+                    // infinite / unmatchable type: any unlisted value works.
+                    None => "_".to_string(),
+                };
+                let mut w = vec![head];
+                w.extend(w_rest);
+                Some(w)
+            }
+        }
+    }
+}
+
+/// Wrap the leading `arity` witness columns into `ctor`, leaving the rest.
+fn wrap_witness<'tcx>(
+    ctx: &mut CompileCtx<'tcx>,
+    head_ty: Ty<'tcx>,
+    ctor: &Ctor,
+    mut w: Vec<String>,
+) -> Vec<String> {
+    let arity = ctor_field_tys(ctx, head_ty, ctor).len();
+    let rest = w.split_off(arity);
+    let head = render_ctor(ctx, head_ty, ctor, &w);
+    let mut out = vec![head];
+    out.extend(rest);
+    out
+}
+
+/// Is `arm` reachable given the `prior` arms (i.e. useful against them)?
+fn arm_is_reachable<'tcx>(
+    ctx: &mut CompileCtx<'tcx>,
+    scrutinee_ty: Ty<'tcx>,
+    prior: &[typed_hir::MatchPattern<'tcx>],
+    arm: &typed_hir::MatchPattern<'tcx>,
+) -> bool {
+    let matrix: Vec<Vec<Pat>> = prior.iter().map(|p| vec![to_pat(p)]).collect();
+    let q = vec![to_pat(arm)];
+    useful(ctx, &matrix, &[scrutinee_ty], &q).is_some()
+}
+
+/// Witnesses of non-exhaustiveness for a match over `scrutinee_ty` with the
+/// given arm patterns — empty when the match is exhaustive.
+fn exhaustiveness_witnesses<'tcx>(
+    ctx: &mut CompileCtx<'tcx>,
+    scrutinee_ty: Ty<'tcx>,
+    arms: &[typed_hir::MatchPattern<'tcx>],
+) -> Vec<String> {
+    let matrix: Vec<Vec<Pat>> = arms.iter().map(|p| vec![to_pat(p)]).collect();
+    let q = vec![Pat::Wild];
+    useful(ctx, &matrix, &[scrutinee_ty], &q).unwrap_or_default()
 }
 
 /// validate & translate an (optional) payload sub-pattern attached to a
@@ -656,40 +706,19 @@ fn check_tuple_pattern<'tcx>(
         elems: typed_elems,
     })
 }
-
-/// Returns `true` if `pattern` can fail to match some values of its type —
-/// i.e. it is **refutable**.  `Wildcard` and `Binding` are irrefutable;
-/// `Variant`, `Tag`, `IntLit`, `BoolLit` are refutable.  `Tuple` is refutable
-/// iff *any* of its elements is refutable (recursive).
-fn qpattern_is_refutable<'tcx>(pattern: &qhir::QPattern<'tcx>) -> bool {
-    match pattern {
-        qhir::QPattern::Variant { .. }
-        | qhir::QPattern::Tag { .. }
-        | qhir::QPattern::IntLit(_)
-        | qhir::QPattern::BoolLit(_) => true,
-        qhir::QPattern::Tuple(elems) => elems.iter().any(qpattern_is_refutable),
-        qhir::QPattern::Binding { .. } | qhir::QPattern::Wildcard => false,
-    }
-}
-
-/// Convenience wrapper: is the *payload* of a variant pattern refutable?
-fn qpattern_payload_is_refutable<'tcx>(payload: Option<&qhir::QPattern<'tcx>>) -> bool {
-    payload.is_some_and(qpattern_is_refutable)
-}
-
 /// validate & translate a pattern that appears in a *nested* (sub-pattern)
 /// position — inside a payload or a tuple element.
 ///
 /// Supported here:
 /// - bindings, wildcards — irrefutable
 /// - tuple destructuring — recursively irrefutable
-/// - enum variant patterns (`E#V(p)` or `#V(p)`) — refutable but well-typed;
-///   exhaustiveness in nested position is **not** checked (noted as a future
-///   todo); the check chain in MIR lowering handles the runtime test
+/// - enum variant patterns (`E#V(p)` or `#V(p)`) — refutable but well-typed
+/// - integer / boolean literal patterns (`IntLit`, `BoolLit`) — refutable; the
+///   usefulness checker tracks their coverage at any depth
 ///
-/// Still rejected: integer/boolean literal patterns (`IntLit`, `BoolLit`) —
-/// these cannot be nested because Int is unbounded and exhaustiveness for Bool
-/// at an arbitrary nesting depth is not yet tracked.
+/// Refutability at any depth is fine: the usefulness checker decides
+/// exhaustiveness over the whole pattern matrix and the decision tree emits the
+/// runtime test against the extracted sub-occurrence.
 fn check_subpattern<'tcx>(
     ctx: &mut CompileCtx<'tcx>,
     pattern: &qhir::QPattern<'tcx>,
@@ -772,16 +801,33 @@ fn check_subpattern<'tcx>(
                 payload: typed_payload,
             })
         }
-        qhir::QPattern::IntLit(n) => Err(AstTypeError::RefutableNestedPattern {
-            enum_name: "Int".to_string(),
-            variant: n.to_string(),
-            range: arm_range,
-        }),
-        qhir::QPattern::BoolLit(b) => Err(AstTypeError::RefutableNestedPattern {
-            enum_name: "Bool".to_string(),
-            variant: b.to_string(),
-            range: arm_range,
-        }),
+        // Literal sub-patterns are refutable but well-typed: the usefulness
+        // checker tracks their coverage at any depth and the decision tree tests
+        // them against the (extracted) sub-occurrence.
+        qhir::QPattern::IntLit(n) => {
+            if !matches!(expected_ty.kind(), TyKind::Int) {
+                return Err(AstTypeError::PatternTypeMismatch {
+                    message: format!(
+                        "integer literal pattern used against non-Int type {}",
+                        ctx.display_ty(expected_ty)
+                    ),
+                    range: arm_range,
+                });
+            }
+            Ok(typed_hir::MatchPattern::IntLit(*n))
+        }
+        qhir::QPattern::BoolLit(b) => {
+            if !matches!(expected_ty.kind(), TyKind::Bool) {
+                return Err(AstTypeError::PatternTypeMismatch {
+                    message: format!(
+                        "boolean literal pattern used against non-Bool type {}",
+                        ctx.display_ty(expected_ty)
+                    ),
+                    range: arm_range,
+                });
+            }
+            Ok(typed_hir::MatchPattern::BoolLit(*b))
+        }
         qhir::QPattern::Tuple(sub_patterns) => {
             check_tuple_pattern(ctx, sub_patterns, expected_ty, arm_range, bindings)
         }
@@ -1038,6 +1084,29 @@ pub(super) fn check<'tcx>(
         // down so `__ptr_cast` can take its target type from the context.
         qhir::Expression::IntrinsicCall { fn_name, args, .. } if fn_name.is_ptr_op() => {
             let e = infer_ptr_op(ctx, env, *fn_name, args, Some(expected), expr.range)?;
+            if !e.ty.eq_modulo_regions(expected) {
+                return Err(AstTypeError::TypeError {
+                    message: format!("expected type {} but found {}", expected, e.ty),
+                    expected,
+                    found: e.ty,
+                    range: expr.range,
+                });
+            }
+            Ok(e)
+        }
+
+        // Push the expected type into a typeclass method call so a receiver that
+        // appears only in the result (`pure<A>(x: A): F<A>`) can be solved from
+        // it. `infer_method_call` then verifies the result matches.
+        qhir::Expression::MethodCall {
+            class,
+            method,
+            args,
+        } => {
+            let e = infer_method_call(ctx, env, expr, *class, method, args, Some(expected))?;
+            if let Some(coerced) = coerce_never(&e, expected) {
+                return Ok(coerced);
+            }
             if !e.ty.eq_modulo_regions(expected) {
                 return Err(AstTypeError::TypeError {
                     message: format!("expected type {} but found {}", expected, e.ty),

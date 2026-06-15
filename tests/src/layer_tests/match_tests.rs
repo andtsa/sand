@@ -773,7 +773,8 @@ fn match_nested_variant_then_wildcard_typechecks() {
 
 // ─── Nested enum-variant patterns in payload position ─────────────────
 
-/// basic nested variant pattern with a wildcard catch-all type-checks.
+/// a nested variant pattern with a *reachable* wildcard catch-all type-checks
+/// (the wildcard covers `Wrap(A)`, which is not matched explicitly).
 #[test]
 fn match_nested_variant_with_catchall_typechecks() {
     run_hir(
@@ -781,7 +782,6 @@ fn match_nested_variant_with_catchall_typechecks() {
          type Outer = Wrap(Inner)
          def main(): Int :=
              match Outer#Wrap(Inner#B(42)) {
-                 Outer#Wrap(Inner#A)    => 0,
                  Outer#Wrap(Inner#B(n)) => n,
                  _                     => -1,
              }",
@@ -799,7 +799,6 @@ fn match_nested_variant_selects_correct_arm() {
                  Box#Colored(Color#Red)   => 1,
                  Box#Colored(Color#Green) => 2,
                  Box#Colored(Color#Blue)  => 3,
-                 _                        => 0,
              }",
     );
     assert_eq!(result, lang::ir_types::typed_hir::Expression::Int(2));
@@ -815,7 +814,6 @@ fn match_nested_variant_binds_inner_payload() {
              match Outer#Wrap(Inner#B(99)) {
                  Outer#Wrap(Inner#A)    => 0,
                  Outer#Wrap(Inner#B(n)) => n,
-                 _                     => -1,
              }",
     );
     assert_eq!(result, lang::ir_types::typed_hir::Expression::Int(99));
@@ -846,7 +844,6 @@ fn match_nested_tag_pattern_works() {
              match Outer#Wrap(Inner#B(7)) {
                  Outer#Wrap(#A)    => 0,
                  Outer#Wrap(#B(n)) => n,
-                 _                 => -1,
              }",
     );
     assert_eq!(result, lang::ir_types::typed_hir::Expression::Int(7));
@@ -1004,5 +1001,187 @@ fn match_bool_pattern_on_int_scrutinee_is_error() {
                  true => 1,
                  _    => 0,
              }",
+    );
+}
+
+// ── Maranget decision-tree lowering: nested variants, shared discriminant
+// dispatch, and literal columns with a default. Each runs through *both*
+// interpreters (HIR vs MIR) to confirm the tree agrees with direct
+// interpretation. ────────────────────────────────────────────────────────────
+
+fn run_both(src: &str) -> Expression<'static> {
+    let (hir, mir) = run_hir_and_mir(src);
+    assert_eq!(hir, mir, "HIR and MIR disagree for:\n  {src}");
+    hir
+}
+
+#[test]
+fn decision_tree_nested_variant_dispatch() {
+    // `Some(Ok(_))` / `Some(Err(_))` / `None` all share the outer discriminant,
+    // which the decision tree tests once before branching on the inner one.
+    let src = "type Res = Ok(Int) | Err(Int) \n \
+               type Opt = None | Some(Res) \n \
+               def classify(o: Opt): Int := match o { \n \
+                   Opt#Some(Res#Ok(v)) => v, \n \
+                   Opt#Some(Res#Err(e)) => 0 - e, \n \
+                   Opt#None => 100, \n \
+               } \n";
+    assert_eq!(
+        run_both(&format!("{src} def main(): Int := classify(Opt#Some(Res#Ok(7)))")),
+        Expression::Int(7)
+    );
+    assert_eq!(
+        run_both(&format!("{src} def main(): Int := classify(Opt#Some(Res#Err(5)))")),
+        Expression::Int(-5)
+    );
+    assert_eq!(
+        run_both(&format!("{src} def main(): Int := classify(Opt#None)")),
+        Expression::Int(100)
+    );
+}
+
+#[test]
+fn decision_tree_int_literals_with_default() {
+    let src = "def name(n: Int): Int := match n { \n \
+                   0 => 10, \n \
+                   1 => 11, \n \
+                   2 => 12, \n \
+                   _ => 99, \n \
+               } \n";
+    assert_eq!(
+        run_both(&format!("{src} def main(): Int := name(1)")),
+        Expression::Int(11)
+    );
+    assert_eq!(
+        run_both(&format!("{src} def main(): Int := name(7)")),
+        Expression::Int(99)
+    );
+}
+
+#[test]
+fn decision_tree_many_arms_same_enum() {
+    // Several arms over one enum lower to a single discriminant read followed by
+    // a branch chain — exercising constructor collection + the default path.
+    let src = "type Day = Mon | Tue | Wed | Thu | Fri \n \
+               def num(d: Day): Int := match d { \n \
+                   Day#Mon => 1, \n \
+                   Day#Tue => 2, \n \
+                   Day#Wed => 3, \n \
+                   Day#Thu => 4, \n \
+                   Day#Fri => 5, \n \
+               } \n";
+    assert_eq!(
+        run_both(&format!("{src} def main(): Int := num(Day#Thu)")),
+        Expression::Int(4)
+    );
+}
+
+// ── Usefulness-based exhaustiveness / reachability (replaces the ad-hoc
+// coverage checker). These exercise cases the old checker got wrong:
+// refutable patterns nested in tuples (a soundness hole) and precise
+// redundancy detection across product/nested patterns. ───────────────────────
+
+/// Refutable patterns nested in a tuple are now checked column-wise: a match
+/// covering only one product combination is non-exhaustive (the old checker
+/// wrongly treated any tuple pattern as a catch-all and accepted this).
+#[test]
+fn tuple_with_refutable_element_must_be_exhaustive() {
+    typecheck_fails(
+        "type Opt = N | S(Int)
+         def main(): Int := match (Opt#N, 7) { (Opt#S(x), y) => x + y }",
+    );
+}
+
+/// A tuple match that does cover every product combination type-checks and
+/// selects the right arm — the previously-rejected valid program.
+#[test]
+fn tuple_with_refutable_elements_exhaustive_runs() {
+    let (hir, mir) = run_hir_and_mir(
+        "type Opt = N | S(Int)
+         def main(): Int := match (Opt#S(5), 7) {
+             (Opt#S(x), y) => x + y,
+             (Opt#N, y)    => y,
+         }",
+    );
+    assert_eq!(hir, mir);
+    assert_eq!(hir, lang::ir_types::typed_hir::Expression::Int(12));
+}
+
+/// A wildcard arm after a set of arms that already exhaust the type is
+/// redundant and flagged unreachable (matches Rust). The old checker missed
+/// this when exhaustiveness came from nested variant coverage.
+#[test]
+fn redundant_catchall_after_exhaustive_nested_arms_is_rejected() {
+    typecheck_fails(
+        "type Color = Red | Green | Blue
+         type Box = Colored(Color)
+         def main(): Int := match Box#Colored(Color#Green) {
+             Box#Colored(Color#Red)   => 1,
+             Box#Colored(Color#Green) => 2,
+             Box#Colored(Color#Blue)  => 3,
+             _                        => 0,
+         }",
+    );
+}
+
+/// Two-deep nesting is handled: covering every leaf is exhaustive without a
+/// catch-all (the old one-level tracker forced a wildcard here).
+#[test]
+fn deeply_nested_match_is_exhaustive_without_wildcard() {
+    let (hir, mir) = run_hir_and_mir(
+        "type Inner = A | B
+         type Mid = L(Inner) | R(Inner)
+         def f(m: Mid): Int := match m {
+             Mid#L(Inner#A) => 1,
+             Mid#L(Inner#B) => 2,
+             Mid#R(Inner#A) => 3,
+             Mid#R(Inner#B) => 4,
+         }
+         def main(): Int := f(Mid#R(Inner#A))",
+    );
+    assert_eq!(hir, mir);
+    assert_eq!(hir, lang::ir_types::typed_hir::Expression::Int(3));
+}
+
+/// Missing one deep leaf is non-exhaustive.
+#[test]
+fn deeply_nested_match_missing_leaf_is_rejected() {
+    typecheck_fails(
+        "type Inner = A | B
+         type Mid = L(Inner) | R(Inner)
+         def f(m: Mid): Int := match m {
+             Mid#L(Inner#A) => 1,
+             Mid#L(Inner#B) => 2,
+             Mid#R(Inner#A) => 3,
+         }
+         def main(): Int := f(Mid#L(Inner#A))",
+    );
+}
+
+/// Literal patterns may now nest inside a payload; the usefulness checker tracks
+/// their coverage and the decision tree tests the extracted sub-occurrence.
+#[test]
+fn nested_literal_patterns_dispatch_and_bind() {
+    let (hir, mir) = run_hir_and_mir(
+        "type Opt = N | S(Int)
+         def classify(o: Opt): Int := match o {
+             #S(0) => 100,
+             #S(5) => 105,
+             #S(x) => x,
+             #N    => -1,
+         }
+         def main(): Int := classify(#S(5)) + classify(#S(42)) + classify(#N)",
+    );
+    assert_eq!(hir, mir);
+    assert_eq!(hir, Expression::Int(105 + 42 - 1));
+}
+
+/// A nested-literal match with no catch-all for the remaining integers is
+/// non-exhaustive.
+#[test]
+fn nested_literal_without_catchall_is_non_exhaustive() {
+    typecheck_fails(
+        "type Opt = N | S(Int)
+         def main(): Int := match Opt#S(1) { #S(0) => 1, #N => 2 }",
     );
 }

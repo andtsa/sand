@@ -50,16 +50,85 @@ fn lambda_returned_then_called() {
 }
 
 #[test]
+fn lambda_captures_a_local_by_move() {
+    assert_eq!(
+        run_both(
+            "def apply(f: Int -> Int, x: Int): Int := f(x) \n \
+             def main(): Int := { let y: Int = 10; let g = fn (x: Int) -> x + y; apply(g, 32) }",
+        ),
+        Expression::Int(42)
+    );
+}
+
+#[test]
+fn lambda_captures_multiple_locals() {
+    assert_eq!(
+        run_both(
+            "def apply(f: Int -> Int, x: Int): Int := f(x) \n \
+             def main(): Int := { \n \
+                 let a: Int = 10; let b: Int = 100; \n \
+                 let g = fn (x: Int) -> x + a + b; \n \
+                 apply(g, 1) }",
+        ),
+        Expression::Int(111)
+    );
+}
+
+#[test]
+fn escaping_closure_captures_a_parameter() {
+    // The returned closure outlives `make_adder`'s frame, capturing its
+    // parameter `n` (the environment is heap-allocated).
+    assert_eq!(
+        run_both(
+            "def apply(f: Int -> Int, x: Int): Int := f(x) \n \
+             def make_adder(n: Int): Int -> Int := fn (x: Int) -> x + n \n \
+             def main(): Int := apply(make_adder(30), 12)",
+        ),
+        Expression::Int(42)
+    );
+}
+
+#[test]
 fn lambda_typechecks_as_a_value() {
     let (ctx, _p) = typecheck("def main(): Int := { let g: Int -> Int = fn (x: Int) -> x; 0 }");
     std::mem::forget(ctx);
 }
 
+// ── calling modes: `->` (reusable), `-[Owned]>` (consuming), `-[BorrowedMut]>` ──
+
 #[test]
-fn capturing_an_enclosing_variable_is_rejected() {
-    // `y` is not in scope inside the lambda (non-capturing milestone).
-    typecheck_fails(
-        "def main(): Int := { let y: Int = 5; let g = fn (x: Int) -> x + y; g(1) }",
+fn reusable_closure_is_callable_repeatedly() {
+    assert_eq!(
+        run_both("def main(): Int := { let g = fn (x: Int) -> x + 1; g(10) + g(20) }"),
+        Expression::Int(32)
+    );
+}
+
+#[test]
+fn consuming_closure_is_callable_once() {
+    assert_eq!(
+        run_both("def main(): Int := { let g = fn (x: Int) -[Owned]> x + 1; g(41) }"),
+        Expression::Int(42)
+    );
+}
+
+#[test]
+fn consuming_closure_called_twice_is_rejected() {
+    // `-[Owned]>` (FnOnce) is consumed by the call, so a second call is a
+    // use-after-move.
+    typecheck_fails("def main(): Int := { let g = fn (x: Int) -[Owned]> x + 1; g(1) + g(2) }");
+}
+
+#[test]
+fn reusable_subsumes_consuming_at_a_call_site() {
+    // A reusable lambda may be passed where a consuming arrow is expected
+    // (`Fn ⊆ FnOnce`).
+    assert_eq!(
+        run_both(
+            "def use_once(f: Int -[Owned]> Int): Int := f(5) \n \
+             def main(): Int := use_once(fn (x: Int) -> x + 37)",
+        ),
+        Expression::Int(42)
     );
 }
 

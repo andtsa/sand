@@ -122,3 +122,113 @@ fn constructor_arity_mismatch_is_rejected() {
          def main(): Int := 0",
     );
 }
+
+// ── Step 13: the `Functor`/`Applicative`/`Monad` hierarchy (from `core.sand`)
+// instantiated for `Option`, exercising HKT instances whose methods take and
+// return lambdas. The codegen path is covered by `examples/monad.sand`; these
+// assert HIR/MIR interpreter agreement. ──────────────────────────────────────
+
+/// An `Option` with `Functor`/`Applicative`/`Monad` instances, plus an
+/// `or_else` to project the result back to an `Int` for assertions.
+const MONAD: &str = "\
+    type Option<a> = None | Some(a) \n \
+    impl Functor for Option { \n \
+        def fmap<A, B>(x: Option<A>, f: A -> B): Option<B> := match x { \n \
+            Option#None => Option#None, \n \
+            Option#Some(v) => Option#Some(f(v)), \n \
+        } \n \
+    } \n \
+    impl Applicative for Option { \n \
+        def pure<A>(x: A): Option<A> := Option#Some(x) \n \
+        def ap<A, B>(f: Option<A -> B>, x: Option<A>): Option<B> := match f { \n \
+            Option#None => Option#None, \n \
+            Option#Some(g) => match x { \n \
+                Option#None => Option#None, \n \
+                Option#Some(v) => Option#Some(g(v)), \n \
+            }, \n \
+        } \n \
+    } \n \
+    impl Monad for Option { \n \
+        def bind<A, B>(x: Option<A>, f: A -> Option<B>): Option<B> := match x { \n \
+            Option#None => Option#None, \n \
+            Option#Some(v) => f(v), \n \
+        } \n \
+    } \n \
+    def or_else(x: Option<Int>, d: Int): Int := match x { \n \
+        Option#None => d, \n \
+        Option#Some(v) => v, \n \
+    } \n";
+
+#[test]
+fn functor_fmap_over_present_value() {
+    assert_eq!(
+        run_both(&format!(
+            "{MONAD} def main(): Int := \n \
+             or_else(fmap(Option#Some(21), fn (n: Int) -> n * 2), 0)"
+        )),
+        Expression::Int(42)
+    );
+}
+
+#[test]
+fn functor_fmap_over_absent_short_circuits() {
+    assert_eq!(
+        run_both(&format!(
+            "{MONAD} def main(): Int := \n \
+             {{ let none: Option<Int> = Option#None; \n \
+                or_else(fmap(none, fn (n: Int) -> n * 2), 7) }}"
+        )),
+        Expression::Int(7)
+    );
+}
+
+#[test]
+fn applicative_pure_dispatches_from_expected_type() {
+    // `pure` has no `F<_>` argument; its instance is recovered from the annotated
+    // expected type (`Option<Int>`).
+    assert_eq!(
+        run_both(&format!(
+            "{MONAD} def main(): Int := \n \
+             {{ let lifted: Option<Int> = pure(42); or_else(lifted, 0) }}"
+        )),
+        Expression::Int(42)
+    );
+}
+
+#[test]
+fn applicative_ap_applies_wrapped_function() {
+    assert_eq!(
+        run_both(&format!(
+            "{MONAD} def main(): Int := \n \
+             {{ let wf: Option<Int -> Int> = Option#Some(fn (n: Int) -> n + 1); \n \
+                or_else(ap(wf, Option#Some(21)), 0) }}"
+        )),
+        Expression::Int(22)
+    );
+}
+
+#[test]
+fn monad_bind_chains_computations() {
+    assert_eq!(
+        run_both(&format!(
+            "{MONAD} def main(): Int := \n \
+             or_else(bind(Option#Some(21), fn (n: Int) -> Option#Some(n + 22)), 0)"
+        )),
+        Expression::Int(43)
+    );
+}
+
+#[test]
+fn monad_instance_requires_superclasses() {
+    // `Monad requires Applicative requires Functor`; an `impl Monad` without the
+    // superclass instances is rejected.
+    typecheck_fails(
+        "type Option<a> = None | Some(a) \n \
+         impl Monad for Option { \n \
+             def bind<A, B>(x: Option<A>, f: A -> Option<B>): Option<B> := match x { \n \
+                 Option#None => Option#None, \n \
+                 Option#Some(v) => f(v), \n \
+             } \n \
+         } \n def main(): Int := 0",
+    );
+}

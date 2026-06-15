@@ -276,10 +276,11 @@ impl<'tcx> OwnershipChecker<'_, 'tcx> {
 
             Expression::Tuple(elems) => Expression::Tuple(self.check_exprs(elems, env)?),
 
-            // A lambda body is its own scope (Step 13): the parameter is the only
-            // binding live before it — a non-capturing lambda references nothing
-            // outside — so it is treated like a one-parameter function body
-            // (check the body, drop the unconsumed parameter at exit).
+            // A lambda body is its own scope (Step 13): the parameter and the
+            // captured variables are live within it. Captures are owned by the
+            // closure (its environment), so they are *not* dropped at body exit
+            // (only the parameter + body-local bindings are); moving a (non-Copy)
+            // capture into the closure consumes it in the enclosing scope.
             Expression::Lambda {
                 param,
                 body,
@@ -287,8 +288,32 @@ impl<'tcx> OwnershipChecker<'_, 'tcx> {
             } => {
                 let mut body_env = OwnershipEnv::new();
                 body_env.declare(param.name, param.ty);
+                for (c, cty) in captures {
+                    body_env.declare(*c, *cty);
+                }
                 let new_body = self.check_expr(body, &mut body_env)?;
-                let param_drops = self.scope_exit_drops(&body_env, &HashSet::new());
+                let pre: HashSet<UniqVar<'tcx>> = captures.iter().map(|(c, _)| *c).collect();
+                let param_drops = self.scope_exit_drops(&body_env, &pre);
+
+                // moving captures into the closure consumes them in the
+                // enclosing scope (Copy captures are duplicated, not moved).
+                for (c, cty) in captures {
+                    if !self.is_copy(*cty) {
+                        match env.get(c) {
+                            Some(OwnershipState::Owned) => env.mark_moved(*c, range),
+                            Some(OwnershipState::Moved { at }) => {
+                                return Err(self.err(OwnershipError::UseAfterMove {
+                                    name: self.ctx.uniq_variable_name(c),
+                                    moved_at: *at,
+                                    used_at: range,
+                                    is_clone: self.ctx.is_clone(*cty),
+                                }));
+                            }
+                            None => {}
+                        }
+                    }
+                }
+
                 Expression::Lambda {
                     param: param.clone(),
                     body: Box::new(attach_drops(new_body, param_drops)),
@@ -296,12 +321,27 @@ impl<'tcx> OwnershipChecker<'_, 'tcx> {
                 }
             }
 
-            // Indirect call: the function value and the argument are both
-            // consumed, like an ordinary call's operands.
-            Expression::Apply { func, arg } => Expression::Apply {
-                func: Box::new(self.check_expr(func, env)?),
-                arg: Box::new(self.check_expr(arg, env)?),
-            },
+            // Indirect call (Step 13): a *consuming* (`-[Owned]>`, ≈ FnOnce)
+            // closure is consumed by the call (callable once); a reusable
+            // (`->`) or mutating (`-[BorrowedMut]>`) closure is not — calling it
+            // is a non-consuming read of the callee, so it can be called
+            // repeatedly. (FnMut's exclusive-env enforcement is deferred.)
+            Expression::Apply { func, arg } => {
+                let consuming = matches!(
+                    func.ty.kind(),
+                    crate::lang::types::TyKind::Fn(_, _, crate::lang::types::FnMode::Consuming)
+                );
+                let func_checked = if consuming || !matches!(func.expr, Expression::Var(_)) {
+                    self.check_expr(func, env)?
+                } else {
+                    // reusable/mutating callee bound to a variable: do not move it.
+                    (**func).clone()
+                };
+                Expression::Apply {
+                    func: Box::new(func_checked),
+                    arg: Box::new(self.check_expr(arg, env)?),
+                }
+            }
 
             // `Closure` is produced by monomorphisation, after the ownership
             // pass; it is a plain value here (captures are a later milestone).

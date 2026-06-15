@@ -12,8 +12,8 @@ use crate::ir_types::typed_hir;
 use crate::ir_types::typed_hir::TypedFunction;
 use crate::lang::intrinsics::INTRINSICS;
 use crate::lang::intrinsics::Intrinsic;
+use crate::compiler::structure::UniqVar;
 use crate::lang::types::EnumRef;
-use crate::lang::types::FnMode;
 use crate::lang::types::Kind;
 use crate::lang::types::Region;
 use crate::lang::types::RegionVar;
@@ -718,13 +718,14 @@ pub(super) fn infer_ptr_op<'tcx>(
 /// - **type-parameter receiver** -> dispatch is deferred to monomorphisation
 ///   (emitted as `typed_hir::MethodCall`), provided a `where T : C` bound
 ///   licenses it
-fn infer_method_call<'tcx>(
+pub(super) fn infer_method_call<'tcx>(
     ctx: &mut CompileCtx<'tcx>,
     env: &TypeEnv<'tcx>,
     expr: &qhir::Expr<'tcx>,
     class: TypeclassRef,
     method: &str,
     args: &[qhir::Expr<'tcx>],
+    expected: Option<Ty<'tcx>>,
 ) -> Result<typed_hir::Expr<'tcx>, AstTypeError<'tcx>> {
     let arg_exprs: Vec<typed_hir::Expr<'tcx>> = args
         .iter()
@@ -741,6 +742,15 @@ fn infer_method_call<'tcx>(
         for (decl, a) in mdef.param_tys.iter().zip(&arg_exprs) {
             let _ = unify(ctx, *decl, a.ty, &mut mapping);
         }
+    }
+    // Return-type-driven dispatch: when the receiver `F` appears only in the
+    // method's result (e.g. `pure<A>(x: A): F<A>`), it cannot be solved from the
+    // arguments. Seed it from the expected type of the call instead (the
+    // bidirectional `check` path supplies it, e.g. `let x: Opt<Int> = pure(5)`).
+    if let Some(exp) = expected
+        && !mapping.contains_key(&class_param)
+    {
+        let _ = unify(ctx, mdef.ret_ty, exp, &mut mapping);
     }
     let receiver =
         mapping
@@ -953,25 +963,36 @@ pub(super) fn infer<'tcx>(
             })
         }
 
-        // A lambda `fn (x: T) -> e` (Step 13). The body is typed in a scope
-        // containing *only* the parameter (the non-capturing milestone): a
-        // reference to an enclosing variable is therefore an `UnboundVariable`
-        // error, which is exactly the "captures not yet supported" boundary.
-        // Inner `let`s still bind normally; functions resolve via the context.
-        qhir::Expression::Lambda { param, body } => {
+        // A lambda `fn (x: T) -> e` (Step 13). The body is typed in the
+        // enclosing scope extended with the parameter, so it may reference outer
+        // variables — those become *captures* (by move). The captured set is the
+        // body's referenced variables that are bound in the *outer* scope (this
+        // excludes the parameter and any variables bound inside the body, whose
+        // uniquified names are absent from the outer env).
+        qhir::Expression::Lambda { param, body, mode } => {
             let home = ctx.current_scope_region();
-            let mut body_env: TypeEnv<'tcx> = TypeEnv::new();
+            let mut body_env = env.clone();
             body_env.insert(
                 param.name,
                 (param.ty, Kind::Owned, param.is_mutable, home),
             );
             let body_typed = infer(ctx, &body_env, body)?;
-            let fn_ty = ctx.fn_ty(param.ty, body_typed.ty, FnMode::Reusable);
+
+            let mut referenced = std::collections::HashSet::new();
+            crate::analysis::annotate::collect_dependencies(&body_typed.expr, &mut referenced);
+            let mut captures: Vec<(UniqVar<'tcx>, Ty<'tcx>)> = referenced
+                .into_iter()
+                .filter(|v| *v != param.name)
+                .filter_map(|v| env.get(&v).map(|binding| (v, binding.0)))
+                .collect();
+            captures.sort_by_key(|(v, _)| *v);
+
+            let fn_ty = ctx.fn_ty(param.ty, body_typed.ty, *mode);
             Ok(typed_hir::Expr {
                 expr: typed_hir::Expression::Lambda {
                     param: param.clone(),
                     body: Box::new(body_typed),
-                    captures: Vec::new(),
+                    captures,
                 },
                 range: expr.range,
                 ty: fn_ty,
@@ -1178,7 +1199,7 @@ pub(super) fn infer<'tcx>(
             class,
             method,
             args,
-        } => infer_method_call(ctx, env, expr, *class, method, args),
+        } => infer_method_call(ctx, env, expr, *class, method, args, None),
 
         qhir::Expression::Call { fn_name, args } => {
             let fun_sig = ctx.fun_sig(fn_name);

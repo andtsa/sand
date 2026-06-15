@@ -95,6 +95,33 @@ back into here.
 - **Consuming match binds *every* payload position** (wildcards → fresh
   bindings), so ownership's scope-exit drops reclaim any field the arm doesn't
   move out. This is *why* the original wildcard-leak concern is closed.
+- **Multi-payload constructors are tuple-payload sugar.** `Cons(Int, List)`,
+  `C#Mk(a, b)`, the pattern `#Cons(x, rest)`, and `let C#Mk(a, b) = …` all desugar
+  in `build_ast` to the single tuple payload `Cons((Int, List))` / `((a, b))` —
+  so the representation stays one-payload-per-variant and the old double-bracket
+  spelling keeps working unchanged. A single argument is *not* tuple-wrapped.
+- **Match lowers to a Maranget decision tree** (`explicate_control`,
+  `compile_match_matrix`): a pattern matrix is specialised one column at a time,
+  switching on each occurrence's discriminant/literal *once* and sharing common
+  sub-trees, instead of the old per-arm backtracking check-chain. Variable
+  bindings are *not* part of the tree — they are extracted at the matched arm by
+  walking the original pattern from the scrutinee, so the tree only decides
+  *which* arm wins. MIR has only a binary `Branch`, so a multi-constructor switch
+  is a chain of `disc == k` tests off a single discriminant read.
+- **Exhaustiveness + reachability run one usefulness algorithm** (Maranget's
+  `U(P,q)`, `useful` in `type_ast/check.rs`) over the same pattern matrix the
+  lowering uses — replacing the old ad-hoc coverage sets + one-level nested map +
+  `irrefutable_seen` flag. An arm is **reachable** iff its row is useful against
+  the arms above it (subsumes exact-duplicate and after-catch-all detection); the
+  match is **exhaustive** iff the wildcard row is *not* useful (an uncovered value
+  is the witness, rendered into the `NonExhaustiveMatch` error, e.g. `(N, _)`).
+  This fixed a **soundness hole**: refutable patterns nested in a tuple were
+  treated as irrefutable, so a non-exhaustive product match compiled and hit the
+  `Unreachable` MIR block at runtime. Now handles tuples, nested variants, and
+  nested literals (`#S(5)`) at arbitrary depth precisely; the checker also flags a
+  redundant catch-all after exhaustive nested arms (matching Rust). A nested
+  literal binds nothing — its equality test is emitted by the decision tree, and
+  binding extraction skips it.
 - **Structural `__drop_in_place` is codegen-generated per-type glue**, memoised
   and recursion-safe (a `Unique<T>` frees its cell after recursing the node;
   aggregates recurse fields). It is *not* routed through `unique_release`,
@@ -152,11 +179,61 @@ back into here.
   `typed_hir::Expression::Closure { func, captures }`, so both interpreters and
   codegen see the lifted form. A closure value is a fat pointer
   `{ fn_ptr, env_ptr }` (MIR `RValue::Closure`); an indirect call extracts the
-  fn pointer (`RValue::CallIndirect`). Done through codegen for **non-capturing**
-  lambdas (function types §1 + lambda values §2a + lifting/MIR/codegen §2b).
-- **Still to come:** capture analysis (env population, by-move then by-borrow),
-  the consuming/mutating arrows + §3.1 region, the variance follow-up, then
-  `Functor`/`Applicative`/`Monad`.
+  fn pointer (`RValue::CallIndirect`). Done through codegen for capturing and
+  non-capturing lambdas.
+- **Captures are by move.** `infer` collects the body's referenced outer-env vars
+  (`collect_dependencies`, filtered to the enclosing scope) into
+  `Lambda.captures`; mono `malloc`s the environment (`Unit`/single/tuple) and the
+  lifted fn unpacks it from its leading `env_ptr` via `__ptr_read`; ownership
+  moves each non-`Copy` capture in and drops it from the body. **The env is
+  leaked** (never freed) — documented limitation below. Escaping closures work.
+- **Calling modes via `-[k]>`.** `arrow_kind = Owned | BorrowedMut | Borrowed`
+  picks the `FnMode` (`Owned`→`Consuming`, `BorrowedMut`→`ReusableMut`, else
+  `Reusable`); bare `->` = `Reusable`. Ownership consumes the callee on `Apply`
+  **only** when its mode is `Consuming` — so reusable/mutating closures are
+  callable repeatedly, a consuming one is once-only (second call = use-after-move).
+- **Subsumption** (`FnMode::usable_as`, `Reusable <: ReusableMut <: Consuming` ≈
+  `Fn ⊆ FnMut ⊆ FnOnce`) is directional: applied in `eq_modulo_regions` (actual
+  `<:` expected) and `unify` (supplied `<:` declared), so a reusable lambda passes
+  where a consuming arrow is expected. Domains/codomains compared by equality
+  (no use-site subtyping between concrete types yet, so this is sound).
+- **Variance follow-up done (Step 5's deferred half).** Function arrows are the
+  first *consumer* positions, so `check_variance` now does full polarity analysis
+  (`param_polarity` in `build_ast.rs`): a function *argument* flips polarity
+  (contravariant), its *result* keeps it; generic applications `F<..>` compose the
+  current polarity with `F`'s declared per-param variance; a param at both
+  polarities is invariant. An **explicit** `+a`/`-a` is checked against the
+  inferred polarity (`+` rejects contravariant occurrences, `-` rejects covariant
+  ones); an **absent** annotation is inferred and never rejected (`TypeParam`
+  gains `explicit_variance`). Variance still has no *use-site* effect (no concrete
+  subtyping) — it is a declaration-site soundness check only.
+  - **Known imprecision (on-paper unsound, runtime-harmless):** the `App(er,..)`
+    composition in `param_polarity` reads `er`'s *declared/defaulted* parameter
+    variance, and an unannotated param defaults to `Covariant`. So a param that is
+    contravariant only because it flows through an *unannotated* intermediate is
+    mis-scored — e.g. `type Sink<a> = MkSink(a -> Int)` (no annotation) then
+    `type Relay<+a> = MkRelay(Sink<a>)` is wrongly **accepted** (`a` is really
+    contravariant in `Sink`). Harmless because variance has no use-site effect.
+    A fully sound fix is a **fixpoint** (mutual recursion makes a single ordered
+    pass impossible): add a `Bivariant` (∅, top) lattice element with join
+    `Cov ⊔ Con = Inv`; iterate `inferred(p) = ⊔ over occurrences of
+    (position_sign ∘ inferred_variance_of_constructor_passed_through)` to a fixed
+    point; validate explicit `+a`/`-a` against the result and **write the inferred
+    variance back into the `EnumDef`** (today it is computed for validation only
+    and never stored, which is the root of the imprecision). Gate this on the
+    language gaining subtyping — until then it only changes which *declarations*
+    are accepted, never any checking/runtime behaviour.
+- **`Functor`/`Applicative`/`Monad` live in `core.sand`** (Step 13's capstone):
+  HKT classes (`F : Owned -> Owned`) whose methods take/return lambdas
+  (`fmap`, `ap`, `bind`). `examples/monad.sand` instantiates them for `Option`
+  through codegen; `hkt_tests.rs` asserts HIR/MIR agreement.
+- **Return-type-driven dispatch** for `pure<A>(x: A): F<A>` (no `F<_>` argument to
+  resolve the instance from): the bidirectional `check` path threads the expected
+  type into `infer_method_call`, which seeds the receiver by unifying the method's
+  return type against it (so `let x: Option<Int> = pure(5)` picks the `Option`
+  instance). Falls back to argument-driven resolution when there is no expected.
+- **Deferred:** by-borrow *capture* (vs. move-only) + the §3.1 region stay gated
+  on stack closures.
 
 ### Typeclasses & misc
 - **Orphan rules are strict** — an `impl` is legal only if the crate owns the
@@ -269,6 +346,12 @@ Memory C — they are no longer open.)*
   to them.
 
 ### Functions / lambdas (Step 13)
+- **Closure environments are never freed (leak).** A capturing lambda heap-
+  allocates its env (a tuple of the captures) and the env is not freed on closure
+  drop — `type_needs_drop(Fn)` is false. Same interim-leak class as pre-C.5c
+  boxing; a future `Fn` drop-glue (free env) closes it. Captures are **by move**
+  only (Copy captures are copied); by-borrow capture comes with the borrowing
+  arrows.
 - **No stack-allocated closures.** `A -> B` is one concrete type with a uniform,
   type-erased fat pointer `{ fn_ptr, env_ptr }`, so a capturing closure's env
   can't be stored inline at the use site, and bare `->` is first-class with no

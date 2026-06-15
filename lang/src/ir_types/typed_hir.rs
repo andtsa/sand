@@ -187,7 +187,9 @@ pub enum Expression<'tcx> {
     Lambda {
         param: Parameter<'tcx>,
         body: Box<Expr<'tcx>>,
-        captures: Vec<UniqVar<'tcx>>,
+        /// Enclosing variables the body closes over (with their types), captured
+        /// by move. Empty for a non-capturing lambda.
+        captures: Vec<(UniqVar<'tcx>, Ty<'tcx>)>,
     },
     /// Application of a function value (indirect call) `func(arg)` (Step 13).
     Apply {
@@ -201,7 +203,7 @@ pub enum Expression<'tcx> {
     /// only — the HIR interpreter still runs `Lambda` directly.
     Closure {
         func: FunRef<'tcx>,
-        captures: Vec<UniqVar<'tcx>>,
+        captures: Vec<(UniqVar<'tcx>, Ty<'tcx>)>,
     },
 }
 

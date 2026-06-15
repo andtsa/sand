@@ -160,7 +160,7 @@ impl fmt::Display for Expression<'_> {
                 }
                 write!(f, ")")
             }
-            Expression::Lambda { param, body } => {
+            Expression::Lambda { param, body, .. } => {
                 write!(f, "fn ({:?}) -> {}", param.name, body.expr)
             }
             Expression::Apply { func, arg } => {

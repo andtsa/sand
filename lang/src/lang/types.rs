@@ -47,7 +47,6 @@ pub enum Kind {
 /// `Reusable` is the bare-`->` default (the common case, and what
 /// higher-order functions like `fmap` need). Only `Reusable` is produced from
 /// surface syntax until closures land; the others are reserved.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum FnMode {
     /// `→[Borrowed]`, ≈ Rust `Fn`: reads its environment; callable repeatedly.
@@ -56,6 +55,20 @@ pub enum FnMode {
     ReusableMut,
     /// `→[Owned]`, ≈ Rust `FnOnce`: may consume its environment; callable once.
     Consuming,
+}
+
+impl FnMode {
+    /// Subsumption `self <: other` (Step 13): a function of mode `self` is usable
+    /// where mode `other` is expected. A reusable (`Fn`) closure can stand in for
+    /// any arrow; a mutating (`FnMut`) one for a consuming (`FnOnce`) slot —
+    /// mirroring Rust's `Fn ⊆ FnMut ⊆ FnOnce`.
+    pub fn usable_as(self, other: FnMode) -> bool {
+        use FnMode::*;
+        matches!(
+            (self, other),
+            (Reusable, _) | (ReusableMut, ReusableMut | Consuming) | (Consuming, Consuming)
+        )
+    }
 }
 
 /// Canonical id of an interned arrow kind (`K₁ -> K₂`); see [`Kind::Arrow`].
@@ -353,7 +366,9 @@ impl<'tcx> Ty<'tcx> {
             {
                 xs.iter().zip(*ys).all(|(x, y)| x.eq_modulo_regions(*y))
             }
-            (TyKind::Fn(a1, r1, m1), TyKind::Fn(a2, r2, m2)) if m1 == m2 => {
+            // `self` is the actual type, `other` the expected; a function value
+            // may stand in for a more-permissive arrow (Step 13 subsumption).
+            (TyKind::Fn(a1, r1, m1), TyKind::Fn(a2, r2, m2)) if m1.usable_as(*m2) => {
                 a1.eq_modulo_regions(*a2) && r1.eq_modulo_regions(*r2)
             }
             _ => false,
@@ -491,7 +506,14 @@ impl fmt::Display for Ty<'_> {
                 }
                 write!(f, ">")
             }
-            TyKind::Fn(a, r, _) => write!(f, "{a} -> {r}"),
+            // The reusable arrow prints bare; the mutating/consuming arrows
+            // surface their kind so two arrows that differ only in mode (e.g.
+            // `Int -> Int` vs `Int -[Owned]> Int`) are distinguishable.
+            TyKind::Fn(a, r, mode) => match mode {
+                FnMode::Reusable => write!(f, "{a} -> {r}"),
+                FnMode::ReusableMut => write!(f, "{a} -[BorrowedMut]> {r}"),
+                FnMode::Consuming => write!(f, "{a} -[Owned]> {r}"),
+            },
             TyKind::Tuple(ts) => {
                 write!(f, "(")?;
                 for (i, t) in ts.iter().enumerate() {
