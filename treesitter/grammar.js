@@ -9,39 +9,46 @@ module.exports = grammar({
   word: $ => $.identifier,
 
   conflicts: $ => [
-    [$.constructor_expr, $.primary],
     [$.function_call, $.primary],
+    [$.constructor_expr, $.primary],
+    // self-conflicts: the optional payload `(…)` after a `#variant` must be
+    // attached greedily (GLR decides) rather than left dangling.
     [$.constructor_expr],
+    [$.tag_expr],
     [$.external_constructor_expr],
   ],
 
   rules: {
     program: $ => repeat(choice(
       $.function_definition,
+      $.extern_declaration,
       $.type_alias,
+      $.typeclass_declaration,
+      $.impl_declaration,
       $.module_declaration,
+      $.use_declaration,
     )),
 
+    // ========= Top-level: modules & imports =========
     module_declaration: $ => seq(
       'module',
       field('name', $.identifier),
       optional(';')
     ),
 
-    // ========= Enum type declarations =========
-    enum_variant: $ => seq(
-      field('name', $.identifier),
-      optional(seq('(', field('payload_type', $._type), ')'))
+    use_declaration: $ => seq(
+      'use',
+      $.use_path,
+      ';'
     ),
 
-    type_alias: $ => seq(
-      'type',
-      field('name', $.identifier),
-      '=',
-      field('variant', $.enum_variant),
-      repeat(seq('|', field('variant', $.enum_variant))),
-      optional(';')
+    use_path: $ => seq(
+      $.identifier,
+      repeat(seq('::', $.identifier)),
+      optional(seq('::', $.use_glob))
     ),
+
+    use_glob: _ => '*',
 
     // ========= Lexical =========
     comment: _ => token(choice(
@@ -49,21 +56,69 @@ module.exports = grammar({
       seq('//', /[^\n]*/)
     )),
 
-    identifier: _ => /[a-zA-Z][a-zA-Z0-9_]*/,
+    identifier: _ => /_*[a-zA-Z][a-zA-Z0-9_]*/,
+
+    // `_` placeholder (parameters, let-bindings)
+    empty_identifier: _ => '_',
 
     number: _ => /\d+/,
 
     boolean: _ => choice('true', 'false'),
 
+    // a lifetime / region: `'r`, `'static`
+    lifetime: _ => token(seq("'", /[a-zA-Z][a-zA-Z0-9_]*/)),
+
+    // ========= Generics (declaration position) =========
+    // <T>, <+a : Owned, -b, 'r>
+    type_params: $ => seq(
+      '<',
+      choice($.type_param, $.region_param),
+      repeat(seq(',', choice($.type_param, $.region_param))),
+      '>'
+    ),
+
+    type_param: $ => seq(
+      optional($.variance_ann),
+      field('name', $.identifier),
+      optional(seq(':', field('kind', $.kind_ann)))
+    ),
+
+    region_param: $ => $.lifetime,
+
+    variance_ann: _ => choice('+', '-'),
+
+    // a kind: `Owned`, `Never`, or an arrow `Owned -> Owned` (right-assoc)
+    kind_ann: $ => prec.right(seq(
+      $.kind_atom,
+      repeat(seq('->', $.kind_atom))
+    )),
+
+    kind_atom: $ => choice(
+      'Owned',
+      'Never',
+      seq('(', $.kind_ann, ')')
+    ),
+
+    // where 'r >= 's, T : C
+    where_clause: $ => seq(
+      'where',
+      $.where_constraint,
+      repeat(seq(',', $.where_constraint))
+    ),
+
+    where_constraint: $ => choice(
+      seq($.lifetime, '>=', $.lifetime),
+      seq(field('param', $.identifier), ':', field('class', $.identifier))
+    ),
+
     // ========= Types =========
-    // Qualified cross-module type: mod::TypeName
     qualified_type: $ => seq(
       field('module', $.identifier),
       '::',
       field('name', $.identifier)
     ),
 
-    // Ad-hoc structural tag union: #ok | #err | #pending
+    // Ad-hoc structural tag union: #ok | #err
     tag_type: $ => seq(
       '#', field('tag', $.identifier),
       repeat(seq('|', '#', field('tag', $.identifier)))
@@ -77,19 +132,109 @@ module.exports = grammar({
       ')'
     ),
 
-    // All type forms unified under one inline rule
-    _type: $ => choice(
+    // Generic instantiation: Option<Int>, Holder<'a, Int>
+    type_application: $ => seq(
+      field('name', $.identifier),
+      '<',
+      $.type_app_arg,
+      repeat(seq(',', $.type_app_arg)),
+      '>'
+    ),
+
+    type_app_arg: $ => choice($.lifetime, $._type),
+
+    // reference type: &T, &'r T, &'r mut T
+    borrow_type: $ => seq(
+      '&',
+      optional($.lifetime),
+      optional('mut'),
+      $._core_type
+    ),
+
+    // `->` (reusable) or `-[Owned|BorrowedMut|Borrowed]>` (the calling-mode arrow).
+    fn_arrow: $ => choice(
+      '->',
+      seq('-[', $.arrow_kind, ']>')
+    ),
+
+    arrow_kind: _ => choice('Owned', 'BorrowedMut', 'Borrowed'),
+
+    // a function type `A -> B`, right-associative; domain is a core type.
+    function_type: $ => prec.right(seq(
+      field('param', $._core_type),
+      $.fn_arrow,
+      field('return', $._type)
+    )),
+
+    // all non-function, non-ascribed type forms.
+    _core_type: $ => choice(
       'Int',
       'Bool',
       'Unit',
       $.qualified_type,
       $.tag_type,
       $.tuple_type,
+      $.type_application,
+      $.borrow_type,
       $.identifier   // named enum type
+    ),
+
+    // a type, optionally ascribed to a region: `Int @ 'r`
+    _type: $ => choice(
+      $.function_type,
+      $.region_ascription,
+      $._core_type
+    ),
+
+    region_ascription: $ => seq($._core_type, '@', $.lifetime),
+
+    // ========= Enum type declarations =========
+    // Multiple comma-separated payload types desugar to a single tuple payload.
+    enum_variant: $ => seq(
+      field('name', $.identifier),
+      optional(seq(
+        '(',
+        field('payload_type', $._type),
+        repeat(seq(',', field('payload_type', $._type))),
+        ')'
+      ))
+    ),
+
+    deriving_clause: $ => seq(
+      'deriving',
+      field('class', $.identifier),
+      repeat(seq(',', field('class', $.identifier)))
+    ),
+
+    type_alias: $ => seq(
+      'type',
+      field('name', $.identifier),
+      optional($.type_params),
+      '=',
+      field('variant', $.enum_variant),
+      repeat(seq('|', field('variant', $.enum_variant))),
+      optional($.deriving_clause),
+      optional(';')
     ),
 
     // ========= Functions =========
     function_definition: $ => seq(
+      'def',
+      field('name', $.identifier),
+      optional($.type_params),
+      '(',
+      optional($.parameters),
+      ')',
+      ':',
+      field('return_type', $._type),
+      optional($.where_clause),
+      ':=',
+      field('body', $._expression)
+    ),
+
+    // External (FFI) declaration: a bodyless `def`.
+    extern_declaration: $ => seq(
+      'extern',
       'def',
       field('name', $.identifier),
       '(',
@@ -97,8 +242,7 @@ module.exports = grammar({
       ')',
       ':',
       field('return_type', $._type),
-      ':=',
-      field('body', $._expression)
+      ';'
     ),
 
     parameters: $ => seq(
@@ -109,9 +253,50 @@ module.exports = grammar({
 
     parameter: $ => seq(
       optional('mut'),
-      field('name', choice($.identifier, '_')),
+      field('name', choice($.identifier, $.empty_identifier)),
       ':',
       field('type', $._type)
+    ),
+
+    // ========= Typeclasses & impls =========
+    typeclass_declaration: $ => seq(
+      'typeclass',
+      field('name', $.identifier),
+      $.type_params,
+      optional($.requires_clause),
+      '{',
+      repeat($.typeclass_method),
+      '}'
+    ),
+
+    // a method signature, with an optional default body.
+    typeclass_method: $ => seq(
+      'def',
+      field('name', $.identifier),
+      optional($.type_params),
+      '(',
+      optional($.parameters),
+      ')',
+      ':',
+      field('return_type', $._type),
+      optional($.where_clause),
+      optional(seq(':=', field('body', $._expression)))
+    ),
+
+    requires_clause: $ => seq(
+      'requires',
+      field('class', $.identifier),
+      repeat(seq(',', field('class', $.identifier)))
+    ),
+
+    impl_declaration: $ => seq(
+      'impl',
+      field('class', $.identifier),
+      'for',
+      field('type', $._type),
+      '{',
+      repeat($.function_definition),
+      '}'
     ),
 
     // ========= Statements =========
@@ -124,28 +309,89 @@ module.exports = grammar({
       ';'
     ),
 
-    // Type annotation is optional: let x = ... or let x: Int = ...
+    // let-binding LHS forms: a plain (optionally mut) binding, a tuple pattern, a
+    // borrow binding, or a constructor pattern (the latter needs an `else`).
     declaration: $ => seq(
       'let',
-      optional('mut'),
-      field('name', choice($.identifier, '_')),
+      choice(
+        $.let_constructor,
+        $.let_tuple,
+        $.borrow_binding,
+        seq(optional('mut'), field('name', choice($.identifier, $.empty_identifier)))
+      ),
       optional(seq(':', field('type', $._type))),
       '=',
-      field('value', $._expression)
+      field('value', $._expression),
+      optional(seq('else', field('fallback', $._expression)))
+    ),
+
+    let_tuple: $ => seq(
+      '(',
+      $.let_tuple_elem,
+      repeat1(seq(',', $.let_tuple_elem)),
+      ')'
+    ),
+
+    let_tuple_elem: $ => seq(optional('mut'), $.identifier),
+
+    let_binding_elem: $ => choice($.identifier, $.empty_identifier),
+
+    let_binding_tuple: $ => seq(
+      '(',
+      $.let_binding_elem,
+      repeat1(seq(',', $.let_binding_elem)),
+      ')'
+    ),
+
+    let_destructure: $ => choice(
+      $.let_constructor,
+      $.let_binding_tuple,
+      $.let_binding_elem
+    ),
+
+    let_constructor: $ => seq(
+      field('type_name', $.identifier),
+      '#',
+      field('variant', $.identifier),
+      optional(seq('(', $.let_destructure, ')'))
+    ),
+
+    borrow_binding: $ => seq(
+      '&',
+      optional('mut'),
+      choice($.identifier, $.empty_identifier)
     ),
 
     assignment: $ => seq(
-      field('name', $.identifier),
+      field('target', choice($.deref_expr, $.identifier)),
       '=',
       field('value', $._expression)
     ),
 
     // ========= Expressions =========
     _expression: $ => choice(
+      $.lambda_expr,
       $.logic_or,
       $.if_expression,
       $.while_expression,
       $.match_expression
+    ),
+
+    // Lambda value: `fn (x: T) -> e` or `fn (x: T) -[Owned]> e`.
+    lambda_expr: $ => prec.right(seq(
+      'fn',
+      $.lambda_param,
+      $.fn_arrow,
+      field('body', $._expression)
+    )),
+
+    lambda_param: $ => seq(
+      '(',
+      optional('mut'),
+      field('param', $.identifier),
+      ':',
+      field('param_type', $._type),
+      ')'
     ),
 
     if_expression: $ => prec.right(seq(
@@ -186,6 +432,8 @@ module.exports = grammar({
       $.constructor_pattern,
       $.tag_pattern,
       $.tuple_pattern,
+      $.bool_literal_pattern,
+      $.int_literal_pattern,
       $.binding_pattern,
       $.wildcard_pattern
     ),
@@ -194,13 +442,23 @@ module.exports = grammar({
       field('type_name', $.identifier),
       '#',
       field('variant', $.identifier),
-      optional(seq('(', field('pattern', $.pattern), ')'))
+      optional(seq(
+        '(',
+        field('pattern', $.pattern),
+        repeat(seq(',', field('pattern', $.pattern))),
+        ')'
+      ))
     ),
 
     tag_pattern: $ => seq(
       '#',
       field('tag', $.identifier),
-      optional(seq('(', field('pattern', $.pattern), ')'))
+      optional(seq(
+        '(',
+        field('pattern', $.pattern),
+        repeat(seq(',', field('pattern', $.pattern))),
+        ')'
+      ))
     ),
 
     tuple_pattern: $ => seq(
@@ -210,29 +468,38 @@ module.exports = grammar({
       ')'
     ),
 
+    int_literal_pattern: _ => token(seq(optional('-'), /\d+/)),
+
+    bool_literal_pattern: _ => choice('true', 'false'),
+
     binding_pattern: $ => $.identifier,
 
     wildcard_pattern: _ => '_',
 
-    // ========= Block =========
-    block: $ => seq(
-      '{',
-      repeat($.statement),
-      optional($._expression),
-      '}'
+    // ========= Constructors & calls =========
+    // `f::<T>(args)`
+    turbofish: $ => seq(
+      '::',
+      '<',
+      $._type,
+      repeat(seq(',', $._type)),
+      '>'
     ),
 
-    // ========= Constructors & calls =========
-    external_constructor_expr: $ => prec.left(10, seq(
+    external_constructor_expr: $ => seq(
       field('module', $.identifier),
       '::',
       field('type_name', $.identifier),
       '#',
       field('variant', $.identifier),
-      optional(seq('(', field('payload', $._expression), ')'))
-    )),
+      optional(seq(
+        '(',
+        field('payload', $._expression),
+        repeat(seq(',', field('payload', $._expression))),
+        ')'
+      ))
+    ),
 
-    // mod::fn(args)
     external_function_call: $ => seq(
       field('module', $.identifier),
       '::',
@@ -245,20 +512,33 @@ module.exports = grammar({
       ')'
     ),
 
-    constructor_expr: $ => prec.left(10, seq(
+    constructor_expr: $ => seq(
       field('type_name', $.identifier),
       '#',
       field('variant', $.identifier),
-      optional(seq('(', field('payload', $._expression), ')'))
-    )),
+      optional(seq(
+        '(',
+        field('payload', $._expression),
+        repeat(seq(',', field('payload', $._expression))),
+        ')'
+      ))
+    ),
 
+    // Bare tag, optionally with payload(s): `#None`, `#Some(x)`, `#Cons(x, xs)`.
     tag_expr: $ => seq(
       '#',
-      field('variant', $.identifier)
+      field('variant', $.identifier),
+      optional(seq(
+        '(',
+        field('payload', $._expression),
+        repeat(seq(',', field('payload', $._expression))),
+        ')'
+      ))
     ),
 
     function_call: $ => seq(
       field('function', $.identifier),
+      optional($.turbofish),
       '(',
       optional(seq(
         $._expression,
@@ -275,12 +555,27 @@ module.exports = grammar({
       ')'
     ),
 
+    // borrow `&e` / `&mut e` and dereference `*e`, each binding to a primary.
+    borrow_expr: $ => prec(11, seq(
+      '&',
+      optional('mut'),
+      $.primary
+    )),
+
+    deref_expr: $ => prec(11, seq('*', $.primary)),
+
+    // ========= Block =========
+    block: $ => seq(
+      '{',
+      repeat($.statement),
+      optional($._expression),
+      '}'
+    ),
+
     // ========= Primary =========
-    // Order matters for conflict resolution:
-    //   external_constructor_expr before external_function_call (same prefix)
-    //   constructor_expr before function_call and bare identifier (same prefix)
-    //   tuple_expr before generic parenthesized expression
     primary: $ => choice(
+      $.borrow_expr,
+      $.deref_expr,
       $.tuple_expr,
       seq('(', $._expression, ')'),
       $.external_constructor_expr,
@@ -296,7 +591,6 @@ module.exports = grammar({
 
     // ========= Operator precedence =========
     // Highest precedence (9) → lowest (1)
-
     unary: $ => choice(
       prec.right(9, seq(choice('-', '!'), $.unary)),
       $.primary
@@ -327,19 +621,21 @@ module.exports = grammar({
       repeat(seq(choice('==', '!=', '≠'), $.comparison))
     )),
 
+    // Boolean operators are keywords (`and`/`or`/`xor`) or symbols (`&&`/`⊕`);
+    // `|` is reserved for the enum/tag-union separator, not boolean-or.
     logic_and: $ => prec.left(3, seq(
       $.equality,
-      repeat(seq('&', $.equality))
+      repeat(seq(choice('and', '&&'), $.equality))
     )),
 
     logic_xor: $ => prec.left(2, seq(
       $.logic_and,
-      repeat(seq(choice('⊕', '¡'), $.logic_and))
+      repeat(seq(choice('xor', '⊕'), $.logic_and))
     )),
 
     logic_or: $ => prec.left(1, seq(
       $.logic_xor,
-      repeat(seq('|', $.logic_xor))
+      repeat(seq('or', $.logic_xor))
     ))
   }
 });

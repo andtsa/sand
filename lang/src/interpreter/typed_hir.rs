@@ -56,6 +56,99 @@ pub enum InterpError {
     UnOpTypeError(Uop, String),
     #[error("runtime error: {0}")]
     Runtime(String),
+    #[error("evaluation exceeded the step budget (possible non-termination)")]
+    StepLimitExceeded,
+}
+
+thread_local! {
+    /// Per-thread step budget for [`TypedProgram::eval_expr`]. `None` (the
+    /// default) is unlimited; [`TypedProgram::interpret_with_output_bounded`]
+    /// arms it so callers like the LSP can run user code without risking a hang
+    /// on an accidental infinite loop. Decremented once per evaluated
+    /// expression; hitting zero yields [`InterpError::StepLimitExceeded`].
+    static STEP_BUDGET: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+    /// Current `eval_expr` recursion depth, tracked only while a budget is armed.
+    /// Bounds native stack use so infinite *recursion* aborts cleanly rather than
+    /// overflowing the stack.
+    static CALL_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Max `eval_expr` recursion depth in bounded mode. Sized to stay within
+/// [`BOUNDED_INTERP_STACK`] (the dedicated thread bounded runs use), so
+/// infinite recursion errors cleanly before the native stack overflows.
+const MAX_EVAL_DEPTH: u32 = 16_000;
+
+/// Stack size for the dedicated thread a bounded run executes on. Large enough
+/// that [`MAX_EVAL_DEPTH`] frames fit comfortably, so deep-but-finite recursion
+/// works and infinite recursion is caught by the depth guard rather than a
+/// native overflow.
+const BOUNDED_INTERP_STACK: usize = 128 * 1024 * 1024;
+
+/// Resets the step budget to unlimited when dropped (RAII), so a bounded run
+/// can't leak its budget onto a later unbounded one on the same thread.
+struct StepBudgetGuard;
+
+impl StepBudgetGuard {
+    fn arm(steps: u64) -> Self {
+        STEP_BUDGET.with(|b| b.set(Some(steps)));
+        CALL_DEPTH.with(|c| c.set(0));
+        StepBudgetGuard
+    }
+}
+
+impl Drop for StepBudgetGuard {
+    fn drop(&mut self) {
+        STEP_BUDGET.with(|b| b.set(None));
+        CALL_DEPTH.with(|c| c.set(0));
+    }
+}
+
+/// Charge one step against the budget (if armed); error when exhausted.
+fn tick_step_budget() -> Result<(), InterpError> {
+    STEP_BUDGET.with(|b| match b.get() {
+        Some(0) => Err(InterpError::StepLimitExceeded),
+        Some(n) => {
+            b.set(Some(n - 1));
+            Ok(())
+        }
+        None => Ok(()),
+    })
+}
+
+/// Tracks `eval_expr` recursion depth while a budget is armed, decrementing on
+/// drop so every `?`-early-return stays balanced.
+struct DepthGuard {
+    armed: bool,
+}
+
+impl DepthGuard {
+    /// Enter one `eval_expr` frame. Increments the depth counter when a budget
+    /// is armed and errors if it exceeds [`MAX_EVAL_DEPTH`].
+    fn enter() -> Result<Self, InterpError> {
+        let armed = STEP_BUDGET.with(|b| b.get().is_some());
+        if armed {
+            let depth = CALL_DEPTH.with(|c| {
+                let n = c.get() + 1;
+                c.set(n);
+                n
+            });
+            if depth > MAX_EVAL_DEPTH {
+                // Construct the guard first (via the early `armed` path below) so
+                // its `Drop` decrements; signal the error after.
+                let _undo = DepthGuard { armed };
+                return Err(InterpError::StepLimitExceeded);
+            }
+        }
+        Ok(DepthGuard { armed })
+    }
+}
+
+impl Drop for DepthGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            CALL_DEPTH.with(|c| c.set(c.get().saturating_sub(1)));
+        }
+    }
 }
 
 /// A storage cell: shared, interior-mutable. A variable binding owns one; a
@@ -126,6 +219,37 @@ impl<'tcx> TypedProgram<'tcx> {
         Ok(value_to_expr(val, ctx))
     }
 
+    /// Like [`Self::interpret_with_output`], but bounded for latency-sensitive
+    /// / untrusted callers (e.g. the LSP hover preview): it aborts with
+    /// [`InterpError::StepLimitExceeded`] after `max_steps` evaluated
+    /// expressions or [`MAX_EVAL_DEPTH`] recursion depth, and a panic in
+    /// evaluation becomes an `Err` rather than unwinding into the caller.
+    ///
+    /// The run executes on a dedicated [`BOUNDED_INTERP_STACK`]-byte thread so
+    /// the depth/step budget — not the caller's (possibly small) stack — is the
+    /// bound; a native stack overflow is uncatchable, so this keeps an infinite
+    /// recursion from aborting the whole process. The borrows stay valid
+    /// because `std::thread::scope` joins the thread before returning.
+    pub fn interpret_with_output_bounded<W: std::io::Write + Send>(
+        &self,
+        ctx: &CompileCtx<'tcx>,
+        output: &mut W,
+        max_steps: u64,
+    ) -> Result<Expression<'tcx>, InterpError> {
+        std::thread::scope(|s| {
+            std::thread::Builder::new()
+                .name("sand-bounded-interp".into())
+                .stack_size(BOUNDED_INTERP_STACK)
+                .spawn_scoped(s, || {
+                    let _guard = StepBudgetGuard::arm(max_steps);
+                    self.interpret_with_output(ctx, output)
+                })
+                .expect("spawn bounded interpreter thread")
+                .join()
+                .unwrap_or_else(|_| Err(InterpError::Runtime("evaluation panicked".to_string())))
+        })
+    }
+
     fn eval_expr(
         &self,
         expr: &Expression<'tcx>,
@@ -133,6 +257,8 @@ impl<'tcx> TypedProgram<'tcx> {
         ctx: &CompileCtx<'tcx>,
         output: &mut dyn std::io::Write,
     ) -> Result<Value<'tcx>, InterpError> {
+        tick_step_budget()?;
+        let _depth = DepthGuard::enter()?;
         match expr {
             Expression::Int(n) => Ok(Value::Int(*n)),
             Expression::Bool(b) => Ok(Value::Bool(*b)),
@@ -164,16 +290,18 @@ impl<'tcx> TypedProgram<'tcx> {
                 e => Err(InterpError::IfCondNotBool(fmt_value(&e, ctx))),
             },
 
-            Expression::While { cond, body } => {
+            // Iterative, not recursive: a recursive loop would add a stack frame
+            // per iteration and overflow (uncatchably) on any long-running loop.
+            Expression::While { cond, body } => loop {
+                tick_step_budget()?;
                 match self.eval_expr(&cond.expr, env, ctx, output)? {
-                    Value::Bool(false) => Ok(Value::Unit),
+                    Value::Bool(false) => break Ok(Value::Unit),
                     Value::Bool(true) => {
                         self.eval_expr(&body.expr, env, ctx, output)?;
-                        self.eval_expr(expr, env, ctx, output)
                     }
-                    e => Err(InterpError::WhileCondNotBool(fmt_value(&e, ctx))),
+                    e => break Err(InterpError::WhileCondNotBool(fmt_value(&e, ctx))),
                 }
-            }
+            },
 
             Expression::BinOp { left, op, right } => {
                 let l = self.eval_expr(&left.expr, env, ctx, output)?;

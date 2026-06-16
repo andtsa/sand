@@ -4,6 +4,7 @@
 ; ========= Literals =========
 (number) @number
 (boolean) @boolean
+(lifetime) @label
 
 ; ========= Identifiers =========
 (identifier) @variable
@@ -15,9 +16,12 @@
   name: (identifier) @variable.definition)
 
 (assignment
-  name: (identifier) @variable.assignment)
+  target: (identifier) @variable.assignment)
 
 (function_definition
+  name: (identifier) @function)
+
+(typeclass_method
   name: (identifier) @function)
 
 (function_call
@@ -29,6 +33,15 @@
 
 (module_declaration
   name: (identifier) @module)
+
+(use_path (identifier) @module)
+(use_glob) @character.special
+
+; ========= Type parameters / generics =========
+(type_param
+  name: (identifier) @type.parameter)
+(variance_ann) @operator
+(kind_atom) @type.builtin
 
 ; ========= Types =========
 ; Built-in primitive types
@@ -46,6 +59,10 @@
 (declaration
   type: (identifier) @type)
 
+; Generic instantiation: Option<Int>
+(type_application
+  name: (identifier) @type)
+
 ; Qualified type: mod::TypeName
 (qualified_type
   module: (identifier) @module
@@ -60,6 +77,22 @@
   name: (identifier) @type.definition
   variant: (enum_variant
     name: (identifier) @constructor))
+
+(deriving_clause
+  class: (identifier) @type)
+
+; ========= Typeclasses & impls =========
+(typeclass_declaration
+  name: (identifier) @type.definition)
+
+(requires_clause
+  class: (identifier) @type)
+
+(impl_declaration
+  class: (identifier) @type)
+
+(where_constraint
+  class: (identifier) @type)
 
 ; ========= Constructors =========
 ; Light#Red
@@ -87,11 +120,27 @@
 (tag_pattern
   tag: (identifier) @constructor)
 
-; ========= Tuple patterns =========
-(tuple_pattern) @punctuation.special
+; let E#V(...) = ...
+(let_constructor
+  type_name: (identifier) @type
+  variant: (identifier) @constructor)
+
+(int_literal_pattern) @number
+(bool_literal_pattern) @boolean
 
 ; ========= Binding patterns =========
 (binding_pattern) @variable.definition
+
+; ========= Lambdas =========
+; fn (x: T) -> e
+(lambda_param
+  param: (identifier) @variable.parameter)
+
+; Calling-mode of a function arrow: Owned | BorrowedMut | Borrowed
+(arrow_kind) @type.builtin
+
+; The function arrow itself (`->` or `-[k]>`)
+(fn_arrow) @operator
 
 ; ========= Keywords =========
 [
@@ -102,10 +151,19 @@
   "do"
   "let"
   "def"
+  "fn"
   "module"
+  "use"
   "type"
   "match"
   "mut"
+  "extern"
+  "typeclass"
+  "impl"
+  "for"
+  "requires"
+  "where"
+  "deriving"
 ] @keyword
 
 "=>" @punctuation.special
@@ -118,10 +176,13 @@
   "/"
   "^"
   "!"
-  "&"
-  "|"
+  "and"
+  "or"
+  "xor"
+  "&&"
   "⊕"
-  "¡"
+  "&"
+  "@"
   ">"
   "<"
   ">="
@@ -145,4 +206,5 @@
   ":="
   "#"
   "::"
+  "|"
 ] @punctuation.delimiter

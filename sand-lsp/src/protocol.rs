@@ -174,8 +174,8 @@ impl LanguageServer for Backend {
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let uri = params.text_document.uri;
         let text = params.text_document.text;
-        self.update_file(uri, text).await;
-        self.check_project().await;
+        self.update_file(uri.clone(), text).await;
+        self.check_uri(&uri).await;
     }
 
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
@@ -252,12 +252,23 @@ impl LanguageServer for Backend {
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
         let uri = params.text_document.uri;
         // Use the last change. with full sync this is always the complete document
-        if let Some(change) = params.content_changes.into_iter().last() {
-            self.update_file(uri, change.text).await;
-            self.check_project().await;
+        let Some(change) = params.content_changes.into_iter().last() else {
+            return;
+        };
+        // Apply the edit immediately so the document state is always current,
+        // then debounce the (expensive) re-check: wait ~300ms and only run if no
+        // newer edit superseded this one. Rapid typing coalesces into one check.
+        self.update_file(uri.clone(), change.text).await;
+        let generation = self.bump_edit_generation(&uri).await;
+        tokio::time::sleep(std::time::Duration::from_millis(DEBOUNCE_MS)).await;
+        if self.is_latest_edit(&uri, generation).await {
+            self.check_uri(&uri).await;
         }
     }
 }
+
+/// Debounce window for re-checking after an edit.
+const DEBOUNCE_MS: u64 = 300;
 
 /// Compute the LSP `Position` of the very end of `text` (UTF-16 columns).
 fn doc_end(text: &str) -> Position {

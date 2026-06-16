@@ -10,6 +10,7 @@ use thiserror::Error;
 
 use crate::compiler::context::CompileCtx;
 use crate::compiler::context::ContextError;
+use crate::compiler::context::DefTarget;
 use crate::compiler::structure::Derivable;
 use crate::compiler::structure::FileRef;
 use crate::compiler::structure::FunRef;
@@ -704,6 +705,10 @@ fn resolve_typeclass_sigs<'i>(
 ) -> Result<Vec<PendingDefault<'i>>, AstError> {
     let mut defaults = Vec::new();
     for pc in pending {
+        // Attribute type/class references in this class's method signatures and
+        // `requires` clause to the file the class is declared in.
+        let class_module = ctx.get_typeclass(pc.tref).src_module;
+        ctx.set_build_module(class_module);
         ctx.enter_type_param_scope(&pc.class_params);
         ctx.begin_region_params(&[]);
         let mut methods = Map::new();
@@ -729,6 +734,7 @@ fn resolve_typeclass_sigs<'i>(
                     name: sname.clone(),
                     range: *srange,
                 })?;
+            ctx.record_type_ref(*srange, DefTarget::Typeclass(sref));
             supers.push(sref);
         }
         ctx.set_typeclass_methods(pc.tref, methods, supers);
@@ -899,17 +905,16 @@ fn build_impl<'run>(
     ctx.set_build_module(*cur_module);
     let range = Range::from(&child);
     let mut inner = child.into_inner();
-    let class_name = inner
-        .next()
-        .missing("typeclass name", range)?
-        .as_str()
-        .to_string();
+    let class_pair = inner.next().missing("typeclass name", range)?;
+    let class_range = Range::from(&class_pair);
+    let class_name = class_pair.as_str().to_string();
     let tref = ctx
         .lookup_typeclass(&class_name)
         .ok_or_else(|| AstError::UnknownTypeclass {
             name: class_name.clone(),
             range,
         })?;
+    ctx.record_type_ref(class_range, DefTarget::Typeclass(tref));
     let ty_pair = inner.next().missing("impl target type", range)?;
     // For a higher-kinded class (`class C<F : Owned -> Owned>`), the impl head is
     // a *type constructor* (`impl C for Opt`), written as a bare generic-enum
@@ -1445,7 +1450,7 @@ fn require_ffi_safe<'tcx>(
 /// `'static`).
 #[allow(clippy::type_complexity)]
 fn build_where_clause(
-    ctx: &CompileCtx<'_>,
+    ctx: &mut CompileCtx<'_>,
     pair: Pair<Rule>,
 ) -> Result<(Vec<RegionConstraint>, Vec<TypeConstraint>), AstError> {
     assert_eq!(pair.as_rule(), Rule::where_clause);
@@ -1473,12 +1478,14 @@ fn build_where_clause(
                         range,
                     })?;
                 let cpair = parts.next().missing("typeclass name", range)?;
+                let crange = Range::from(&cpair);
                 let class = ctx.lookup_typeclass(cpair.as_str()).ok_or_else(|| {
                     AstError::UnknownTypeclass {
                         name: cpair.as_str().to_string(),
                         range,
                     }
                 })?;
+                ctx.record_type_ref(crange, DefTarget::Typeclass(class));
                 types.push(TypeConstraint { param, class });
             }
         }
@@ -1872,11 +1879,9 @@ fn build_core_type<'run>(
             // type_app_arg     = { lifetime | type_ }   (lifetimes first)
             let app_range = Range::from(&inner);
             let mut parts = inner.into_inner();
-            let name = parts
-                .next()
-                .missing("generic type name", app_range)?
-                .as_str()
-                .to_string();
+            let name_pair = parts.next().missing("generic type name", app_range)?;
+            let name_range = Range::from(&name_pair);
+            let name = name_pair.as_str().to_string();
 
             // Split args into region args (lifetimes) and type args, enforcing
             // that all lifetimes precede the first type (the lifetimes-first
@@ -1987,6 +1992,7 @@ fn build_core_type<'run>(
                     name: name.clone(),
                     range,
                 })?;
+            ctx.record_type_ref(name_range, DefTarget::Adt(er));
             let params = ctx.get_enum(er).type_params.clone();
             let region_params = ctx.get_enum(er).region_params.clone();
             if params.len() != arg_tys.len() {
@@ -2029,22 +2035,25 @@ fn build_core_type<'run>(
                 .next()
                 .missing("module name in qualified type", qrange)?
                 .as_str();
-            let type_name = parts
+            let type_name_pair = parts
                 .next()
-                .missing("type name in qualified type", qrange)?
-                .as_str();
+                .missing("type name in qualified type", qrange)?;
+            let type_name_range = Range::from(&type_name_pair);
+            let type_name = type_name_pair.as_str();
             let mod_ref = ctx
                 .get_mod_by_name(mod_name)
                 .ok_or_else(|| AstError::UnknownModule {
                     module: mod_name.to_string(),
                     range,
                 })?;
-            ctx.lookup_enum_in_module(mod_ref, type_name)
-                .map(|er| ctx.enum_ty(er))
+            let er = ctx
+                .lookup_enum_in_module(mod_ref, type_name)
                 .ok_or_else(|| AstError::UnknownType {
                     name: format!("{mod_name}::{type_name}"),
                     range,
-                })
+                })?;
+            ctx.record_type_ref(type_name_range, DefTarget::Adt(er));
+            Ok(ctx.enum_ty(er))
         }
         _ => {
             // Built-in keyword or plain identifier (user-defined enum in same file).
@@ -2076,6 +2085,8 @@ fn build_core_type<'run>(
                                 name: other.to_string(),
                                 range,
                             })?;
+                    // For a bare type name the core_type span *is* the name span.
+                    ctx.record_type_ref(range, DefTarget::Adt(er));
                     // A bare name for a *generic* enum is under-applied: it needs
                     // its type/region arguments (`List<T>`, not `List`). Reject it
                     // here with a clear arity error rather than silently producing
@@ -2423,6 +2434,129 @@ fn build_lambda<'run>(
     })
 }
 
+/// The lang-item name of the monadic bind that `do`-notation desugars to.
+const BIND_FN: &str = "bind";
+
+/// Desugar a block that uses do-notation (contains a top-level `<-`) into
+/// nested `bind` calls. Called by [`build_block`] when a block has any
+/// `monadic_bind` child; an ordinary block (no `<-`) never reaches here.
+///
+/// `{ x: T <- e; <rest> }` becomes `bind(e, fn (x: T) -> <rest>)`, applied
+/// right-to-left so the *rest of the block* is the continuation. Ordinary
+/// statements (`let`, ..) between binds are gathered into a `Block` that wraps
+/// the continuation, and the trailing expression is the innermost result. The
+/// result is plain HHIR (`Call`/`Lambda`/`Block`), so no downstream pass needs
+/// to know do-notation ever existed.
+///
+/// A block using `<-` **must** end in a trailing expression (its monadic
+/// result), otherwise there is nothing for a final bind to continue into.
+///
+/// **Error reporting.** Every synthesised node is given an actual source range:
+/// the `bind` call and its continuation lambda point at the originating
+/// `x <- e;` line, the lambda parameter points at the bound identifier, and `e`
+/// / the trailing expression keep their own spans. So a type error in `e`, a
+/// missing `Monad` instance, or a wrong continuation type all land on source
+/// the user actually wrote. Node construction is funnelled through this one
+/// function so a future "in this `<-` expansion" provenance note can be
+/// attached in a single place. (For now the desugaring is mandatory-annotation
+/// only; the `T` in `x: T <-` is what lets the continuation lambda type-check
+/// without lambda-parameter inference.)
+fn build_monadic_block<'run>(
+    ctx: &mut CompileCtx<'run>,
+    mut children: Vec<Pair<Rule>>,
+    block_range: Range,
+    src: &str,
+) -> Result<Expr<'run>, AstError> {
+    // The final child must be the trailing expression (the monadic result).
+    if children.last().map(|c| c.as_rule()) != Some(Rule::expression) {
+        return Err(AstError::UnexpectedRule {
+            expected: "trailing expression (a block using `<-` must end with its monadic result)",
+            got: children
+                .last()
+                .map(|c| c.as_rule())
+                .unwrap_or(Rule::monadic_bind),
+            range: block_range,
+        });
+    }
+    let tail_pair = children.pop().expect("checked non-empty above");
+    let mut acc = build_expr(ctx, tail_pair, src)?;
+    let items = children;
+
+    // Walk the leading items (binds and statements) in reverse, folding each into
+    // the accumulating continuation. Consecutive plain statements are buffered
+    // (in reverse) and flushed into one `Block` when a bind or the start is hit.
+    let mut pending: Vec<Statement<'run>> = Vec::new();
+    let flush = |pending: &mut Vec<Statement<'run>>, acc: Expr<'run>| -> Expr<'run> {
+        if pending.is_empty() {
+            return acc;
+        }
+        pending.reverse();
+        let stmts = std::mem::take(pending);
+        let range = acc.range;
+        Expr {
+            expr: Expression::Block {
+                statements: stmts,
+                expr: Some(Box::new(acc)),
+            },
+            range,
+        }
+    };
+
+    for item in items.into_iter().rev() {
+        match item.as_rule() {
+            Rule::monadic_bind => {
+                // statements *after* this bind belong to the continuation body.
+                acc = flush(&mut pending, acc);
+
+                // monadic_bind = { identifier ~ ":" ~ type_ ~ "<-" ~ expression ~ ";" }
+                let bind_range = Range::from(&item);
+                let mut parts = item.into_inner();
+                let name = parts.next().missing("do-bind variable", bind_range)?;
+                let ty_pair = parts.next().missing("do-bind type", bind_range)?;
+                let e_pair = parts.next().missing("do-bind expression", bind_range)?;
+
+                let param_range = Range::from(&name);
+                let ty = build_type(ctx, ty_pair)?;
+                let var = HirVar::Decl(ctx.new_original_variable(&name, Rule::parameter)?);
+                let param = Parameter {
+                    name: var,
+                    ty,
+                    range: param_range,
+                    is_mutable: false,
+                };
+                let bound = build_expr(ctx, e_pair, src)?;
+
+                // bind(e, fn (x: T) -> <continuation>)
+                let cont = Expr {
+                    expr: Expression::Lambda {
+                        param,
+                        body: Box::new(acc),
+                        mode: crate::lang::types::FnMode::Reusable,
+                    },
+                    range: bind_range,
+                };
+                acc = Expr {
+                    expr: Expression::Call {
+                        fn_name: HirFnCall::Local(BIND_FN.to_string()),
+                        args: vec![bound, cont],
+                        type_args: Vec::new(),
+                    },
+                    range: bind_range,
+                };
+            }
+            Rule::statement => pending.push(build_statement(ctx, item, src)?),
+            other => {
+                return Err(AstError::UnexpectedRule {
+                    expected: "monadic_bind | statement in do-block",
+                    got: other,
+                    range: Range::from(&item),
+                });
+            }
+        }
+    }
+    Ok(flush(&mut pending, acc))
+}
+
 // generic left-assoc binary fold helper
 fn binop_fold<'run, F>(
     ctx: &mut CompileCtx<'run>,
@@ -2733,10 +2867,17 @@ fn build_primary<'run>(
 
     let s = pair.as_str();
     if s.starts_with('{') {
+        let children: Vec<Pair<Rule>> = pair.into_inner().collect();
+
+        // do-notation: a top-level `<-` anywhere in the block makes the whole
+        // block monadic (desugars to nested `bind`); otherwise it is ordinary.
+        if children.iter().any(|c| c.as_rule() == Rule::monadic_bind) {
+            return build_monadic_block(ctx, children, range, src);
+        }
+
         let mut statements = Vec::new();
         let mut expr: Option<Box<Expr>> = None;
-
-        for inner in pair.into_inner() {
+        for inner in children {
             match inner.as_rule() {
                 Rule::statement => statements.push(build_statement(ctx, inner, src)?),
                 Rule::expression => expr = Some(Box::new(build_expr(ctx, inner, src)?)),

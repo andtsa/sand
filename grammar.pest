@@ -19,7 +19,7 @@ tuple_type = { "(" ~ type_ ~ ("," ~ type_)+ ~ ")" }
 type_application = { identifier ~ "<" ~ type_app_arg ~ ("," ~ type_app_arg)* ~ ">" }
 type_app_arg = { lifetime | type_ }
 
-// a lifetime / region: `'r`, `'heap`, `'static`. 
+// a lifetime / region: `'r`, `'heap`, `'static`.
 // atomic so no internal whitespace is consumed between the tick and the name.
 lifetime = @{ "'" ~ identifier }
 
@@ -61,7 +61,7 @@ fn_type = { core_type ~ fn_arrow ~ type_ }
 
 // a type, optionally ascribed to a region: `Int`, `Int @ 'r`
 // the `@ 'r` suffix is parsed here (rather than a left-recursive `region_type`)
-// so the grammar stays a valid PEG. 
+// so the grammar stays a valid PEG.
 // A function type is tried first (it needs the `->`), falling back to an ascribed core type.
 type_ = { fn_type | core_type ~ ("@" ~ lifetime)? }
 
@@ -95,10 +95,10 @@ ge       = { ">=" | "≥" }
 le       = { "<=" | "≤" }
 
 // type parameters on a generic declaration: `<T>`, `<+a : Owned, -b>`.
-// each parameter carries an optional variance annotation 
-// (`+`/`-`; absent = // default) 
-// and an optional kind annotation (absent = `Owned`). 
-// a kind is a base kind (`Owned`/`Never`) 
+// each parameter carries an optional variance annotation
+// (`+`/`-`; absent = // default)
+// and an optional kind annotation (absent = `Owned`).
+// a kind is a base kind (`Owned`/`Never`)
 // or a type-constructor arrow `Owned -> Owned`
 // `->` is right-associative and may be parenthesised
 // (`(Owned -> Owned) -> Owned`). only appears in declaration position (right
@@ -157,6 +157,13 @@ ifstatement = { "if" ~ expression ~ "then" ~ expression ~ ("else" ~ expression)?
 
 whileloop = { "while" ~ expression ~ "do" ~ expression }
 
+// Monadic bind for do-notation. Any block `{ ... }` that contains a top-level
+// `<-` is treated as a do-block: `build_ast::build_block` desugars it to nested
+// `bind(e, fn (x: T) -> ...)` calls (each `<-` is a bind, ordinary
+// `let`/statements between binds stay pure, and the trailing expression is the
+// block's monadic result, type `F<_>`).
+monadic_bind = { identifier ~ ":" ~ type_ ~ "<-" ~ expression ~ ";" }
+
 // `f::<T, ...>(args)`
 turbofish              = { "::" ~ "<" ~ type_ ~ ("," ~ type_)* ~ ">" }
 function_call          = { identifier ~ turbofish? ~ "(" ~ (expression ~ ("," ~ expression)*)? ~ ")" }
@@ -167,7 +174,7 @@ tuple_expr = { "(" ~ expression ~ ("," ~ expression)+ ~ ")" }
 
 // lambda expression `fn (x: T) -> e`
 // the body is a full `expression`, so it extends as far right as possible
-// (`fn (x: Int) -> x + 1` has body `x + 1`); 
+// (`fn (x: Int) -> x + 1` has body `x + 1`);
 // a terminator (`,`, `)`, `}`, ...) ends it.
 lambda_param = { "(" ~ mut_kw? ~ identifier ~ ":" ~ type_ ~ ")" }
 lambda_expr  = { "fn" ~ lambda_param ~ fn_arrow ~ expression }
@@ -200,7 +207,7 @@ primary = {
   | number
   | boolean
   | identifier
-  | ("{" ~ statement* ~ expression? ~ "}")
+  | ("{" ~ (monadic_bind | statement)* ~ expression? ~ "}")
 }
 
 unary      = { (unary_operand ~ unary) | primary }
@@ -252,8 +259,8 @@ parameters = { parameter ~ ("," ~ parameter)* ~ ","? }
 
 function = { "def" ~ identifier ~ type_params? ~ "(" ~ parameters? ~ ")" ~ ":" ~ type_ ~ where_clause? ~ ":=" ~ expression }
 
-// External (FFI) function declaration: 
-// a bodyless `def` bound to a C symbol of the same name. 
+// External (FFI) function declaration:
+// a bodyless `def` bound to a C symbol of the same name.
 extern_decl = { "extern" ~ "def" ~ identifier ~ "(" ~ parameters? ~ ")" ~ ":" ~ type_ ~ ";" }
 
 // typeclass declaration

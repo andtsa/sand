@@ -323,6 +323,43 @@ impl<'tcx> Ty<'tcx> {
         }
     }
 
+    /// Collect every [`TypeParamId`] appearing in this type into `out`. Used at
+    /// call sites to recover the *callee's own* type parameters from its
+    /// declared signature (the enclosing function's rigid parameters never
+    /// appear in a callee's stored signature), so the checker can verify
+    /// they were all solved before substituting. a parameter left unbound
+    /// would otherwise leak into the result type and crash
+    /// monomorphisation.
+    pub fn collect_params(self, out: &mut Vec<TypeParamId>) {
+        match self.kind() {
+            TyKind::Param(id) => out.push(*id),
+            TyKind::ParamApp(id, args) => {
+                out.push(*id);
+                for a in args.iter() {
+                    a.collect_params(out);
+                }
+            }
+            TyKind::Fn(a, r, _) => {
+                a.collect_params(out);
+                r.collect_params(out);
+            }
+            TyKind::Tuple(elems) => {
+                for e in elems.iter() {
+                    e.collect_params(out);
+                }
+            }
+            TyKind::App(_, args, _) => {
+                for a in args.iter() {
+                    a.collect_params(out);
+                }
+            }
+            TyKind::Region(t, _) | TyKind::Ref(_, t) | TyKind::RefMut(_, t) | TyKind::Ptr(t) => {
+                t.collect_params(out)
+            }
+            _ => {}
+        }
+    }
+
     /// Equality that treats `Top` as compatible with any type.
     pub fn type_eq(self, other: Ty<'tcx>) -> bool {
         if std::ptr::eq(self.0, other.0) {

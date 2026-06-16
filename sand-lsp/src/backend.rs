@@ -1,10 +1,16 @@
 //! LSP backend document checking functionality.
 
+use std::panic::AssertUnwindSafe;
+use std::panic::catch_unwind;
+
 use lang::castles::project::CheckResult;
 use tokio::task::block_in_place;
+use tower_lsp::lsp_types::Diagnostic;
+use tower_lsp::lsp_types::DiagnosticSeverity;
 use tower_lsp::lsp_types::MessageType;
 use tower_lsp::lsp_types::Url;
 
+use crate::diagnostics::LspDiagnostics;
 use crate::diagnostics::lsp_diagnostics_from_result;
 use crate::lsp::Backend;
 
@@ -20,26 +26,74 @@ impl Backend {
         .await;
     }
 
+    /// Re-check every slot (used at initialization).
     pub async fn check_project(&self) {
-        // Run checks for all slots under a write lock so results are stored atomically.
+        self.recheck(None).await;
+    }
+
+    /// Re-check only the slot that tracks `uri` (used on edit / open), leaving
+    /// other compilation units untouched.
+    pub async fn check_uri(&self, uri: &Url) {
+        self.recheck(Some(uri)).await;
+    }
+
+    /// Re-check the targeted slot(s), then publish diagnostics for the whole
+    /// workspace.
+    ///
+    /// The (blocking, potentially slow) compiler check runs under a **shared
+    /// read lock**, not the exclusive write lock — so hover / goto / formatting
+    /// (all readers) stay responsive while a check is in flight. Results are
+    /// stored under a brief write lock afterward. Each check is wrapped in
+    /// `catch_unwind`, so a compiler panic on in-progress code becomes an error
+    /// diagnostic rather than a silently dead request handler.
+    async fn recheck(&self, only: Option<&Url>) {
+        if self.slots.read().await.is_empty() {
+            self.uninit_err().await;
+            return;
+        }
+
+        // Phase 1: run the checks under a shared read lock.
+        let mut fresh: Vec<(usize, CheckResult)> = Vec::new();
+        let mut panics: Vec<(usize, String)> = Vec::new();
         {
-            let mut slots = self.slots.write().await;
-            if slots.is_empty() {
-                self.uninit_err().await;
-                return;
-            }
-            for slot in slots.iter_mut() {
-                self.log(
-                    MessageType::LOG,
-                    format!("checking {} files", slot.project.file_count()),
-                )
-                .await;
-                slot.last_result = Some(block_in_place(|| slot.project.check()));
+            let slots = self.slots.read().await;
+            for (i, slot) in slots.iter().enumerate() {
+                if let Some(uri) = only
+                    && slot.project.is_tracked(uri).is_none()
+                {
+                    continue;
+                }
+                let outcome =
+                    block_in_place(|| catch_unwind(AssertUnwindSafe(|| slot.project.check())));
+                match outcome {
+                    Ok(result) => fresh.push((i, result)),
+                    Err(payload) => panics.push((i, panic_message(&payload))),
+                }
             }
         }
 
-        // Build combined diagnostics from all slots.
-        let mut new_diags = crate::diagnostics::LspDiagnostics::default();
+        // Phase 2: store fresh results under a brief write lock. Replacing the
+        // previous `CheckResult` drops it, freeing its arena (no leak).
+        if !fresh.is_empty() {
+            let mut slots = self.slots.write().await;
+            for (i, result) in fresh {
+                if let Some(slot) = slots.get_mut(i) {
+                    slot.last_result = Some(result);
+                }
+            }
+        }
+
+        for (_, msg) in &panics {
+            self.log(
+                MessageType::ERROR,
+                format!("compiler panicked during check: {msg}"),
+            )
+            .await;
+        }
+
+        // Phase 3: build and publish diagnostics from every slot's cached result,
+        // plus any panic diagnostics, and clear stale URIs.
+        let mut new_diags = LspDiagnostics::default();
         {
             let slots = self.slots.read().await;
             for slot in slots.iter() {
@@ -57,6 +111,20 @@ impl Backend {
                 }
                 for (uri, diags) in slot_diags.map {
                     new_diags.map.entry(uri).or_default().extend(diags);
+                }
+            }
+            // A panicked check has no `CheckResult`; surface it on every file of
+            // the affected slot so the failure is visible rather than silent.
+            for (i, msg) in &panics {
+                if let Some(slot) = slots.get(*i) {
+                    for fr in slot.project.file_contents.keys() {
+                        let uri = slot.project.uri_of_file(*fr);
+                        new_diags
+                            .map
+                            .entry(uri)
+                            .or_default()
+                            .push(internal_error_diagnostic(msg));
+                    }
                 }
             }
         }
@@ -100,9 +168,9 @@ impl Backend {
             self.client
                 .publish_diagnostics(
                     uri,
-                    vec![tower_lsp::lsp_types::Diagnostic {
+                    vec![Diagnostic {
                         range: Default::default(),
-                        severity: Some(tower_lsp::lsp_types::DiagnosticSeverity::ERROR),
+                        severity: Some(DiagnosticSeverity::ERROR),
                         message: e.to_string(),
                         ..Default::default()
                     }],
@@ -110,5 +178,27 @@ impl Backend {
                 )
                 .await;
         }
+    }
+}
+
+/// Best-effort message from a `catch_unwind` payload.
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "unknown panic".to_string()
+    }
+}
+
+/// A whole-file diagnostic reporting that the compiler panicked while checking.
+fn internal_error_diagnostic(msg: &str) -> Diagnostic {
+    Diagnostic {
+        range: Default::default(),
+        severity: Some(DiagnosticSeverity::ERROR),
+        source: Some("sand".into()),
+        message: format!("internal compiler error while checking this file: {msg}"),
+        ..Default::default()
     }
 }

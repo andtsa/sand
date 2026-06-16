@@ -13,7 +13,7 @@
 //!   * **Type rewrite**: a homomorphism `R` applied uniformly to every type in
 //!     the program, so a heaped `E<a>` becomes `Unique<E$Node<a>>`.
 //!   * **Construct**: `E#C(p)` becomes `unique_alloc(E$Node#C(p))`.
-//!   * **Consuming match**: `match s { … }` (when `s` is heaped and some arm
+//!   * **Consuming match**: `match s { .. }` (when `s` is heaped and some arm
 //!     inspects a variant) becomes `{ let n = unique_take(s); match n { .. }
 //!     }`, the patterns retargeted to the node enum. Every payload position is
 //!     bound (wildcards become fresh bindings) so ownership's scope-exit drops
@@ -99,6 +99,29 @@ pub fn lower<'tcx>(ctx: &mut CompileCtx<'tcx>, program: TypedProgram<'tcx>) -> T
             if let Some(payload) = hl.ctx.get_enum(e).variants[i].payload.get() {
                 let rewritten = hl.rewrite_ty(payload);
                 hl.ctx.set_variant_payload(node_er, i, rewritten);
+            }
+        }
+    }
+
+    // Phase 2.5: rewrite the payloads of every *non-heaped* enum in place. A
+    // non-heaped type that wraps a heaped one (`S = MkS(E)`, a stack struct
+    // holding a heaped `E`) must refer to the `Unique<Node>` handle, not the raw
+    // heaped enum — otherwise the original recursive enum survives into codegen,
+    // where it has no `Unique` indirection and `type_needs_drop` / drop-glue
+    // generation recurse forever. `rewrite_ty` is the identity on payloads with
+    // no heaped sub-structure, so this is safe to apply to every non-heaped enum
+    // (including the synthesised node enums, where it is idempotent).
+    let non_heaped: Vec<AdtRef<'tcx>> = hl
+        .ctx
+        .all_enums()
+        .filter(|e| hl.ctx.get_enum(*e).heaped_strategy().is_none())
+        .collect();
+    for e in non_heaped {
+        let arity = hl.ctx.get_enum(e).variants.len();
+        for i in 0..arity {
+            if let Some(payload) = hl.ctx.get_enum(e).variants[i].payload.get() {
+                let rewritten = hl.rewrite_ty(payload);
+                hl.ctx.set_variant_payload(e, i, rewritten);
             }
         }
     }
@@ -360,6 +383,14 @@ impl<'tcx> HeapLower<'_, 'tcx> {
                     range: param.range,
                     is_mutable: param.is_mutable,
                 };
+                // Capture *types* must be rewritten too: a captured heaped value
+                // becomes a `Unique<Node>` handle in the closure environment.
+                // Leaving the raw heaped enum here lets it survive into codegen
+                // (the env type), where `type_needs_drop` would recurse forever.
+                let captures = captures
+                    .into_iter()
+                    .map(|(v, ty)| (v, self.rewrite_ty(ty)))
+                    .collect();
                 Expression::Lambda {
                     param,
                     body: Box::new(self.rewrite_expr(*body)),

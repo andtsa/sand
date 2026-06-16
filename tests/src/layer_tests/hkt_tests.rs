@@ -231,3 +231,123 @@ fn monad_instance_requires_superclasses() {
          } \n def main(): Int := 0",
     );
 }
+
+// ── do-notation: any block containing a top-level `<-` desugars to nested
+// `bind` calls. Reuses the `MONAD` Option instance above. ─────────────────────
+
+#[test]
+fn do_notation_single_bind() {
+    // `{ x <- Some(20); Some(x + 1) }` ≡ `bind(Some(20), fn x -> Some(x + 1))`.
+    assert_eq!(
+        run_both(&format!(
+            "{MONAD} def main(): Int := \n \
+             or_else({{ x: Int <- Option#Some(20); Option#Some(x + 1) }}, 0)"
+        )),
+        Expression::Int(21)
+    );
+}
+
+#[test]
+fn do_notation_chains_and_keeps_pure_lets() {
+    // Two binds with an ordinary `let` between them; all bind to the same monad.
+    assert_eq!(
+        run_both(&format!(
+            "{MONAD} def main(): Int := or_else({{ \n \
+                 x: Int <- Option#Some(20); \n \
+                 let doubled = x * 2; \n \
+                 y: Int <- Option#Some(doubled + 2); \n \
+                 Option#Some(x + y) \n \
+             }}, 0)"
+        )),
+        // x=20, doubled=40, y=42, 20+42 = 62
+        Expression::Int(62)
+    );
+}
+
+#[test]
+fn do_notation_short_circuits_on_none() {
+    // A `None` bound by `<-` short-circuits the whole block (Monad bind for
+    // Option).
+    assert_eq!(
+        run_both(&format!(
+            "{MONAD} def main(): Int := or_else({{ \n \
+                 let none: Option<Int> = Option#None; \n \
+                 x: Int <- none; \n \
+                 Option#Some(x + 1) \n \
+             }}, -1)"
+        )),
+        Expression::Int(-1)
+    );
+}
+
+#[test]
+fn do_notation_block_without_trailing_expr_is_rejected() {
+    // A block using `<-` must end in a trailing expression (its monadic result).
+    typecheck_fails(&format!(
+        "{MONAD} def main(): Int := \n \
+         or_else({{ x: Int <- Option#Some(1); }}, 0)"
+    ));
+}
+
+#[test]
+fn ordinary_block_without_bind_is_unaffected() {
+    // No `<-` → an ordinary block; type is its trailing expression, not `F<_>`.
+    assert_eq!(
+        run_both("def main(): Int := { let x = 20; x + 1 }"),
+        Expression::Int(21)
+    );
+}
+
+// ── soundness: method-call argument validation + unsolved-param guards
+// ────────
+
+#[test]
+fn method_call_rejects_wrong_arg_type() {
+    // A `Bool` in an `Int` parameter of a typeclass method must be rejected
+    // (previously slipped through: the receiver-solving unify ignored failures).
+    typecheck_fails(
+        "typeclass Same<T> { def same(x: T, y: T): Bool } \n \
+         impl Same for Int { def same(x: Int, y: Int): Bool := x == y } \n \
+         def main(): Int := if same(5, true) then 1 else 0",
+    );
+}
+
+#[test]
+fn method_call_rejects_non_function_where_function_expected() {
+    // Passing `5` where `fmap` expects `A -> B`.
+    typecheck_fails(&format!(
+        "{MONAD} def main(): Int := or_else(fmap(Option#Some(1), 5), 0)"
+    ));
+}
+
+#[test]
+fn method_call_rejects_wrong_arity() {
+    typecheck_fails(
+        "typeclass Same<T> { def same(x: T, y: T): Bool } \n \
+         impl Same for Int { def same(x: Int, y: Int): Bool := x == y } \n \
+         def main(): Int := if same(5) then 1 else 0",
+    );
+}
+
+#[test]
+fn generic_fn_with_uninferable_return_param_is_rejected() {
+    // A type parameter that appears only in the return type, called with no
+    // expected type, must be a clean error — not an unbound-Param crash in mono.
+    typecheck_fails(
+        "type Opt<a> = None | Some(a) \n \
+         def mkempty<A>(c: Int): Opt<A> := Opt#None \n \
+         def main(): Int := { let _x = mkempty(0); 0 }",
+    );
+}
+
+#[test]
+fn generic_fn_return_param_pinned_by_annotation_is_ok() {
+    // The same call type-checks when the result type is annotated (the param is
+    // then solved from the expected type).
+    run_both(
+        "type Opt<a> = None | Some(a) \n \
+         def mkempty<A>(c: Int): Opt<A> := Opt#None \n \
+         def or0(x: Opt<Int>): Int := match x { Opt#Some(v) => v, Opt#None => 0 } \n \
+         def main(): Int := { let e: Opt<Int> = mkempty(0); or0(e) }",
+    );
+}

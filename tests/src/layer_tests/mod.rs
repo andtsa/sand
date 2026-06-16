@@ -19,6 +19,7 @@ pub mod enum_tests;
 pub mod ffi_tests;
 pub mod function_type_tests;
 pub mod generics_tests;
+pub mod goto_type_tests;
 pub mod hkt_tests;
 pub mod interpreter_tests;
 pub mod kind_tests;

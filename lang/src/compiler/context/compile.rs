@@ -5,6 +5,8 @@ use std::cell::Cell;
 use pest::iterators::Pair;
 use thiserror::Error;
 
+use crate::compiler::context::DefTarget;
+use crate::compiler::context::TypeRefEntry;
 use crate::compiler::context::arenas::Arenas;
 use crate::compiler::diagnostics::SandDiagnostic;
 use crate::compiler::structure::AdtDef;
@@ -21,6 +23,7 @@ use crate::compiler::structure::ModuleRef;
 use crate::compiler::structure::OriginalFun;
 use crate::compiler::structure::OriginalVar;
 use crate::compiler::structure::OriginalVarRef;
+use crate::compiler::structure::Pos;
 use crate::compiler::structure::Range;
 use crate::compiler::structure::RegionParam;
 use crate::compiler::structure::RegionParamSpec;
@@ -195,6 +198,12 @@ pub struct CompileCtx<'tcx> {
     file_defaults: Map<FileRef, ModuleRef<'tcx>>,
     default_module: Option<ModuleRef<'tcx>>,
 
+    /// Source-position to definition index for *type* and *typeclass* name
+    /// references (signatures, annotations, payloads, `impl`/`where`/`requires`
+    /// heads). Populated during AST building so the LSP can resolve
+    /// go-to-definition on a type or class name
+    type_refs: Vec<TypeRefEntry<'tcx>>,
+
     // diagnostics
     pub diagnostics: Vec<SandDiagnostic>,
 }
@@ -332,6 +341,7 @@ impl<'tcx> CompileCtx<'tcx> {
             module_imports: Default::default(),
             default_module: None,
             file_defaults: Default::default(),
+            type_refs: Vec::new(),
             diagnostics: Vec::new(),
         }
     }
@@ -1407,6 +1417,39 @@ impl<'tcx> CompileCtx<'tcx> {
     /// anonymous tag-union types can be attributed to the right module.
     pub fn set_build_module(&mut self, m: ModuleRef<'tcx>) {
         self.cur_build_module = Some(m);
+    }
+
+    /// Record that the source span `range` (in the file of the module currently
+    /// being built) is a reference to `target`. Used
+    /// for go-to-definition on type positions. No-op when no build module
+    /// is set (no file context to attribute the span to).
+    pub fn record_type_ref(&mut self, range: Range, target: DefTarget<'tcx>) {
+        if let Some(m) = self.cur_build_module {
+            let file = self.file_of_module(m);
+            self.type_refs.push(TypeRefEntry {
+                file,
+                range,
+                target,
+            });
+        }
+    }
+
+    /// The definition a type/typeclass name reference at `pos` in `file` points
+    /// at, if any. Returns the *innermost* (smallest-span) match so a nested
+    /// reference like the `Int` in `Option<Int>` wins over the enclosing one.
+    pub fn type_ref_at(&self, file: FileRef, pos: Pos) -> Option<DefTarget<'tcx>> {
+        fn contains(r: Range, p: Pos) -> bool {
+            (p.line, p.col) >= (r.start.line, r.start.col)
+                && (p.line, p.col) <= (r.end.line, r.end.col)
+        }
+        fn span(r: Range) -> (usize, usize) {
+            (r.end.line - r.start.line, r.end.col)
+        }
+        self.type_refs
+            .iter()
+            .filter(|e| e.file == file && contains(e.range, pos))
+            .min_by_key(|e| span(e.range))
+            .map(|e| e.target)
     }
 
     /// Intern an ad-hoc tag-union type from a sorted, deduplicated list of tag

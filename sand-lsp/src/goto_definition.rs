@@ -2,6 +2,7 @@
 
 use lang::castles::project::Project;
 use lang::compiler::context::CompileCtx;
+use lang::compiler::context::DefTarget;
 use lang::compiler::structure::FileRef;
 use lang::compiler::structure::Pos;
 use lang::ir_types::typed_hir::Expression;
@@ -26,6 +27,14 @@ pub fn definition_at_position<'tcx>(
     let file_ref: FileRef = project.is_tracked(uri)?;
     let text = project.text_for_file(file_ref)?;
     let pos: Pos = pos_from_lsp_position(text, lsp_pos);
+
+    // Type / typeclass name references (signatures, annotations, payloads,
+    // `impl`/`where`/`requires` heads) live outside the expression tree, so they
+    // are resolved from a side table recorded during AST building. Checked first
+    // because a type name in a signature falls within the function's header span.
+    if let Some(target) = ctx.type_ref_at(file_ref, pos) {
+        return def_location_for_target(target, ctx, project);
+    }
 
     for fun in ast.functions.values() {
         if ctx.file_of_module(fun.src_module) != file_ref {
@@ -82,9 +91,52 @@ pub fn definition_at_position<'tcx>(
                 })
             }
 
+            // A polymorphic typeclass-method call (one whose receiver is still a
+            // type parameter) — jump to the method's declaration in its
+            // typeclass. A method call on a *concrete* receiver was already
+            // rewritten to a direct `Call` of the impl method (handled above), so
+            // that jumps to the impl instead.
+            Expression::MethodCall { class, method, .. } => {
+                let tc = ctx.get_typeclass(*class);
+                let mdef = tc.methods.get(method)?;
+                let def_uri = url_of_module(tc.src_module, ctx, project)?;
+                let def_file = ctx.file_of_module(tc.src_module);
+                let def_text = project.text_for_file(def_file)?;
+                Some(Location {
+                    uri: def_uri,
+                    range: lsp_range_from_pest(def_text, mdef.range),
+                })
+            }
+
             // Intrinsics and literals have no source definition to jump to.
             _ => None,
         };
     }
     None
+}
+
+/// The declaration location of an ADT or typeclass a type-name reference points
+/// at.
+fn def_location_for_target<'tcx>(
+    target: DefTarget<'tcx>,
+    ctx: &CompileCtx<'tcx>,
+    project: &Project,
+) -> Option<Location> {
+    let (module, decl_range) = match target {
+        DefTarget::Adt(er) => {
+            let def = ctx.get_enum(er);
+            (def.src_module, def.range)
+        }
+        DefTarget::Typeclass(tref) => {
+            let tc = ctx.get_typeclass(tref);
+            (tc.src_module, tc.range)
+        }
+    };
+    let def_uri = url_of_module(module, ctx, project)?;
+    let def_file = ctx.file_of_module(module);
+    let def_text = project.text_for_file(def_file)?;
+    Some(Location {
+        uri: def_uri,
+        range: lsp_range_from_pest(def_text, decl_range),
+    })
 }

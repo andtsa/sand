@@ -20,6 +20,10 @@ use crate::util::find_in_expr;
 use crate::util::pos_from_lsp_position;
 use crate::util::range_contains;
 
+/// Step budget for running `main` in a hover preview — high enough for any
+/// reasonable program, low enough that an accidental infinite loop aborts fast.
+const HOVER_RUN_STEP_BUDGET: u64 = 5_000_000;
+
 pub fn hover_at_position<'tcx>(
     lsp_pos: Position,
     uri: &Url,
@@ -70,7 +74,12 @@ fn format_function_hover<'tcx>(
 
     if ctx.is_main(fun.name) {
         let mut output_buf: Vec<u8> = Vec::new();
-        let run_result = ast.interpret_with_output(ctx, &mut output_buf);
+        // Running arbitrary user code on a passive hover is risky: it may loop
+        // forever, recurse without bound, or panic. The bounded runner caps
+        // steps + recursion depth and turns a panic into an `Err`, so neither a
+        // runaway program nor a compiler bug can hang or crash the server.
+        let run_result =
+            ast.interpret_with_output_bounded(ctx, &mut output_buf, HOVER_RUN_STEP_BUDGET);
         let printed = String::from_utf8_lossy(&output_buf);
 
         let content = match run_result {

@@ -140,13 +140,19 @@ impl Project {
 }
 
 pub enum CheckResult {
+    // Field order is load-bearing: `ast`/`error` borrow the arena that `ctx`
+    // owns and frees on `Drop`. Struct fields drop in declaration order, so the
+    // borrower must come *before* `ctx` — otherwise the arena would be freed
+    // while the borrowing value is still being dropped. (The borrowers are
+    // `Copy`/trivial-drop today, so this is defensive, but it makes the drop
+    // order correct by construction rather than by that invariant.)
     Success {
-        ctx: CompileCtx<'static>,
         ast: TypedProgram<'static>,
+        ctx: CompileCtx<'static>,
     },
     Failure {
-        ctx: CompileCtx<'static>,
         error: SandLangError<'static>,
+        ctx: CompileCtx<'static>,
     },
 }
 

@@ -19,6 +19,10 @@ contexts:
 
   main:
     - include: module-decl
+    - include: use-decl
+    - include: extern-decl
+    - include: typeclass-decl
+    - include: impl-decl
     - include: type-alias
     - include: function-def
     - include: statements
@@ -91,6 +95,9 @@ contexts:
         - match: '\)'
           scope: punctuation.section.parens.end.sand
           pop: true
+        # comma-separated payload types desugar to a tuple payload
+        - match: ','
+          scope: punctuation.separator.sand
         - include: type-expr
     - match: '{{ident}}'
       scope: entity.name.tag.sand
@@ -99,7 +106,7 @@ contexts:
     - match: ';'
       scope: punctuation.terminator.sand
       pop: true
-    - match: '(?=\bdef\b|\bmodule\b|\btype\b)'
+    - match: '(?=\bdef\b|\bmodule\b|\btype\b|\btypeclass\b|\bimpl\b|\bextern\b|\buse\b)'
       pop: true
 
   # ── top-level: function definition ────────────────────────────────────────
@@ -126,7 +133,7 @@ contexts:
     - match: ':='
       scope: keyword.operator.assignment.sand
       set: function-body
-    - match: '(?=\bdef\b|\bmodule\b|\btype\b)'
+    - match: '(?=\bdef\b|\bmodule\b|\btype\b|\btypeclass\b|\bimpl\b|\bextern\b|\buse\b)'
       pop: true
 
   parameter-list:
@@ -146,9 +153,88 @@ contexts:
       scope: punctuation.separator.sand
 
   function-body:
-    - match: '(?=\bdef\b|\bmodule\b|\btype\b)'
+    - match: '(?=\bdef\b|\bmodule\b|\btype\b|\btypeclass\b|\bimpl\b|\bextern\b|\buse\b)'
       pop: true
     - include: statements
+
+  # ── top-level: imports, externs, typeclasses, impls ───────────────────────
+
+  use-decl:
+    - match: '\buse\b'
+      scope: keyword.control.import.sand
+      push:
+        - match: '\*'
+          scope: variable.language.sand
+        - match: '::'
+          scope: punctuation.accessor.sand
+        - match: '{{ident}}'
+          scope: entity.name.namespace.sand
+        - match: ';'
+          scope: punctuation.terminator.sand
+          pop: true
+
+  # `extern def …;` — only the `extern` keyword here; the `def …` that follows
+  # is highlighted by function-def.
+  extern-decl:
+    - match: '\bextern\b'
+      scope: storage.modifier.sand
+
+  typeclass-decl:
+    - match: '\btypeclass\b'
+      scope: keyword.declaration.class.sand
+      push:
+        - match: '{{ident}}'
+          scope: entity.name.type.sand
+          set: typeclass-head
+        - match: '(?=\S)'
+          pop: true
+
+  typeclass-head:
+    - include: generic-params
+    - match: '\brequires\b'
+      scope: keyword.other.constraint.sand
+      push:
+        - match: '{{ident}}'
+          scope: entity.name.type.sand
+        - match: ','
+          scope: punctuation.separator.sand
+        - match: '(?=\{)'
+          pop: true
+    - match: '\{'
+      scope: punctuation.section.block.begin.sand
+      set: typeclass-body
+    - match: '(?=\bdef\b|\bmodule\b|\btype\b|\btypeclass\b|\bimpl\b|\bextern\b|\buse\b)'
+      pop: true
+
+  typeclass-body:
+    - match: '\}'
+      scope: punctuation.section.block.end.sand
+      pop: true
+    - include: function-def
+
+  impl-decl:
+    - match: '\bimpl\b'
+      scope: keyword.declaration.impl.sand
+      push:
+        - match: '\bfor\b'
+          scope: keyword.control.sand
+          set: impl-type
+        - match: '{{ident}}'
+          scope: entity.name.type.sand
+        - match: '(?=\S)'
+          pop: true
+
+  impl-type:
+    - match: '\{'
+      scope: punctuation.section.block.begin.sand
+      set: impl-body
+    - include: type-expr
+
+  impl-body:
+    - match: '\}'
+      scope: punctuation.section.block.end.sand
+      pop: true
+    - include: function-def
 
   # ── generic parameters & where clauses ────────────────────────────────────
 
@@ -232,6 +318,14 @@ contexts:
           scope: punctuation.separator.sand
     - match: '\|'
       scope: punctuation.separator.sand
+    # function type arrows: `A -> B` and the calling-mode `A -[Owned]> B`
+    - match: '(-\[)\s*(\bOwned\b|\bBorrowedMut\b|\bBorrowed\b)\s*(\]>)'
+      captures:
+        1: keyword.operator.arrow.sand
+        2: storage.modifier.sand
+        3: keyword.operator.arrow.sand
+    - match: '->'
+      scope: keyword.operator.arrow.sand
     - match: '(?=[=\){};,]|:=|\bthen\b|\bdo\b|\belse\b|\bwhere\b)'
       pop: true
 
@@ -326,6 +420,7 @@ contexts:
 
   expressions:
     - include: keywords-control
+    - include: lambda
     - include: literals
     - include: lifetimes
     - include: borrow-deref
@@ -339,6 +434,18 @@ contexts:
     - match: ';'
       scope: punctuation.terminator.sand
 
+  # lambda value: `fn (x: T) -> e` / `fn (x: T) -[Owned]> e`
+  lambda:
+    - match: '\bfn\b'
+      scope: keyword.declaration.function.sand
+    - match: '(-\[)\s*(\bOwned\b|\bBorrowedMut\b|\bBorrowed\b)\s*(\]>)'
+      captures:
+        1: keyword.operator.arrow.sand
+        2: storage.modifier.sand
+        3: keyword.operator.arrow.sand
+    - match: '->'
+      scope: keyword.operator.arrow.sand
+
   keywords-control:
     - match: '\b(?:if|then|else)\b'
       scope: keyword.control.conditional.sand
@@ -348,7 +455,7 @@ contexts:
       scope: keyword.control.match.sand
     - match: '=>'
       scope: keyword.operator.arrow.sand
-    - match: '\band\b'
+    - match: '\b(?:and|or|xor)\b'
       scope: keyword.operator.logical.sand
 
   literals:

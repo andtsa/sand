@@ -18,6 +18,7 @@ use crate::passes::type_ast::generics::Subst;
 use crate::passes::type_ast::generics::subst;
 use crate::passes::type_ast::infer::escape_check;
 use crate::passes::type_ast::infer::infer;
+use crate::passes::type_ast::infer::infer_call;
 use crate::passes::type_ast::infer::infer_constructor;
 use crate::passes::type_ast::infer::infer_method_call;
 use crate::passes::type_ast::infer::infer_ptr_op;
@@ -1086,6 +1087,25 @@ pub(super) fn check<'tcx>(
             Ok(e)
         }
 
+        // Push the expected type into a direct function call so a type parameter
+        // that appears only in the return (`fail<A>(c: Int): Check<A>`) is solved
+        // from it rather than left ambiguous.
+        qhir::Expression::Call { fn_name, args } => {
+            let e = infer_call(ctx, env, expr, *fn_name, args, Some(expected))?;
+            if let Some(coerced) = coerce_never(&e, expected) {
+                return Ok(coerced);
+            }
+            if !e.ty.eq_modulo_regions(expected) {
+                return Err(AstTypeError::TypeError {
+                    message: format!("expected type {} but found {}", expected, e.ty),
+                    expected,
+                    found: e.ty,
+                    range: expr.range,
+                });
+            }
+            Ok(e)
+        }
+
         // Push the expected type into a typeclass method call so a receiver that
         // appears only in the result (`pure<A>(x: A): F<A>`) can be solved from
         // it. `infer_method_call` then verifies the result matches.
@@ -1107,6 +1127,65 @@ pub(super) fn check<'tcx>(
                 });
             }
             Ok(e)
+        }
+
+        // Check a lambda against an expected function type, pushing the
+        // expected *return* type into the body. Without this, a lambda is always
+        // inferred, so a body whose type isn't fully determined locally (e.g. a
+        // generic constructor `Res#Err(x)` whose parameter only appears in
+        // another variant) can't be resolved even when the surrounding arrow
+        // type pins it. The param keeps its annotation, which must match the
+        // expected domain.
+        qhir::Expression::Lambda { param, body, mode }
+            if matches!(expected.kind(), TyKind::Fn(_, _, _)) =>
+        {
+            let TyKind::Fn(arg_ty, ret_ty, exp_mode) = expected.kind() else {
+                unreachable!("guarded by the match arm condition")
+            };
+            if !param.ty.eq_modulo_regions(*arg_ty) {
+                return Err(AstTypeError::TypeError {
+                    message: format!(
+                        "lambda parameter has type {} but {} is expected here",
+                        param.ty, arg_ty
+                    ),
+                    expected: *arg_ty,
+                    found: param.ty,
+                    range: expr.range,
+                });
+            }
+            if !mode.usable_as(*exp_mode) {
+                return Err(AstTypeError::TypeError {
+                    message: format!("a {expected} closure is required here"),
+                    expected,
+                    found: ctx.fn_ty(param.ty, *ret_ty, *mode),
+                    range: expr.range,
+                });
+            }
+            let home = ctx.current_scope_region();
+            let mut body_env = env.clone();
+            body_env.insert(param.name, (param.ty, Kind::Owned, param.is_mutable, home));
+            let body_typed = check(ctx, &body_env, body, *ret_ty)?;
+
+            let mut referenced = std::collections::HashSet::new();
+            crate::analysis::annotate::collect_dependencies(&body_typed.expr, &mut referenced);
+            let mut captures: Vec<(UniqVar<'tcx>, Ty<'tcx>)> = referenced
+                .into_iter()
+                .filter(|v| *v != param.name)
+                .filter_map(|v| env.get(&v).map(|binding| (v, binding.0)))
+                .collect();
+            captures.sort_by_key(|(v, _)| *v);
+
+            let fn_ty = ctx.fn_ty(param.ty, body_typed.ty, *mode);
+            Ok(typed_hir::Expr {
+                expr: typed_hir::Expression::Lambda {
+                    param: param.clone(),
+                    body: Box::new(body_typed),
+                    captures,
+                },
+                range: expr.range,
+                ty: fn_ty,
+                kind: Kind::Owned,
+            })
         }
 
         // everything else: infer, then verify type matches expected.

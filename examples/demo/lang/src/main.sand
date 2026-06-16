@@ -1,0 +1,272 @@
+// toy version of the project language
+
+
+// language types
+
+type Ty = TInt | TBool | TUnit | TEnum(Int);
+
+// prerequisite for Copy
+impl Clone for Ty {
+    def clone(x: &Ty): Ty :=
+        match *x {
+            Ty#TInt     => Ty#TInt,
+            Ty#TBool    => Ty#TBool,
+            Ty#TUnit    => Ty#TUnit,
+            Ty#TEnum(e) => Ty#TEnum(e),
+        }
+}
+
+// marker trait for convenience
+impl Copy for Ty { }
+
+// structural type equality
+def ty_eq(a: Ty, b: Ty): Bool :=
+    match a {
+        Ty#TInt     => match b { Ty#TInt     => true, _ => false },
+        Ty#TBool    => match b { Ty#TBool    => true, _ => false },
+        Ty#TUnit    => match b { Ty#TUnit    => true, _ => false },
+        Ty#TEnum(e) => match b { Ty#TEnum(f) => e == f, _ => false },
+    }
+
+// there's no strings yet sorry
+def print_ty(t: Ty): Unit :=
+    match t {
+        Ty#TInt     => println(100),
+        Ty#TBool    => println(101),
+        Ty#TUnit    => println(102),
+        Ty#TEnum(e) => println(e),
+    }
+
+
+// abstract syntax tree
+//
+// recursive, so they have to `derive Heaped`
+// 
+// a consuming `match` frees the heap node,
+
+type Expr =
+      LitInt(Int)
+    | LitBool(Bool)
+    | Var(Int)              // a variable, by integer symbol id
+    | EnumCtor(Int, Int)    // <enumId>::<variantId>, e.g. Light::Green
+    | Add(Expr, Expr)
+    | Lt(Expr, Expr)
+    | If(Expr, Expr, Expr)
+    | Let(Int, Expr, Expr)  // let <id> = e1 in e2
+    deriving Heaped;
+
+// enum table maps an enum id to its number of variants
+type EnumDefs = EDNil | EDCons(Int, Int, EnumDefs) deriving Heaped;
+
+// typing context maps a variable id to its type
+type Ctx = CNil | CBind(Int, Ty, Ctx) deriving Heaped;
+
+
+// the `Check` monad is StateT (Ctx + EnumDefs) over Either (a type error)
+
+// the type errors the checker can raise
+type TcError
+    = BopOpMismatch        // arithmetic/comparison operand isn't Int
+    | IfBranchesDisagree   // the two branches of an `if` have different types
+    | IfCondNotBool        // an `if` condition isn't Bool
+    | UnboundVariable      // a variable id isn't in the context
+    | NoSuchEnumVariant;   // an enum-constructor names a bad variant
+
+// there's no strings yet, so render an error as a numeric code
+def tc_code(e: TcError): Int :=
+    match e {
+        TcError#BopOpMismatch      => 1,
+        TcError#IfBranchesDisagree => 2,
+        TcError#IfCondNotBool      => 3,
+        TcError#UnboundVariable    => 7,
+        TcError#NoSuchEnumVariant  => 8,
+    }
+
+// inner "either"
+type Res<A> = Ok(A) | Err(TcError);
+
+// state is the typing context and the enum table
+type St = MkSt(Ctx, EnumDefs);
+
+type Check<A> = MkCheck(St -> (Res<A>, St));
+
+// run a computation against an initial state
+def run_check<A>(m: Check<A>, s: St): (Res<A>, St) :=
+    match m { Check#MkCheck(g) => g(s) }
+
+impl Functor for Check {
+    def fmap<A, B>(x: Check<A>, f: A -> B): Check<B> :=
+        Check#MkCheck(fn (s: St) -> {
+            let (r, s2) = run_check(x, s);
+            match r {
+                Res#Ok(a)  => (Res#Ok(f(a)), s2),
+                Res#Err(e) => (Res#Err(e), s2),
+            }
+        })
+}
+
+impl Applicative for Check {
+    def pure<A>(x: A): Check<A> :=
+        Check#MkCheck(fn (s: St) -> (Res#Ok(x), s))
+
+    def ap<A, B>(f: Check<A -> B>, x: Check<A>): Check<B> :=
+        Check#MkCheck(fn (s: St) -> {
+            let (rf, s2) = run_check(f, s);
+            match rf {
+                Res#Err(e) => (Res#Err(e), s2),
+                Res#Ok(g)  => {
+                    let (ra, s3) = run_check(x, s2);
+                    match ra {
+                        Res#Err(e) => (Res#Err(e), s3),
+                        Res#Ok(a)  => (Res#Ok(g(a)), s3),
+                    }
+                },
+            }
+        })
+}
+
+impl Monad for Check {
+    def bind<A, B>(x: Check<A>, f: A -> Check<B>): Check<B> :=
+        Check#MkCheck(fn (s: St) -> {
+            let (r, s2) = run_check(x, s);
+            match r {
+                Res#Ok(a)  => run_check(f(a), s2),
+                Res#Err(e) => (Res#Err(e), s2),
+            }
+        })
+}
+
+
+// Monadic primitives over the state
+
+// fail with a type error.
+def fail<A>(c: TcError): Check<A> :=
+    Check#MkCheck(fn (s: St) -> (Res#Err(c), s))
+
+// assert a condition, or fail with the given error
+def require(cond: Bool, err: TcError): Check<Unit> :=
+    if cond then pure({}) else fail(err)
+
+def lookup(c: Ctx, x: Int): (Res<Ty>, Ctx) :=
+    match c {
+        Ctx#CNil => (Res#Err(TcError#UnboundVariable), Ctx#CNil),
+        Ctx#CBind(y, t, rest) =>
+            if x == y
+                then (Res#Ok(t), Ctx#CBind(y, t, rest))     // t : Ty is Copy
+                else {
+                    let (r, rest2) = lookup(rest, x);
+                    (r, Ctx#CBind(y, t, rest2))
+                },
+    }
+
+def variant_count(d: EnumDefs, en: Int): (Int, EnumDefs) :=
+    match d {
+        EnumDefs#EDNil => (0, EnumDefs#EDNil),
+        EnumDefs#EDCons(e, n, rest) =>
+            if en == e
+                then (n, EnumDefs#EDCons(e, n, rest))
+                else {
+                    let (k, rest2) = variant_count(rest, en);
+                    (k, EnumDefs#EDCons(e, n, rest2))
+                },
+    }
+
+def lookup_var(x: Int): Check<Ty> :=
+    Check#MkCheck(fn (s: St) -> match s {
+        St#MkSt(c, d) => {
+            let (r, c2) = lookup(c, x);
+            (r, St#MkSt(c2, d))
+        }
+    })
+
+def push_var(x: Int, t: Ty): Check<Unit> :=
+    Check#MkCheck(fn (s: St) -> match s {
+        St#MkSt(c, d) => (Res#Ok({}), St#MkSt(Ctx#CBind(x, t, c), d))
+    })
+
+def pop_var(): Check<Unit> :=
+    Check#MkCheck(fn (s: St) -> match s {
+        St#MkSt(c, d) => match c {
+            Ctx#CNil              => (Res#Ok({}), St#MkSt(Ctx#CNil, d)),
+            Ctx#CBind(_, _, rest) => (Res#Ok({}), St#MkSt(rest, d)),
+        }
+    })
+
+def variant_ok(en: Int, v: Int): Check<Bool> :=
+    Check#MkCheck(fn (s: St) -> match s {
+        St#MkSt(c, d) => {
+            let (n, d2) = variant_count(d, en);
+            (Res#Ok(if v < 0 then false else v < n), St#MkSt(c, d2))
+        }
+    })
+
+
+// ----------------------------------------------------------------------------
+// the type checker
+// ----------------------------------------------------------------------------
+
+def infer(e: Expr): Check<Ty> :=
+    match e {
+        Expr#LitInt(_)  => pure(Ty#TInt),
+        Expr#LitBool(_) => pure(Ty#TBool),
+        Expr#Var(x)     => lookup_var(x),
+
+        Expr#EnumCtor(en, v) => {
+            ok: Bool <- variant_ok(en, v);
+            if ok then pure(Ty#TEnum(en)) else fail(TcError#NoSuchEnumVariant)
+        },
+
+        Expr#Add(l, r) => {
+            tl: Ty <- infer(l);
+            _u: Unit <- require(ty_eq(tl, Ty#TInt), TcError#BopOpMismatch);
+            tr: Ty <- infer(r);
+            _u: Unit <- require(ty_eq(tr, Ty#TInt), TcError#BopOpMismatch);
+            pure(Ty#TInt)
+        },
+
+        Expr#Lt(l, r) => {
+            tl: Ty <- infer(l);
+            _u: Unit <- require(ty_eq(tl, Ty#TInt), TcError#BopOpMismatch);
+            tr: Ty <- infer(r);
+            _u: Unit <- require(ty_eq(tr, Ty#TInt), TcError#BopOpMismatch);
+            pure(Ty#TBool)
+        },
+
+        Expr#If(c, t, f) => {
+            tc: Ty <- infer(c);
+            _u: Unit <- require(ty_eq(tc, Ty#TBool), TcError#IfCondNotBool);
+            tt: Ty <- infer(t);
+            tf: Ty <- infer(f);
+            _u: Unit <- require(ty_eq(tt, tf), TcError#IfBranchesDisagree);
+            pure(tt)
+        },
+
+        Expr#Let(x, e1, e2) => {
+            t1: Ty <- infer(e1);
+            _u: Unit <- push_var(x, t1);
+            t2: Ty <- infer(e2);
+            _u: Unit <- pop_var();
+            pure(t2)
+        },
+    }
+
+
+// demo
+
+def main(): Int := {
+    // enum Light { Red, Yellow, Green }  -> id 0, 3 variants
+    // enum Dir   { N, E, S, W }          -> id 1, 4 variants
+    let defs =
+        EnumDefs#EDCons(0, 3,
+        EnumDefs#EDCons(1, 4,
+        EnumDefs#EDNil));
+
+    // let x = Light::Green in x          (x id = 0; Light id = 0; Green = 2)
+    let prog = Expr#Let(0, Expr#EnumCtor(0, 2), Expr#Var(0));
+
+    let (res, _st) = run_check(infer(prog), St#MkSt(Ctx#CNil, defs));
+    match res {
+        Res#Ok(t)  => { print_ty(t); 0 },           // expected: prints 0 (Light's enum id)
+        Res#Err(c) => { println(tc_code(c)); 1 },    // print the error's numeric code
+    }
+}

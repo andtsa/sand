@@ -193,10 +193,19 @@ pub(super) fn infer_constructor<'tcx>(
         }
     }
 
+    // Whether the expected type already pinned *every* type argument. If so, we
+    // can `check` the payload against the (substituted) declared type, which
+    // propagates the expected type inward, e.g. into a lambda body, even when
+    // that type still mentions a *rigid* parameter of the enclosing generic
+    // function (`St -> Res<B>`). Only when some argument is still unsolved must
+    // we `infer` the payload and recover the argument from its type.
+    let all_args_solved = tp_ids.iter().all(|id| mapping.contains_key(id));
     let typed_payload = match (declared_payload, payload) {
         (Some(decl), Some(p)) => {
             let decl = subst(ctx, decl, &mapping);
-            if decl.has_param() {
+            if all_args_solved {
+                Some(Box::new(check(ctx, env, p, decl)?))
+            } else {
                 // payload type still parametric: infer the argument and unify.
                 let tp = infer(ctx, env, p)?;
                 // A unification failure here is a payload *type* mismatch (the
@@ -211,8 +220,6 @@ pub(super) fn infer_constructor<'tcx>(
                     range: p.range,
                 })?;
                 Some(Box::new(tp))
-            } else {
-                Some(Box::new(check(ctx, env, p, decl)?))
             }
         }
         _ => None,
@@ -732,31 +739,76 @@ pub(super) fn infer_method_call<'tcx>(
     args: &[qhir::Expr<'tcx>],
     expected: Option<Ty<'tcx>>,
 ) -> Result<typed_hir::Expr<'tcx>, AstTypeError<'tcx>> {
-    let arg_exprs: Vec<typed_hir::Expr<'tcx>> = args
-        .iter()
-        .map(|a| infer(ctx, env, a))
-        .collect::<Result<_, _>>()?;
-
     let mdef = ctx.get_typeclass(class).methods[method].clone();
     let class_param = ctx.get_typeclass(class).param;
     let class_name = ctx.get_typeclass(class).name.clone();
 
-    // Solve the class parameter (the receiver type) from the arguments.
-    let mut mapping: Subst<'tcx> = Map::new();
-    if mdef.param_tys.len() == arg_exprs.len() {
-        for (decl, a) in mdef.param_tys.iter().zip(&arg_exprs) {
-            let _ = unify(ctx, *decl, a.ty, &mut mapping);
-        }
+    // Arity must match the method signature. Reject early with a clear error
+    // (otherwise a wrong-arity call silently fails later as "cannot resolve").
+    if mdef.param_tys.len() != args.len() {
+        let arg_exprs = args
+            .iter()
+            .map(|a| infer(ctx, env, a))
+            .collect::<Result<Vec<_>, _>>()?;
+        return Err(AstTypeError::FunctionCallTypeError {
+            message: format!(
+                "method '{method}' expects {} arguments but found {}",
+                mdef.param_tys.len(),
+                args.len()
+            ),
+            expected: mdef.param_tys.clone(),
+            found: arg_exprs.iter().map(|e| e.ty).collect(),
+            range: expr.range,
+        });
     }
-    // Return-type-driven dispatch: when the receiver `F` appears only in the
-    // method's result (e.g. `pure<A>(x: A): F<A>`), it cannot be solved from the
-    // arguments. Seed it from the expected type of the call instead (the
-    // bidirectional `check` path supplies it, e.g. `let x: Opt<Int> = pure(5)`).
-    if let Some(exp) = expected
-        && !mapping.contains_key(&class_param)
-    {
+    // Bidirectional argument handling (arity is guaranteed equal above). A method
+    // like `bind(x: F<A>, f: A -> F<B>)` takes a *function* argument (the
+    // continuation) whose body needs an expected type to resolve — so we solve
+    // the receiver and type parameters from the non-function arguments first,
+    // seed the rest from the expected result, then *check* the function-typed
+    // arguments against their now-solved declared types (rather than inferring
+    // them blind).
+    let mut mapping: Subst<'tcx> = Map::new();
+    let mut typed: Vec<Option<typed_hir::Expr<'tcx>>> = (0..args.len()).map(|_| None).collect();
+    let is_fn_param = |i: usize| matches!(mdef.param_tys[i].kind(), TyKind::Fn(_, _, _));
+
+    // Pass 1: infer the non-function arguments and solve from them.
+    for (i, a) in args.iter().enumerate() {
+        if is_fn_param(i) {
+            continue;
+        }
+        let typed_a = infer(ctx, env, a)?;
+        let _ = unify(ctx, mdef.param_tys[i], typed_a.ty, &mut mapping);
+        typed[i] = Some(typed_a);
+    }
+    // Return-type-driven dispatch: when the receiver `F` (or a result-only type
+    // parameter) is not pinned by the arguments, seed it from the expected type
+    // of the call (e.g. `let x: Opt<Int> = pure(5)`, or a `bind` whose result
+    // type is known from context).
+    if let Some(exp) = expected {
         let _ = unify(ctx, mdef.ret_ty, exp, &mut mapping);
     }
+    // Pass 2: check the function-typed arguments against their substituted
+    // declared types so expected types flow into the continuation bodies. If a
+    // declared type is still parametric (unsolved), fall back to inferring it.
+    for (i, a) in args.iter().enumerate() {
+        if !is_fn_param(i) {
+            continue;
+        }
+        let decl = subst(ctx, mdef.param_tys[i], &mapping);
+        let typed_a = if decl.has_param() {
+            infer(ctx, env, a)?
+        } else {
+            check(ctx, env, a, decl)?
+        };
+        let _ = unify(ctx, mdef.param_tys[i], typed_a.ty, &mut mapping);
+        typed[i] = Some(typed_a);
+    }
+    let arg_exprs: Vec<typed_hir::Expr<'tcx>> = typed
+        .into_iter()
+        .map(|o| o.expect("every arg typed"))
+        .collect();
+
     let receiver =
         mapping
             .get(&class_param)
@@ -796,6 +848,36 @@ pub(super) fn infer_method_call<'tcx>(
         });
     }
 
+    // Concrete receiver: validate the call against the *solved* method signature
+    // before committing to an instance. The receiver/parameter solving above is
+    // best-effort (it ignores unification failures), so without this a
+    // wrong-typed argument — e.g. `same(5, true)` with `same(x: T, y: T)` — would
+    // slip through into the emitted `Call` and reach codegen.
+    for (decl, a) in mdef.param_tys.iter().zip(&arg_exprs) {
+        let want = subst(ctx, *decl, &mapping);
+        if !a.ty.eq_modulo_regions(want) {
+            return Err(AstTypeError::TypeError {
+                message: format!("argument of method `{method}` has the wrong type"),
+                expected: want,
+                found: a.ty,
+                range: a.range,
+            });
+        }
+    }
+    // Every method type parameter (the class parameter and the method's own
+    // generics) must be solved; an unbound one would leak into the result type.
+    let mut method_params = Vec::new();
+    for &decl in &mdef.param_tys {
+        decl.collect_params(&mut method_params);
+    }
+    mdef.ret_ty.collect_params(&mut method_params);
+    if method_params.iter().any(|id| !mapping.contains_key(id)) {
+        return Err(AstTypeError::TypeclassCannotResolve {
+            method: method.to_string(),
+            range: expr.range,
+        });
+    }
+
     let head = ctx
         .type_head(receiver)
         .ok_or_else(|| AstTypeError::TypeclassNoInstance {
@@ -822,6 +904,163 @@ pub(super) fn infer_method_call<'tcx>(
         ty: result_ty,
         kind: Kind::Owned,
         range: expr.range,
+    })
+}
+
+/// Type-check a direct function call `f(args)`. When `expected` is given (the
+/// bidirectional `check` path), it seeds the type-parameter solution from the
+/// callee's *return* type — so a parameter appearing only in the result
+/// (`fail<A>(c: Int): Check<A>`) is recovered from the call's expected type,
+/// the same way [`infer_method_call`] resolves `pure`. With `expected = None`
+/// (plain `infer`), type parameters come from the arguments alone.
+pub(super) fn infer_call<'tcx>(
+    ctx: &mut CompileCtx<'tcx>,
+    env: &TypeEnv<'tcx>,
+    expr: &qhir::Expr<'tcx>,
+    fn_name: FunRef<'tcx>,
+    args: &[qhir::Expr<'tcx>],
+    expected: Option<Ty<'tcx>>,
+) -> Result<typed_hir::Expr<'tcx>, AstTypeError<'tcx>> {
+    let fun_sig = ctx.fun_sig(&fn_name);
+    let raw_expected: Vec<Ty<'tcx>> = fun_sig.args.iter().map(|p| p.1).collect();
+    let raw_ret = fun_sig.ret_ty;
+    // Region inference: a callee's reference regions are inferred at the call
+    // site, so arguments match region-*blind* (`f<'r>(x: &'r T)` is callable with
+    // any borrow); the result region is the `meet` of the argument regions,
+    // stamped onto the return type once the arguments are typed.
+    let expected_tys: Vec<Ty<'tcx>> = raw_expected.iter().map(|t| ctx.region_erase(*t)).collect();
+
+    if args.len() != expected_tys.len() {
+        // Arity mismatch: infer args just for the error message.
+        let arg_exprs = args
+            .iter()
+            .map(|arg| infer(ctx, env, arg))
+            .collect::<Result<Vec<_>, _>>()?;
+        let arg_tys: Vec<Ty<'tcx>> = arg_exprs.iter().map(|e| e.ty).collect();
+        return Err(AstTypeError::FunctionCallTypeError {
+            message: format!(
+                "function '{}' expects {} arguments but found {}",
+                ctx.original_fun_name(fn_name),
+                expected_tys.len(),
+                arg_tys.len()
+            ),
+            expected: expected_tys,
+            found: arg_tys,
+            range: expr.range,
+        });
+    }
+
+    // A call is generic when the declared signature still mentions any type
+    // parameter; otherwise the existing concrete path applies.
+    let is_generic = expected_tys.iter().any(|t| t.has_param()) || raw_ret.has_param();
+
+    if !is_generic {
+        // check() each argument against the declared parameter type so that bare
+        // tags in argument position resolve from the expected context.
+        let arg_exprs = args
+            .iter()
+            .zip(&expected_tys)
+            .map(|(arg, &expected_ty)| check(ctx, env, arg, expected_ty))
+            .collect::<Result<Vec<_>, _>>()?;
+        let arg_tys: Vec<Ty<'tcx>> = arg_exprs.iter().map(|a| a.ty).collect();
+        let region_subst =
+            instantiate_call_regions(ctx, &fun_sig, &raw_expected, &arg_tys, expr.range)?;
+        let ret_ty = ctx.region_subst_ty(raw_ret, &region_subst);
+        return Ok(typed_hir::Expr {
+            expr: typed_hir::Expression::Call {
+                fn_name,
+                args: arg_exprs,
+            },
+            range: expr.range,
+            ty: ret_ty,
+            kind: Kind::Owned,
+        });
+    }
+
+    // Generic call: infer parametric arguments, check concrete ones, then unify
+    // to solve the type parameters and substitute into the return.
+    let arg_exprs = args
+        .iter()
+        .zip(&expected_tys)
+        .map(|(arg, &decl)| {
+            if decl.has_param() {
+                infer(ctx, env, arg)
+            } else {
+                check(ctx, env, arg, decl)
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let mut mapping: Subst<'tcx> = Map::new();
+    for (&decl, a) in expected_tys.iter().zip(&arg_exprs) {
+        if decl.has_param() {
+            unify(ctx, decl, a.ty, &mut mapping).map_err(|_| {
+                AstTypeError::FunctionCallTypeError {
+                    message: format!(
+                        "could not infer type parameters of '{}' from its arguments",
+                        ctx.original_fun_name(fn_name)
+                    ),
+                    expected: expected_tys.clone(),
+                    found: arg_exprs.iter().map(|e| e.ty).collect(),
+                    range: expr.range,
+                }
+            })?;
+        }
+    }
+    // Seed any still-unsolved type parameters from the expected return type
+    // (return-type-driven inference). Failures are ignored: a genuine mismatch
+    // surfaces at the caller's type comparison with a clearer message.
+    if let Some(exp) = expected {
+        let _ = unify(ctx, raw_ret, exp, &mut mapping);
+    }
+    // Every type parameter of the callee must now be solved. A parameter that
+    // appears only in the return type and is not pinned by `expected` would
+    // otherwise leak into the result type as an unbound `Param` and crash
+    // monomorphisation. The callee's own parameters are exactly those mentioned
+    // in its declared signature (the *enclosing* function's rigid parameters
+    // never appear in a callee's stored signature), so collecting from there is
+    // both sufficient and free of false positives.
+    let mut callee_params = Vec::new();
+    for &decl in &raw_expected {
+        decl.collect_params(&mut callee_params);
+    }
+    raw_ret.collect_params(&mut callee_params);
+    if callee_params.iter().any(|id| !mapping.contains_key(id)) {
+        return Err(AstTypeError::FunctionCallTypeError {
+            message: format!(
+                "could not infer all type parameters of '{}' (annotate the result type or use a turbofish)",
+                ctx.original_fun_name(fn_name)
+            ),
+            expected: expected_tys.clone(),
+            found: arg_exprs.iter().map(|e| e.ty).collect(),
+            range: expr.range,
+        });
+    }
+    // Check the callee's `where T : C` constraints against the solved type
+    // arguments: the instantiation must have an instance.
+    for tc in &fun_sig.type_constraints {
+        if let Some(&arg_ty) = mapping.get(&tc.param) {
+            let required_by = Some(ConstraintOrigin {
+                fun: ctx.original_fun_name(fn_name),
+                param: ctx.type_param_name(tc.param),
+            });
+            check_type_constraint(ctx, tc.class, arg_ty, expr.range, required_by)?;
+        }
+    }
+    let arg_tys: Vec<Ty<'tcx>> = arg_exprs.iter().map(|a| a.ty).collect();
+    let region_subst =
+        instantiate_call_regions(ctx, &fun_sig, &raw_expected, &arg_tys, expr.range)?;
+    let filled_ret = ctx.region_subst_ty(raw_ret, &region_subst);
+    let ret_ty = subst(ctx, filled_ret, &mapping);
+
+    Ok(typed_hir::Expr {
+        expr: typed_hir::Expression::Call {
+            fn_name,
+            args: arg_exprs,
+        },
+        range: expr.range,
+        ty: ret_ty,
+        kind: Kind::Owned,
     })
 }
 
@@ -1204,125 +1443,7 @@ pub(super) fn infer<'tcx>(
         } => infer_method_call(ctx, env, expr, *class, method, args, None),
 
         qhir::Expression::Call { fn_name, args } => {
-            let fun_sig = ctx.fun_sig(fn_name);
-            let raw_expected: Vec<Ty<'tcx>> = fun_sig.args.iter().map(|p| p.1).collect();
-            let raw_ret = fun_sig.ret_ty;
-            // Region inference: a callee's reference regions are inferred at the
-            // call site, so arguments match region-*blind* (`f<'r>(x: &'r T)` is
-            // callable with any borrow); the *result* region is the `meet` of the
-            // argument regions (Calculus: Region Substitution at Call Sites),
-            // stamped onto the return type once the arguments are typed.
-            let expected_tys: Vec<Ty<'tcx>> =
-                raw_expected.iter().map(|t| ctx.region_erase(*t)).collect();
-
-            if args.len() != expected_tys.len() {
-                // Arity mismatch: infer args just for the error message.
-                let arg_exprs = args
-                    .iter()
-                    .map(|arg| infer(ctx, env, arg))
-                    .collect::<Result<Vec<_>, _>>()?;
-                let arg_tys: Vec<Ty<'tcx>> = arg_exprs.iter().map(|e| e.ty).collect();
-                return Err(AstTypeError::FunctionCallTypeError {
-                    message: format!(
-                        "function '{}' expects {} arguments but found {}",
-                        ctx.original_fun_name(*fn_name),
-                        expected_tys.len(),
-                        arg_tys.len()
-                    ),
-                    expected: expected_tys,
-                    found: arg_tys,
-                    range: expr.range,
-                });
-            }
-
-            // A call is generic when the declared signature still mentions any
-            // type parameter; otherwise the existing concrete path applies.
-            let is_generic = expected_tys.iter().any(|t| t.has_param()) || raw_ret.has_param();
-
-            if !is_generic {
-                // check() each argument against the declared parameter type so that
-                // bare tags in argument position resolve from the expected context.
-                let arg_exprs = args
-                    .iter()
-                    .zip(&expected_tys)
-                    .map(|(arg, &expected_ty)| check(ctx, env, arg, expected_ty))
-                    .collect::<Result<Vec<_>, _>>()?;
-                // Infer the call's region substitution per lifetime parameter and
-                // check the callee's `where` clauses, then stamp the return type.
-                let arg_tys: Vec<Ty<'tcx>> = arg_exprs.iter().map(|a| a.ty).collect();
-                let region_subst =
-                    instantiate_call_regions(ctx, &fun_sig, &raw_expected, &arg_tys, expr.range)?;
-                let ret_ty = ctx.region_subst_ty(raw_ret, &region_subst);
-                return Ok(typed_hir::Expr {
-                    expr: typed_hir::Expression::Call {
-                        fn_name: *fn_name,
-                        args: arg_exprs,
-                    },
-                    range: expr.range,
-                    ty: ret_ty,
-                    kind: Kind::Owned,
-                });
-            }
-
-            // Generic call: infer parametric arguments, check concrete ones, then
-            // unify to solve the type parameters and substitute into the return.
-            let arg_exprs = args
-                .iter()
-                .zip(&expected_tys)
-                .map(|(arg, &decl)| {
-                    if decl.has_param() {
-                        infer(ctx, env, arg)
-                    } else {
-                        check(ctx, env, arg, decl)
-                    }
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-
-            let mut mapping: Subst<'tcx> = Map::new();
-            for (&decl, a) in expected_tys.iter().zip(&arg_exprs) {
-                if decl.has_param() {
-                    unify(ctx, decl, a.ty, &mut mapping).map_err(|_| {
-                        AstTypeError::FunctionCallTypeError {
-                            message: format!(
-                                "could not infer type parameters of '{}' from its arguments",
-                                ctx.original_fun_name(*fn_name)
-                            ),
-                            expected: expected_tys.clone(),
-                            found: arg_exprs.iter().map(|e| e.ty).collect(),
-                            range: expr.range,
-                        }
-                    })?;
-                }
-            }
-            // Check the callee's `where T : C` constraints against the solved
-            // type arguments: the instantiation must have an instance.
-            for tc in &fun_sig.type_constraints {
-                if let Some(&arg_ty) = mapping.get(&tc.param) {
-                    let required_by = Some(ConstraintOrigin {
-                        fun: ctx.original_fun_name(*fn_name),
-                        param: ctx.type_param_name(tc.param),
-                    });
-                    check_type_constraint(ctx, tc.class, arg_ty, expr.range, required_by)?;
-                }
-            }
-            // Infer the call's region substitution per lifetime parameter and
-            // check the callee's `where` clauses, stamp the return type, then
-            // substitute the solved type parameters.
-            let arg_tys: Vec<Ty<'tcx>> = arg_exprs.iter().map(|a| a.ty).collect();
-            let region_subst =
-                instantiate_call_regions(ctx, &fun_sig, &raw_expected, &arg_tys, expr.range)?;
-            let filled_ret = ctx.region_subst_ty(raw_ret, &region_subst);
-            let ret_ty = subst(ctx, filled_ret, &mapping);
-
-            Ok(typed_hir::Expr {
-                expr: typed_hir::Expression::Call {
-                    fn_name: *fn_name,
-                    args: arg_exprs,
-                },
-                range: expr.range,
-                ty: ret_ty,
-                kind: Kind::Owned,
-            })
+            infer_call(ctx, env, expr, *fn_name, args, None)
         }
         // `size_of::<T>(): Int`: a turbofish *type* argument, no value args; the
         // size itself is computed by codegen.

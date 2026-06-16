@@ -565,3 +565,49 @@ fn interpret_match_dispatches_on_payload_variant_tag() {
         Expression::Int(2)
     );
 }
+
+// ── interpreter step budget (LSP hover guard, R4/S2)
+// ────────────────────────── `interpret_with_output_bounded` aborts after a
+// fixed number of evaluated expressions so latency-sensitive callers (the LSP
+// hover preview) can run user code without risking a hang on an accidental
+// infinite loop.
+
+#[test]
+fn bounded_interpret_aborts_nonterminating_program() {
+    use lang::interpreter::typed_hir::InterpError;
+    let (ctx, prog) =
+        crate::common::typecheck("def main(): Int := { while true do { let x: Int = 1; }; 0 }");
+    let mut out: Vec<u8> = Vec::new();
+    let result = prog.interpret_with_output_bounded(&ctx, &mut out, 10_000);
+    assert!(
+        matches!(result, Err(InterpError::StepLimitExceeded)),
+        "expected StepLimitExceeded, got {result:?}"
+    );
+    std::mem::forget(ctx);
+}
+
+#[test]
+fn bounded_interpret_runs_terminating_program() {
+    let (ctx, prog) = crate::common::typecheck("def main(): Int := 21 + 21");
+    let mut out: Vec<u8> = Vec::new();
+    let result = prog.interpret_with_output_bounded(&ctx, &mut out, 1_000_000);
+    assert_eq!(result.ok(), Some(Expression::Int(42)));
+    std::mem::forget(ctx);
+}
+
+#[test]
+fn bounded_interpret_aborts_infinite_recursion() {
+    use lang::interpreter::typed_hir::InterpError;
+    // No base case: unbounded recursion. The depth guard must turn this into a
+    // clean error instead of a (uncatchable) native stack overflow.
+    let (ctx, prog) = crate::common::typecheck(
+        "def loop_(n: Int): Int := loop_(n + 1) \n def main(): Int := loop_(0)",
+    );
+    let mut out: Vec<u8> = Vec::new();
+    let result = prog.interpret_with_output_bounded(&ctx, &mut out, 100_000_000);
+    assert!(
+        matches!(result, Err(InterpError::StepLimitExceeded)),
+        "expected StepLimitExceeded, got {result:?}"
+    );
+    std::mem::forget(ctx);
+}
