@@ -70,7 +70,7 @@ impl<'ctx> LlvmCodegen<'ctx> {
                     "generic",
                     "",
                     inkwell::OptimizationLevel::Default,
-                    RelocMode::Default,
+                    RelocMode::PIC,
                     CodeModel::Default,
                 )
             })
@@ -1404,7 +1404,7 @@ impl<'ctx> LlvmCodegen<'ctx> {
                 "generic",
                 "",
                 inkwell::OptimizationLevel::Default,
-                RelocMode::Default,
+                RelocMode::PIC,
                 CodeModel::Default,
             )
             .ok_or_else(|| {
