@@ -89,8 +89,6 @@ pub enum AstTypeError<'tcx> {
     },
     #[error("duplicate match pattern '{pattern}' at {range}")]
     DuplicateMatchPattern { pattern: String, range: Range },
-    #[error("unreachable match arm at {range} (appears after a wildcard or exhaustive pattern)")]
-    UnreachableMatchArm { range: Range },
     #[error(
         "match arm pattern is for enum '{found_enum}' but scrutinee has type '{expected_enum}' at {range}"
     )]

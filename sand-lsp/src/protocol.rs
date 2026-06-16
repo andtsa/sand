@@ -22,134 +22,26 @@ use crate::lsp::ProjectSlot;
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
+        // Keep `initialize` fast: just record the root and return capabilities.
+        // The heavy discovery + initial type-check is deferred to `initialized`,
+        // because tower-lsp suppresses progress notifications until the server is
+        // initialized — so progress can only be reported from `initialized` on.
         debug!("initialising sand-lsp");
-        let Some(uri) = params.root_uri.as_ref() else {
-            debug!("no root uri provided for initialisation");
-            return Ok(Self::capabilities());
-        };
-        let Ok(root_path) = uri.to_file_path() else {
-            debug!("invalid root uri during initialisation: {uri}");
-            return Ok(Self::capabilities());
-        };
-
-        *self.root.write().await = Some(root_path.clone());
-        info!("initialised sand-lsp with root: {}", root_path.display());
-
-        let mut slots: Vec<ProjectSlot> = vec![];
-
-        // Phase 1: find all sand.toml files recursively and register each as a project.
-        let config_paths = match spawn_blocking({
-            let root_path = root_path.clone();
-            move || discover_configs(root_path)
-        })
-        .await
-        .map_err(anyhow::Error::from)
-        .and_then(|r| r.map_err(anyhow::Error::from))
-        {
-            Ok(paths) => paths,
-            Err(e) => {
-                error!("config discovery failed: {e}");
-                vec![]
+        match params.root_uri.as_ref().and_then(|u| u.to_file_path().ok()) {
+            Some(root_path) => {
+                info!("initialised sand-lsp with root: {}", root_path.display());
+                *self.root.write().await = Some(root_path);
             }
-        };
-
-        for config_path in config_paths {
-            match Project::from_config(&config_path) {
-                Ok(result) => {
-                    for warning in &result.warnings {
-                        warn!("{}", warning.message);
-                        self.log(MessageType::WARNING, &warning.message).await;
-                    }
-                    if let Some(cfg_uri) = result.project.config_url() {
-                        self.client
-                            .publish_diagnostics(
-                                cfg_uri,
-                                result.warnings.iter().map(setup_warning_to_lsp).collect(),
-                                None,
-                            )
-                            .await;
-                    }
-                    slots.push(ProjectSlot {
-                        project: result.project,
-                        last_result: None,
-                    });
-                }
-                Err(e) => {
-                    error!("failed to load config {config_path:?}: {e}");
-                }
-            }
+            None => debug!("no usable root uri provided for initialisation"),
         }
-
-        // Phase 2: discover all .sand files; create a standalone slot for each
-        // file not already tracked by a config-based project.
-        let all_sand_files = match spawn_blocking({
-            let root_path = root_path.clone();
-            move || discover_files(root_path)
-        })
-        .await
-        .map_err(anyhow::Error::from)
-        .and_then(|r| r.map_err(anyhow::Error::from))
-        {
-            Ok(paths) => paths,
-            Err(e) => {
-                error!("file discovery failed: {e}");
-                vec![]
-            }
-        };
-
-        for path in all_sand_files {
-            let Ok(file_uri) = Url::from_file_path(&path) else {
-                continue;
-            };
-            if slots
-                .iter()
-                .any(|s| s.project.is_tracked(&file_uri).is_some())
-            {
-                continue;
-            }
-            let result = match Project::from_paths(&[path]) {
-                Ok(r) => r,
-                Err(e) => {
-                    error!("failed to create slot: {e}");
-                    ProjectCreationResult {
-                        project: Project::empty(),
-                        warnings: vec![],
-                    }
-                }
-            };
-            for warning in &result.warnings {
-                warn!("{}", warning.message);
-                self.log(MessageType::WARNING, &warning.message).await;
-                self.client
-                    .publish_diagnostics(
-                        warning.url.clone(),
-                        vec![setup_warning_to_lsp(warning)],
-                        None,
-                    )
-                    .await;
-            }
-            slots.push(ProjectSlot {
-                project: result.project,
-                last_result: None,
-            });
-        }
-
-        *self.slots.write().await = slots;
-        self.check_project().await;
-
         Ok(Self::capabilities())
     }
 
     async fn initialized(&self, _: InitializedParams) {
+        // Now that the handshake is complete, load the workspace with progress.
+        self.load_workspace().await;
+
         let slots_guard = self.slots.read().await;
-        if slots_guard.is_empty() {
-            self.log(
-                MessageType::ERROR,
-                "initialized called before project was set up",
-            )
-            .await;
-            return;
-        }
         let slot_count = slots_guard.len();
         let total_files: usize = slots_guard.iter().map(|s| s.project.file_count()).sum();
         let root = self.root.read().await;
@@ -184,8 +76,10 @@ impl LanguageServer for Backend {
         let slots_guard = self.slots.read().await;
         for slot in slots_guard.iter() {
             if slot.project.is_tracked(uri).is_some() {
-                let Some(lang::castles::project::CheckResult::Success { ctx, ast }) =
-                    slot.last_result.as_ref()
+                // Use the last *good* analysis, so hover keeps working while the
+                // current edit doesn't check.
+                let Some(lang::castles::project::CheckResult::Success { ctx, ast, .. }) =
+                    slot.last_good.as_ref()
                 else {
                     return Ok(None);
                 };
@@ -210,8 +104,10 @@ impl LanguageServer for Backend {
         let slots_guard = self.slots.read().await;
         for slot in slots_guard.iter() {
             if slot.project.is_tracked(uri).is_some() {
-                let Some(lang::castles::project::CheckResult::Success { ctx, ast }) =
-                    slot.last_result.as_ref()
+                // Use the last *good* analysis, so goto keeps working while the
+                // current edit doesn't check.
+                let Some(lang::castles::project::CheckResult::Success { ctx, ast, .. }) =
+                    slot.last_good.as_ref()
                 else {
                     return Ok(None);
                 };
@@ -230,8 +126,14 @@ impl LanguageServer for Backend {
             let Some(file_ref) = slot.project.is_tracked(uri) else {
                 continue;
             };
-            let Some(lang::castles::project::CheckResult::Success { ctx, ast }) =
-                slot.last_result.as_ref()
+            // Formatting *rewrites* the document, so it must reflect the current
+            // text — never a stale AST. Only format when the current check
+            // succeeded (no pending failure); `last_good` then matches the file.
+            if slot.last_result.is_some() {
+                return Ok(None);
+            }
+            let Some(lang::castles::project::CheckResult::Success { ctx, ast, .. }) =
+                slot.last_good.as_ref()
             else {
                 return Ok(None);
             };
@@ -299,5 +201,130 @@ impl Backend {
             },
             ..Default::default()
         }
+    }
+
+    /// Discover and load every project / loose file under the workspace root,
+    /// then run the initial check — reporting `$/progress` for each phase so
+    /// the editor shows a loading indicator. Runs from `initialized`
+    /// (progress notifications are dropped before the server is
+    /// initialized).
+    async fn load_workspace(&self) {
+        let Some(root_path) = self.root.read().await.clone() else {
+            return; // no root (e.g. single-file client with no workspace)
+        };
+
+        let token = self.progress_begin("sand: loading").await;
+
+        // Phase 1: find all sand.toml files recursively and register each project.
+        self.progress_report(&token, "discovering projects", Some(10))
+            .await;
+        let config_paths = match spawn_blocking({
+            let root_path = root_path.clone();
+            move || discover_configs(root_path)
+        })
+        .await
+        .map_err(anyhow::Error::from)
+        .and_then(|r| r.map_err(anyhow::Error::from))
+        {
+            Ok(paths) => paths,
+            Err(e) => {
+                error!("config discovery failed: {e}");
+                vec![]
+            }
+        };
+
+        let mut slots: Vec<ProjectSlot> = vec![];
+        let config_total = config_paths.len().max(1);
+        for (i, config_path) in config_paths.into_iter().enumerate() {
+            self.progress_report(
+                &token,
+                format!("loading project {}/{config_total}", i + 1),
+                Some(10 + (30 * i as u32 / config_total as u32)),
+            )
+            .await;
+            match Project::from_config(&config_path) {
+                Ok(result) => {
+                    for warning in &result.warnings {
+                        warn!("{}", warning.message);
+                        self.log(MessageType::WARNING, &warning.message).await;
+                    }
+                    if let Some(cfg_uri) = result.project.config_url() {
+                        self.client
+                            .publish_diagnostics(
+                                cfg_uri,
+                                result.warnings.iter().map(setup_warning_to_lsp).collect(),
+                                None,
+                            )
+                            .await;
+                    }
+                    slots.push(ProjectSlot::new(result.project));
+                }
+                Err(e) => {
+                    error!("failed to load config {config_path:?}: {e}");
+                }
+            }
+        }
+
+        // Phase 2: discover all .sand files; create a standalone slot for each
+        // file not already tracked by a config-based project.
+        self.progress_report(&token, "discovering files", Some(45))
+            .await;
+        let all_sand_files = match spawn_blocking({
+            let root_path = root_path.clone();
+            move || discover_files(root_path)
+        })
+        .await
+        .map_err(anyhow::Error::from)
+        .and_then(|r| r.map_err(anyhow::Error::from))
+        {
+            Ok(paths) => paths,
+            Err(e) => {
+                error!("file discovery failed: {e}");
+                vec![]
+            }
+        };
+
+        for path in all_sand_files {
+            let Ok(file_uri) = Url::from_file_path(&path) else {
+                continue;
+            };
+            if slots
+                .iter()
+                .any(|s| s.project.is_tracked(&file_uri).is_some())
+            {
+                continue;
+            }
+            let result = match Project::from_paths(&[path]) {
+                Ok(r) => r,
+                Err(e) => {
+                    error!("failed to create slot: {e}");
+                    ProjectCreationResult {
+                        project: Project::empty(),
+                        warnings: vec![],
+                    }
+                }
+            };
+            for warning in &result.warnings {
+                warn!("{}", warning.message);
+                self.log(MessageType::WARNING, &warning.message).await;
+                self.client
+                    .publish_diagnostics(
+                        warning.url.clone(),
+                        vec![setup_warning_to_lsp(warning)],
+                        None,
+                    )
+                    .await;
+            }
+            slots.push(ProjectSlot::new(result.project));
+        }
+
+        *self.slots.write().await = slots;
+
+        // Phase 3: the initial type-check of everything.
+        self.progress_report(&token, "type-checking", Some(70))
+            .await;
+        self.check_project().await;
+
+        self.progress_end(token, "ready").await;
     }
 }

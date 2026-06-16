@@ -5,7 +5,6 @@ use clap::Args;
 use clap::clap_derive::ValueEnum;
 use lang::castles::project::CheckResult;
 use lang::castles::project::Project;
-use lang::compiler::diagnostics::SandDiagnostic;
 use lang::ir_types::mir::MirProgram;
 
 use crate::error::CliError;
@@ -60,8 +59,18 @@ pub fn run(args: RunArgs, dry_run: bool) -> Result<(), CliError> {
     let _g2 = span.enter();
 
     let result = project.check();
+    // Render every accumulated diagnostic (errors *and* warnings) from the sink,
+    // skipping synthetic (core library) files.
+    for (fr, file_diags) in &result.diagnostics().map {
+        if project.is_synthetic_file(*fr) {
+            continue;
+        }
+        for diag in file_diags {
+            eprintln!("{}", diag.render(&project));
+        }
+    }
     let (ctx, ast) = match result {
-        CheckResult::Success { ctx, ast } => {
+        CheckResult::Success { ctx, ast, .. } => {
             tracing::debug!(
                 "compilation successful with {} functions",
                 ast.functions.len()
@@ -69,22 +78,9 @@ pub fn run(args: RunArgs, dry_run: bool) -> Result<(), CliError> {
             ast.functions
                 .values()
                 .for_each(|f| tracing::trace!(name = ctx.original_fun_name(f.name)));
-            for diag in &ctx.diagnostics {
-                // Skip diagnostics from synthetic files (e.g. the core library).
-                if diag.file.is_some_and(|fr| project.is_synthetic_file(fr)) {
-                    continue;
-                }
-                eprintln!("{}", diag.render(&project));
-            }
             (ctx, ast)
         }
-        CheckResult::Failure { ctx, error } => {
-            let diags = SandDiagnostic::from_compiler_error(&ctx, &error);
-            for (_file_ref, file_diags) in diags.map {
-                for diag in file_diags {
-                    eprintln!("{}", diag.render(&project));
-                }
-            }
+        CheckResult::Failure { error, .. } => {
             return Err(CliError::CompilerError {
                 diagnostic: error.to_string(),
             });

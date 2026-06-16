@@ -41,7 +41,7 @@ def print_ty(t: Ty): Unit :=
 // abstract syntax tree
 //
 // recursive, so they have to `derive Heaped`
-// 
+//
 // a consuming `match` frees the heap node,
 
 type Expr =

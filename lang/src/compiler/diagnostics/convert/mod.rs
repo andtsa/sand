@@ -40,6 +40,17 @@ impl SandDiagnostic {
             SandLangErrorSource::OwnershipError(err) => {
                 ownership_error_to_diagnostic(ctx, source_file, err)
             }
+            SandLangErrorSource::InternalError(msg) => {
+                // No source span is an ICE is anchored to the whole file.
+                SandDiagnostics::single(
+                    source_file,
+                    SandDiagnostic {
+                        message: format!("internal compiler error: {msg}"),
+                        file: Some(source_file),
+                        ..Default::default()
+                    },
+                )
+            }
         }
     }
 }

@@ -8,6 +8,7 @@ use thiserror::Error;
 use crate::compiler::context::DefTarget;
 use crate::compiler::context::TypeRefEntry;
 use crate::compiler::context::arenas::Arenas;
+use crate::compiler::diagnostics::DiagnosticSeverity;
 use crate::compiler::diagnostics::SandDiagnostic;
 use crate::compiler::structure::AdtDef;
 use crate::compiler::structure::CodeModule;
@@ -205,7 +206,12 @@ pub struct CompileCtx<'tcx> {
     type_refs: Vec<TypeRefEntry<'tcx>>,
 
     // diagnostics
+    /// Non-fatal diagnostics (warnings) emitted by passes via [`Self::warn`].
+    /// Drained by `pipeline::run` into the diagnostics sink after each run.
     pub diagnostics: Vec<SandDiagnostic>,
+    /// The file currently being checked, set per-function by `infer_function`.
+    /// Used to anchor inline warnings (a [`Range`] alone has no file).
+    pub cur_file: Option<FileRef>,
 }
 
 #[derive(Debug, Error)]
@@ -343,7 +349,22 @@ impl<'tcx> CompileCtx<'tcx> {
             file_defaults: Default::default(),
             type_refs: Vec::new(),
             diagnostics: Vec::new(),
+            cur_file: None,
         }
+    }
+
+    /// Emit a non-fatal warning at `range` in the file currently being checked
+    /// ([`Self::cur_file`]). Collected by `pipeline::run` into the diagnostics
+    /// sink; a no-op if no current file is set.
+    pub fn warn(&mut self, range: Range, message: impl Into<String>) {
+        let Some(file) = self.cur_file else { return };
+        self.diagnostics.push(SandDiagnostic {
+            severity: DiagnosticSeverity::Warning,
+            message: message.into(),
+            range,
+            file: Some(file),
+            ..Default::default()
+        });
     }
 
     // ========================== Types ========================================
@@ -1183,6 +1204,15 @@ impl<'tcx> CompileCtx<'tcx> {
     #[track_caller]
     pub fn fun_sig(&self, fun: &FunRef<'tcx>) -> FunSig<'tcx> {
         self.function_signatures[fun].clone()
+    }
+
+    /// Fallible [`Self::fun_sig`]: `None` when no signature is registered for
+    /// `fun` (e.g. a typeclass default/impl method a method call was rewritten
+    /// to — the type checker builds that `Call` directly and never looks its
+    /// signature up). Used by best-effort consumers like LSP hover that must
+    /// not panic on such a `FunRef`.
+    pub fn try_fun_sig(&self, fun: &FunRef<'tcx>) -> Option<FunSig<'tcx>> {
+        self.function_signatures.get(fun).cloned()
     }
 
     pub fn set_fun_sig(&mut self, fun: FunRef<'tcx>, sig: FunSig<'tcx>) {

@@ -355,10 +355,10 @@ fn match_on_function_return_with_no_wildcard_is_error() {
     );
 }
 
-/// A duplicate pattern in the same match is a type error.
+/// A duplicate pattern in the same match is an unreachable arm: a warning.
 #[test]
-fn match_duplicate_pattern_is_error() {
-    typecheck_fails(
+fn match_duplicate_pattern_warns() {
+    typecheck_warns(
         "type Light = Red | Yellow | Green
          def main(): Int :=
              match Light#Red {
@@ -367,19 +367,21 @@ fn match_duplicate_pattern_is_error() {
                  Light#Yellow => 2,
                  Light#Green => 3,
              }",
+        "unreachable match arm",
     );
 }
 
-/// An arm after a wildcard is unreachable: type error.
+/// An arm after a wildcard is unreachable: a warning (not an error).
 #[test]
-fn match_arm_after_wildcard_is_error() {
-    typecheck_fails(
+fn match_arm_after_wildcard_warns() {
+    typecheck_warns(
         "type Light = Red | Yellow | Green
          def main(): Int :=
              match Light#Red {
                  _ => 0,
                  Light#Red => 1,
              }",
+        "unreachable match arm",
     );
 }
 
@@ -931,16 +933,17 @@ fn match_int_literal_non_exhaustive_is_error() {
     );
 }
 
-/// duplicate Int literal pattern is a type error.
+/// duplicate Int literal pattern is an unreachable arm: a warning.
 #[test]
-fn match_int_duplicate_literal_is_error() {
-    typecheck_fails(
+fn match_int_duplicate_literal_warns() {
+    typecheck_warns(
         "def main(): Int :=
              match 5 {
                  1 => 10,
                  1 => 20,
                  _ => 0,
              }",
+        "unreachable match arm",
     );
 }
 
@@ -1112,11 +1115,12 @@ fn tuple_with_refutable_elements_exhaustive_runs() {
 }
 
 /// A wildcard arm after a set of arms that already exhaust the type is
-/// redundant and flagged unreachable (matches Rust). The old checker missed
-/// this when exhaustiveness came from nested variant coverage.
+/// redundant and flagged unreachable — a *warning*, not an error (matches
+/// Rust's `unreachable_patterns` lint). The old checker missed this when
+/// exhaustiveness came from nested variant coverage.
 #[test]
-fn redundant_catchall_after_exhaustive_nested_arms_is_rejected() {
-    typecheck_fails(
+fn redundant_catchall_after_exhaustive_nested_arms_warns() {
+    typecheck_warns(
         "type Color = Red | Green | Blue
          type Box = Colored(Color)
          def main(): Int := match Box#Colored(Color#Green) {
@@ -1125,6 +1129,7 @@ fn redundant_catchall_after_exhaustive_nested_arms_is_rejected() {
              Box#Colored(Color#Blue)  => 3,
              _                        => 0,
          }",
+        "unreachable match arm",
     );
 }
 

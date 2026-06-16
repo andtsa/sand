@@ -1,10 +1,9 @@
 use std::path::PathBuf;
 
 use clap::Args;
-use lang::castles::project::CheckResult;
+use lang::Stage;
 use lang::castles::project::Project;
 use lang::castles::project::init::FatalProjectCreationError;
-use lang::compiler::diagnostics::SandDiagnostic;
 
 #[derive(Debug, Args)]
 pub struct FmtArgs {
@@ -35,15 +34,23 @@ pub fn fmt(args: FmtArgs) -> Result<(), FmtCliError> {
         eprintln!("{}", w.to_diagnostic().render(&project));
     }
 
-    match project.check() {
-        CheckResult::Success { ctx, ast } => {
-            let formatted = ast.format(&ctx);
+    // Formatting only needs the type-checked program *before* heap-lowering /
+    // monomorphisation, so the output stays source-faithful (heaped types aren't
+    // rewritten to `Unique<…>`) and we skip ownership + mono entirely.
+    let c = project.check_to(Stage::Typed);
+    // Format only a *complete*, well-typed program. With function-granular
+    // recovery, `typed` is `Some` even on type errors (carrying just the
+    // functions that checked), formatting that would silently drop the broken
+    // ones, so gate on the absence of any fatal error and render every
+    // accumulated diagnostic otherwise.
+    match c.typed {
+        Some(ast) if c.first_error.is_none() => {
+            let formatted = ast.format(&c.ctx);
             print!("{}", formatted.values().next().unwrap_or(&String::new()));
             Ok(())
         }
-        CheckResult::Failure { ctx, error } => {
-            let diags = SandDiagnostic::from_compiler_error(&ctx, &error);
-            for (_file_ref, file_diags) in diags.map {
+        _ => {
+            for file_diags in c.diagnostics.map.values() {
                 for diag in file_diags {
                     eprintln!("{}", diag.render(&project));
                 }

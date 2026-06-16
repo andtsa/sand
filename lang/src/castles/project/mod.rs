@@ -11,13 +11,17 @@ use std::path::PathBuf;
 use url::Url;
 
 use crate::SandLangError;
-use crate::compile_hir;
+use crate::Stage;
 use crate::compiler::context::CompileCtx;
 use crate::compiler::context::ProjectCtx;
+use crate::compiler::diagnostics::SandDiagnostics;
 use crate::compiler::structure::FileRef;
 use crate::compiler::structure::Map;
 use crate::compiler::structure::UriError;
+use crate::internal_bug;
+use crate::ir_types::qhir;
 use crate::ir_types::typed_hir::TypedProgram;
+use crate::run;
 use crate::util::fs::real_fs::FileSystem;
 
 pub struct Project {
@@ -107,12 +111,13 @@ impl Project {
             .and_then(|p| Url::from_file_path(p).ok())
     }
 
-    /// Compile the entire project to the typed AST.
-    /// If a program makes it to this point, it is considered syntactically
-    /// valid, and later passes should not produce any errors.
+    /// Run the pipeline up to `target` and return the full [`Compilation`]
+    /// (every reached stage's program + accumulated diagnostics). This is the
+    /// general entry point; [`Self::check`] and [`Self::check_ide`] are
+    /// convenience wrappers for the two common targets.
     ///
-    /// this call is stateless, and may be called repeatedly.
-    pub fn check(&self) -> CheckResult {
+    /// Stateless and may be called repeatedly.
+    pub fn check_to(&self, target: Stage) -> Compilation {
         let mut ctx = CompileCtx::initial();
         // map each file to its &content
         let modules: Map<FileRef, &str> = self
@@ -132,11 +137,79 @@ impl Project {
                 .collect::<Vec<_>>()
         );
 
-        match compile_hir(modules, &mut ctx) {
-            Ok(ast) => CheckResult::Success { ctx, ast },
-            Err(error) => CheckResult::Failure { ctx, error },
+        let out = run(modules, &mut ctx, target);
+        Compilation {
+            diagnostics: out.diagnostics,
+            mono: out.mono,
+            typed: out.typed,
+            qualified: out.qualified,
+            reached: out.reached,
+            first_error: out.first_error,
+            ctx,
         }
     }
+
+    /// Compile to the fully monomorphised program (for MIR lowering, codegen,
+    /// interpretation). All-or-nothing, as a [`CheckResult`].
+    pub fn check(&self) -> CheckResult {
+        let c = self.check_to(Stage::Monomorphised);
+        let diagnostics = c.diagnostics;
+        match c.mono {
+            Some(ast) => CheckResult::Success {
+                ast,
+                diagnostics,
+                ctx: c.ctx,
+            },
+            None => CheckResult::Failure {
+                error: c
+                    .first_error
+                    .unwrap_or_else(|| internal_bug!("compile failed without an error")),
+                diagnostics,
+                ctx: c.ctx,
+            },
+        }
+    }
+
+    /// Compile only as far as IDE features need: the **pre-monomorphisation**,
+    /// source-faithful typed program (so generic functions keep their real
+    /// signatures and unused generics remain visible), produced *before* heap
+    /// lowering while still running ownership for its diagnostics. On any fatal
+    /// error this is a `Failure` (the caller's `last_good` keeps the previous
+    /// good analysis alive).
+    pub fn check_ide(&self) -> CheckResult {
+        let c = self.check_to(Stage::Owned);
+        let diagnostics = c.diagnostics;
+        match c.typed {
+            // `typed` is captured pre-heap-lower/pre-mono; require no fatal error
+            // so a borrow-check failure surfaces (and falls back to `last_good`).
+            Some(ast) if c.first_error.is_none() => CheckResult::Success {
+                ast,
+                diagnostics,
+                ctx: c.ctx,
+            },
+            _ => CheckResult::Failure {
+                error: c
+                    .first_error
+                    .unwrap_or_else(|| internal_bug!("ide check failed without an error")),
+                diagnostics,
+                ctx: c.ctx,
+            },
+        }
+    }
+}
+
+/// The full result of running the pipeline (via [`Project::check_to`]): the
+/// program at each reached stage, plus accumulated diagnostics. `ctx` owns the
+/// arena the programs borrow, so it is declared **last** (dropped after the
+/// borrowing fields).
+pub struct Compilation {
+    pub diagnostics: SandDiagnostics,
+    pub mono: Option<TypedProgram<'static>>,
+    pub typed: Option<TypedProgram<'static>>,
+    pub qualified: Option<qhir::Program<'static>>,
+    pub reached: Stage,
+    pub first_error: Option<SandLangError<'static>>,
+    pub ctx: CompileCtx<'static>,
 }
 
 pub enum CheckResult {
@@ -146,12 +219,18 @@ pub enum CheckResult {
     // while the borrowing value is still being dropped. (The borrowers are
     // `Copy`/trivial-drop today, so this is defensive, but it makes the drop
     // order correct by construction rather than by that invariant.)
+    //
+    // `diagnostics` carries *every* accumulated diagnostic (not just the single
+    // fatal `error`), so consumers can surface multiple errors / warnings at
+    // once. It owns no arena borrow, so its drop position is immaterial.
     Success {
         ast: TypedProgram<'static>,
+        diagnostics: SandDiagnostics,
         ctx: CompileCtx<'static>,
     },
     Failure {
         error: SandLangError<'static>,
+        diagnostics: SandDiagnostics,
         ctx: CompileCtx<'static>,
     },
 }
@@ -165,10 +244,20 @@ impl CheckResult {
         matches!(self, CheckResult::Failure { .. })
     }
 
+    /// Every accumulated diagnostic (errors *and* warnings), regardless of
+    /// success or failure.
+    pub fn diagnostics(&self) -> &SandDiagnostics {
+        match self {
+            CheckResult::Success { diagnostics, .. } | CheckResult::Failure { diagnostics, .. } => {
+                diagnostics
+            }
+        }
+    }
+
     pub fn ctx_err(self) -> Option<(CompileCtx<'static>, SandLangError<'static>)> {
         match self {
             CheckResult::Success { .. } => None,
-            CheckResult::Failure { ctx, error } => Some((ctx, error)),
+            CheckResult::Failure { ctx, error, .. } => Some((ctx, error)),
         }
     }
 
@@ -179,8 +268,8 @@ impl CheckResult {
         (CompileCtx<'static>, SandLangError<'static>),
     > {
         match self {
-            CheckResult::Success { ctx, ast } => Ok((ctx, ast)),
-            CheckResult::Failure { ctx, error } => Err((ctx, error)),
+            CheckResult::Success { ctx, ast, .. } => Ok((ctx, ast)),
+            CheckResult::Failure { ctx, error, .. } => Err((ctx, error)),
         }
     }
 
@@ -188,8 +277,8 @@ impl CheckResult {
         self,
     ) -> Result<(CompileCtx<'static>, TypedProgram<'static>), SandLangError<'static>> {
         match self {
-            CheckResult::Success { ctx, ast } => Ok((ctx, ast)),
-            CheckResult::Failure { ctx, error } => {
+            CheckResult::Success { ctx, ast, .. } => Ok((ctx, ast)),
+            CheckResult::Failure { ctx, error, .. } => {
                 // See `err`: leak `ctx` so the arena outlives the borrowed error.
                 std::mem::forget(ctx);
                 Err(error)
@@ -199,8 +288,54 @@ impl CheckResult {
 
     pub fn ctx(self) -> CompileCtx<'static> {
         match self {
-            CheckResult::Success { ctx, ast: _ } => ctx,
-            CheckResult::Failure { ctx, error: _ } => ctx,
+            CheckResult::Success { ctx, .. } | CheckResult::Failure { ctx, .. } => ctx,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Function-granular recovery: two functions that each fail to type-check
+    /// must yield *two* diagnostics (one per function), not just the first —
+    /// and the pipeline must still reach the `Typed` stage.
+    #[test]
+    fn multiple_type_errors_are_all_reported() {
+        let mut proj = Project::empty();
+        proj.create_virtual_file(
+            "def f(): Int := true\ndef g(): Int := false".to_string(),
+            "m",
+        );
+
+        let c = proj.check_to(Stage::Typed);
+        assert_eq!(c.reached, Stage::Typed, "should still reach Typed");
+        let total: usize = c.diagnostics.map.values().map(Vec::len).sum();
+        assert_eq!(total, 2, "expected one diagnostic per broken function");
+        assert!(c.typed.is_some(), "partial typed program retained");
+    }
+
+    /// A broken function must not suppress checking of the *following* ones: a
+    /// function defined after the broken one still ends up in the partial typed
+    /// program (the old `?`-on-first-error path would have discarded it).
+    #[test]
+    fn a_function_after_a_broken_one_still_type_checks() {
+        let mut proj = Project::empty();
+        proj.create_virtual_file(
+            "def bad(): Int := true\ndef after(x: Int): Int := x".to_string(),
+            "m",
+        );
+
+        let c = proj.check_to(Stage::Typed);
+        let total: usize = c.diagnostics.map.values().map(Vec::len).sum();
+        assert_eq!(total, 1, "only the broken function errors");
+        let typed = c.typed.expect("partial typed program");
+        assert!(
+            typed
+                .functions
+                .values()
+                .any(|f| c.ctx.original_fun_name(f.name) == "after"),
+            "the function defined after the broken one survives recovery"
+        );
     }
 }

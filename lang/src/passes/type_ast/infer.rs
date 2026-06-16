@@ -35,6 +35,9 @@ pub(super) fn infer_function<'tcx>(
     ctx: &mut CompileCtx<'tcx>,
     func: &qhir::Function<'tcx>,
 ) -> Result<(FunRef<'tcx>, TypedFunction<'tcx>), TypeError<'tcx>> {
+    // Anchor any inline warnings emitted while checking this function to its
+    // source file.
+    ctx.cur_file = Some(ctx.file_of_module(func.src_module));
     // Open the function's region scope (depth 0): parameters live for the whole
     // call, so a borrow of a parameter never escapes the body.
     let fn_region = ctx.enter_region_scope();

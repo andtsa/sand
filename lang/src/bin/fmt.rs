@@ -25,11 +25,11 @@ fn main() -> anyhow::Result<()> {
 
     let cr = project.check();
     match cr {
-        CheckResult::Success { ctx, ast } => {
+        CheckResult::Success { ctx, ast, .. } => {
             let formatted = ast.format(&ctx);
             print!("{}", formatted.values().next().unwrap_or(&String::new()));
         }
-        CheckResult::Failure { ctx: _, error } => {
+        CheckResult::Failure { error, .. } => {
             eprintln!("{error}");
         }
     }

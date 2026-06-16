@@ -31,22 +31,36 @@ use crate::passes::type_ast::infer::infer_function;
 type TypeEnv<'tcx> = im::HashMap<UniqVar<'tcx>, (Ty<'tcx>, Kind, bool, Region)>;
 
 impl<'tcx> typed_hir::TypedProgram<'tcx> {
+    /// Type-check every function, recovering at function granularity: a
+    /// function that fails to check is dropped from the returned program
+    /// but does **not** abort the others, and *all* of its errors are
+    /// collected. The caller (`pipeline::run`) reports every error, and,
+    /// only when the error list is empty, lets the (now complete) program
+    /// flow on to heap-lowering / mono. The partial program is still useful
+    /// to IDE / formatting consumers, which read it pre-mono.
+    ///
+    /// Returns the (possibly partial) program together with one [`TypeError`]
+    /// per function that failed.
     pub fn from_ast_program(
         ctx: &mut CompileCtx<'tcx>,
         ast: qhir::Program<'tcx>,
-    ) -> Result<Self, TypeError<'tcx>> {
+    ) -> (Self, Vec<TypeError<'tcx>>) {
         // sequential loop (rather than `.map`) because `infer_function` needs
         // `&mut CompileCtx` (type checking interns fresh `TyKind::Tuple`s as
         // it encounters tuple literals, so the interner must be writable
         // while the pass runs.
         let mut fn_list: Vec<(FunRef<'tcx>, TypedFunction<'tcx>)> =
             Vec::with_capacity(ast.functions.len());
+        let mut errors: Vec<TypeError<'tcx>> = Vec::new();
         for f in ast.functions.values() {
-            fn_list.push(infer_function(ctx, f)?);
+            match infer_function(ctx, f) {
+                Ok(typed) => fn_list.push(typed),
+                Err(e) => errors.push(e),
+            }
         }
 
         let functions = fn_list.into_iter().collect::<Map<_, _>>();
 
-        Ok(typed_hir::TypedProgram { functions })
+        (typed_hir::TypedProgram { functions }, errors)
     }
 }

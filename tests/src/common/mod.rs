@@ -126,6 +126,26 @@ pub fn typecheck_fails(src: &str) {
     );
 }
 
+/// Parse -> qualify -> type-check and expect it to *succeed* while emitting a
+/// warning whose message contains `needle`.
+pub fn typecheck_warns(src: &str, needle: &str) {
+    use lang::compiler::diagnostics::DiagnosticSeverity;
+
+    let mut proj = Project::empty();
+    proj.create_virtual_file(src.to_string(), &std::panic::Location::caller().to_string());
+    let c = proj.check_to(lang::Stage::Typed);
+    assert!(
+        c.first_error.is_none(),
+        "expected success, got error: {:?}",
+        c.first_error
+    );
+    let found =
+        c.diagnostics.map.values().flatten().any(|d| {
+            matches!(d.severity, DiagnosticSeverity::Warning) && d.message.contains(needle)
+        });
+    assert!(found, "expected a warning containing {needle:?}");
+}
+
 /// Run source code through full HIR compilation and interpret in HIR
 /// interpreter
 pub fn run_hir(src: &str) -> Expression<'static> {

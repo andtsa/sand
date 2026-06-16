@@ -294,21 +294,6 @@ pub fn type_error_to_diagnostic<'tcx>(
                 },
             );
         }
-        UnreachableMatchArm { range } => {
-            diagnostics.add_one(
-                file,
-                SandDiagnostic {
-                    severity: DiagnosticSeverity::Error,
-                    message:
-                        "unreachable match arm (appears after a wildcard or exhaustive pattern)"
-                            .into(),
-                    range: *range,
-                    related: vec![],
-                    file: Some(file),
-                    ..Default::default()
-                },
-            );
-        }
         MatchWrongEnumType {
             expected_enum,
             found_enum,

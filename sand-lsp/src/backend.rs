@@ -63,8 +63,11 @@ impl Backend {
                 {
                     continue;
                 }
+                // IDE check: the pre-monomorphisation, source-faithful program
+                // (generic functions keep their real signatures), with type +
+                // ownership diagnostics.
                 let outcome =
-                    block_in_place(|| catch_unwind(AssertUnwindSafe(|| slot.project.check())));
+                    block_in_place(|| catch_unwind(AssertUnwindSafe(|| slot.project.check_ide())));
                 match outcome {
                     Ok(result) => fresh.push((i, result)),
                     Err(payload) => panics.push((i, panic_message(&payload))),
@@ -72,13 +75,15 @@ impl Backend {
             }
         }
 
-        // Phase 2: store fresh results under a brief write lock. Replacing the
-        // previous `CheckResult` drops it, freeing its arena (no leak).
+        // Phase 2: store fresh results under a brief write lock. A `Success`
+        // becomes the slot's `last_good` (keeping features alive on later broken
+        // edits); a `Failure` is recorded without discarding the last good
+        // analysis. Replaced results drop here, freeing their arenas (no leak).
         if !fresh.is_empty() {
             let mut slots = self.slots.write().await;
             for (i, result) in fresh {
                 if let Some(slot) = slots.get_mut(i) {
-                    slot.last_result = Some(result);
+                    slot.record(result);
                 }
             }
         }
@@ -97,11 +102,13 @@ impl Backend {
         {
             let slots = self.slots.read().await;
             for slot in slots.iter() {
-                let Some(result) = slot.last_result.as_ref() else {
+                // The current failure if any, else the last good success (errors
+                // when broken; reuse-hints when clean).
+                let Some(result) = slot.diagnostics_source() else {
                     continue;
                 };
                 let mut slot_diags = lsp_diagnostics_from_result(result, &slot.project);
-                if let CheckResult::Success { ctx, ast } = result {
+                if let CheckResult::Success { ctx, ast, .. } = result {
                     let hints = self
                         .annotate_reused_expressions(ctx, ast, &slot.project)
                         .await;

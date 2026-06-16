@@ -281,9 +281,16 @@ fn type_check_match_arms_inner<'tcx>(
 
         // Reachability: this arm is dead if its pattern matches no value the
         // preceding arms leave uncovered (catches both exact duplicates and
-        // any arm shadowed by an earlier catch-all or constructor set).
-        if !arm_is_reachable(ctx, scrutinee_ty, &prior_patterns, &match_pattern) {
-            return Err(AstTypeError::UnreachableMatchArm { range: arm.range });
+        // any arm shadowed by an earlier catch-all or constructor set). A dead
+        // arm is a *warning*, not an error (matches Rust's `unreachable_patterns`
+        // lint): its body is still type-checked below, but it is dropped from
+        // the lowered program (it can never be selected).
+        let reachable = arm_is_reachable(ctx, scrutinee_ty, &prior_patterns, &match_pattern);
+        if !reachable {
+            ctx.warn(
+                arm.range,
+                "unreachable match arm (appears after a wildcard or exhaustive pattern)",
+            );
         }
         prior_patterns.push(match_pattern.clone());
 
@@ -306,11 +313,15 @@ fn type_check_match_arms_inner<'tcx>(
             result_ty = Some(typed_body.ty);
         }
 
-        typed_arms.push(typed_hir::TypedMatchArm {
-            pattern: match_pattern,
-            body: typed_body,
-            range: arm.range,
-        });
+        // Keep only live arms in the lowered program; a dead arm was warned
+        // about above and contributes nothing to the decision tree.
+        if reachable {
+            typed_arms.push(typed_hir::TypedMatchArm {
+                pattern: match_pattern,
+                body: typed_body,
+                range: arm.range,
+            });
+        }
     }
 
     // Exhaustiveness: the match covers every value iff the all-wildcard row is
