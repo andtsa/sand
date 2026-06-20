@@ -602,20 +602,7 @@ impl<'tcx> OwnershipChecker<'_, 'tcx> {
     /// recursively declare every variable bound by `pattern` as freshly
     /// `Owned` in `env` (see the `Match` arm handling above).
     fn declare_pattern_bindings(pattern: &MatchPattern<'tcx>, env: &mut OwnershipEnv<'tcx>) {
-        match pattern {
-            MatchPattern::Wildcard | MatchPattern::IntLit(_) | MatchPattern::BoolLit(_) => {}
-            MatchPattern::Binding { var, ty, .. } => env.declare(*var, *ty),
-            MatchPattern::Tuple { elems, .. } => {
-                for sub in elems {
-                    Self::declare_pattern_bindings(sub, env);
-                }
-            }
-            MatchPattern::Variant { payload, .. } => {
-                if let Some((_, sub)) = payload {
-                    Self::declare_pattern_bindings(sub, env);
-                }
-            }
-        }
+        crate::analysis::annotate::for_each_binding(pattern, &mut |var, ty| env.declare(var, ty));
     }
 
     fn check_exprs(

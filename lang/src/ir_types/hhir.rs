@@ -484,6 +484,18 @@ impl<'tcx> PartialEq for Statement<'tcx> {
                     ..
                 },
             ) => p1 == p2 && t1 == t2 && v1 == v2 && eb1 == eb2,
+            (
+                DerefAssign {
+                    reference: r1,
+                    value: v1,
+                    ..
+                },
+                DerefAssign {
+                    reference: r2,
+                    value: v2,
+                    ..
+                },
+            ) => r1 == r2 && v1 == v2,
             _ => false,
         }
     }

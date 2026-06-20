@@ -3,17 +3,15 @@
 use lang::castles::project::Project;
 use lang::compiler::context::CompileCtx;
 use lang::compiler::context::DefTarget;
-use lang::compiler::structure::FileRef;
-use lang::compiler::structure::Pos;
 use lang::ir_types::typed_hir::Expression;
 use lang::ir_types::typed_hir::TypedProgram;
 use tower_lsp::lsp_types::Location;
 use tower_lsp::lsp_types::Position;
 use tower_lsp::lsp_types::Url;
 
+use crate::util::file_and_pos;
 use crate::util::find_in_expr;
 use crate::util::lsp_range_from_pest;
-use crate::util::pos_from_lsp_position;
 use crate::util::range_contains;
 use crate::util::url_of_module;
 
@@ -24,9 +22,7 @@ pub fn definition_at_position<'tcx>(
     ast: &TypedProgram<'tcx>,
     project: &Project,
 ) -> Option<Location> {
-    let file_ref: FileRef = project.is_tracked(uri)?;
-    let text = project.text_for_file(file_ref)?;
-    let pos: Pos = pos_from_lsp_position(text, lsp_pos);
+    let (file_ref, pos) = file_and_pos(project, uri, lsp_pos)?;
 
     // Type / typeclass name references (signatures, annotations, payloads,
     // `impl`/`where`/`requires` heads) live outside the expression tree, so they

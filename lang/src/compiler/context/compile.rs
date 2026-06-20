@@ -135,7 +135,6 @@ pub struct CompileCtx<'tcx> {
     /// Number of original variables registered so far.
     /// assigns each a stable monotonic `id` used for ordering.
     var_count: usize,
-    pub variable_usages: Map<OriginalVarRef<'tcx>, Set<Range>>,
     /// Number of uniquified variables registered so far.
     /// assigns each a stable `idx` distinguishing shadowing
     /// re-bindings of the same declaration.
@@ -276,8 +275,8 @@ impl Drop for CompileCtx<'_> {
 }
 
 impl<'tcx> CompileCtx<'tcx> {
-    // The `ty_interner`/`tuple_interner`/`variable_usages` maps are keyed by
-    // `TyKind`/`Ty`/`OriginalVarRef`, which reach an enum payload `Cell`
+    // The `ty_interner`/`tuple_interner` maps are keyed by `TyKind`/`Ty`, which
+    // reach an enum payload `Cell`
     // through arena references. clippy flags these as interior-mutable keys,
     // but they hash by structural/pointer identity that never reads the
     // `Cell`, so the keys are stable. Suppressed at the impl level since this
@@ -325,7 +324,6 @@ impl<'tcx> CompileCtx<'tcx> {
             type_param_kinds: Default::default(),
             cur_type_params: Default::default(),
             var_count: 0,
-            variable_usages: Default::default(),
             uniq_count: 0,
             global_functions: Default::default(),
             function_signatures: Default::default(),
@@ -369,6 +367,23 @@ impl<'tcx> CompileCtx<'tcx> {
 
     // ========================== Types ========================================
 
+    /// Shared structural-interning primitive: return the cached handle for
+    /// `key`, or build it once (via `build`) and cache it. `build` receives the
+    /// key by reference so slice-bearing keys (tuples / applications) can be
+    /// read while `key` itself is moved into the cache.
+    fn intern_with<K: Ord>(
+        cache: &mut Map<K, Ty<'tcx>>,
+        key: K,
+        build: impl FnOnce(&K) -> Ty<'tcx>,
+    ) -> Ty<'tcx> {
+        if let Some(&ty) = cache.get(&key) {
+            return ty;
+        }
+        let ty = build(&key);
+        cache.insert(key, ty);
+        ty
+    }
+
     /// Structurally intern a non-tuple [`TyKind`], returning the [`Ty`] handle
     /// that refers to it. Duplicate calls with identical structure return the
     /// same handle. Use [`Self::intern_tuple`] for `TyKind::Tuple`.
@@ -377,13 +392,10 @@ impl<'tcx> CompileCtx<'tcx> {
             !matches!(kind, TyKind::Tuple(_) | TyKind::App(..)),
             "use intern_tuple / intern_app for slice-bearing types"
         );
-        if let Some(&ty) = self.ty_interner.get(&kind) {
-            return ty;
-        }
-        let kind_ref = self.arenas.alloc_ty(kind);
-        let ty = Ty(kind_ref);
-        self.ty_interner.insert(kind, ty);
-        ty
+        let arenas = self.arenas;
+        Self::intern_with(&mut self.ty_interner, kind, |&kind| {
+            Ty(arenas.alloc_ty(kind))
+        })
     }
 
     /// Intern a tuple type from its element handles. Arity must be >= 2.
@@ -395,14 +407,11 @@ impl<'tcx> CompileCtx<'tcx> {
             "tuple types must have arity >= 2, got {}",
             elems.len()
         );
-        if let Some(&ty) = self.tuple_interner.get(&elems) {
-            return ty;
-        }
-        let slice = self.arenas.alloc_ty_slice(&elems);
-        let kind_ref = self.arenas.alloc_ty(TyKind::Tuple(slice));
-        let ty = Ty(kind_ref);
-        self.tuple_interner.insert(elems, ty);
-        ty
+        let arenas = self.arenas;
+        Self::intern_with(&mut self.tuple_interner, elems, |elems| {
+            let slice = arenas.alloc_ty_slice(elems);
+            Ty(arenas.alloc_ty(TyKind::Tuple(slice)))
+        })
     }
 
     /// Intern a generic enum instantiation `Base<args...>`. The argument count
@@ -415,17 +424,16 @@ impl<'tcx> CompileCtx<'tcx> {
         args: Vec<Ty<'tcx>>,
         regions: Vec<Region>,
     ) -> Ty<'tcx> {
-        let key = (er, args, regions);
-        if let Some(&ty) = self.app_interner.get(&key) {
-            return ty;
-        }
-        let (er, args, regions) = key;
-        let slice = self.arenas.alloc_ty_slice(&args);
-        let region_slice = self.arenas.alloc_region_slice(&regions);
-        let kind_ref = self.arenas.alloc_ty(TyKind::App(er, slice, region_slice));
-        let ty = Ty(kind_ref);
-        self.app_interner.insert((er, args, regions), ty);
-        ty
+        let arenas = self.arenas;
+        Self::intern_with(
+            &mut self.app_interner,
+            (er, args, regions),
+            |(er, args, regions)| {
+                let slice = arenas.alloc_ty_slice(args);
+                let region_slice = arenas.alloc_region_slice(regions);
+                Ty(arenas.alloc_ty(TyKind::App(*er, slice, region_slice)))
+            },
+        )
     }
 
     /// # get the _kind of a type_
@@ -459,14 +467,12 @@ impl<'tcx> CompileCtx<'tcx> {
 
     /// Intern a region-ascribed type `inner @ region` (Calculus: Types).
     pub fn region_ty(&mut self, inner: Ty<'tcx>, region: Region) -> Ty<'tcx> {
-        let key = (inner, region);
-        if let Some(&ty) = self.region_ty_interner.get(&key) {
-            return ty;
-        }
-        let kind_ref = self.arenas.alloc_ty(TyKind::Region(inner, region));
-        let ty = Ty(kind_ref);
-        self.region_ty_interner.insert(key, ty);
-        ty
+        let arenas = self.arenas;
+        Self::intern_with(
+            &mut self.region_ty_interner,
+            (inner, region),
+            |&(inner, region)| Ty(arenas.alloc_ty(TyKind::Region(inner, region))),
+        )
     }
 
     /// Intern a shared reference type `&region inner` (Calculus: Types).
@@ -493,16 +499,15 @@ impl<'tcx> CompileCtx<'tcx> {
 
     /// Intern a higher-kinded parameter application `F<args>`.
     pub fn param_app_ty(&mut self, param: TypeParamId, args: Vec<Ty<'tcx>>) -> Ty<'tcx> {
-        let key = (param, args);
-        if let Some(&ty) = self.param_app_interner.get(&key) {
-            return ty;
-        }
-        let (param, args) = key;
-        let slice = self.arenas.alloc_ty_slice(&args);
-        let kind_ref = self.arenas.alloc_ty(TyKind::ParamApp(param, slice));
-        let ty = Ty(kind_ref);
-        self.param_app_interner.insert((param, args), ty);
-        ty
+        let arenas = self.arenas;
+        Self::intern_with(
+            &mut self.param_app_interner,
+            (param, args),
+            |(param, args)| {
+                let slice = arenas.alloc_ty_slice(args);
+                Ty(arenas.alloc_ty(TyKind::ParamApp(*param, slice)))
+            },
+        )
     }
 
     /// Intern the arrow kind `from -> to`, returning the canonical
@@ -1138,16 +1143,6 @@ impl<'tcx> CompileCtx<'tcx> {
             HirVar::Unqualified(name) => name.clone(),
             HirVar::Uniq(uv) => self.uniq_variable_name(uv),
         }
-    }
-
-    #[allow(dead_code)]
-    fn register_variable_usage(&mut self, var: OriginalVarRef<'tcx>, range: Range) {
-        self.variable_usages
-            .entry(var)
-            .and_modify(|e| {
-                e.insert(range);
-            })
-            .or_insert(Set::from([range]));
     }
 
     // ============================= Functions =================================

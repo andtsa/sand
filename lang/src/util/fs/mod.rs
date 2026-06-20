@@ -71,6 +71,23 @@ pub trait FileOperations {
     fn glob_expand(&self, pattern: &str) -> Result<Vec<PathBuf>, FsError>;
 }
 
+/// Add a single `path` to `out`: push it (canonicalized) if it's a file,
+/// recurse into it if it's a directory, ignore it otherwise. Canonicalizing
+/// means callers always get absolute paths (required e.g. to build `file://`
+/// URLs via `Url::from_file_path`).
+fn collect_path(
+    fs: &impl FileOperations,
+    path: &Path,
+    out: &mut Vec<PathBuf>,
+) -> Result<(), FsError> {
+    if fs.is_file(path) {
+        out.push(fs.canonicalize(path)?);
+    } else if fs.is_dir(path) {
+        collect_files_recursive(fs, path, out)?;
+    }
+    Ok(())
+}
+
 /// recursively collect all files under `dir`, depth-first
 pub fn collect_files_recursive(
     fs: &impl FileOperations,
@@ -78,13 +95,7 @@ pub fn collect_files_recursive(
     out: &mut Vec<PathBuf>,
 ) -> Result<(), FsError> {
     for entry in fs.read_dir(dir)? {
-        if fs.is_file(&entry) {
-            // canonicalize so callers always get absolute paths (required
-            // e.g. to build `file://` URLs via `Url::from_file_path`)
-            out.push(fs.canonicalize(&entry)?);
-        } else if fs.is_dir(&entry) {
-            collect_files_recursive(fs, &entry, out)?;
-        }
+        collect_path(fs, &entry, out)?;
     }
     Ok(())
 }
@@ -98,14 +109,10 @@ pub fn expand_to_files(fs: &impl FileOperations, pattern: &str) -> Result<Vec<Pa
 
     let matches = fs.glob_expand(pattern)?;
     if !matches.is_empty() {
+        // `glob` preserves the (possibly relative) form of the pattern;
+        // `collect_path` canonicalizes so callers always get absolute paths.
         for path in matches {
-            if fs.is_file(&path) {
-                // `glob` preserves the (possibly relative) form of the
-                // pattern; canonicalize so callers always get absolute paths
-                out.push(fs.canonicalize(&path)?);
-            } else if fs.is_dir(&path) {
-                collect_files_recursive(fs, &path, &mut out)?;
-            }
+            collect_path(fs, &path, &mut out)?;
         }
         return Ok(out);
     }
@@ -114,11 +121,7 @@ pub fn expand_to_files(fs: &impl FileOperations, pattern: &str) -> Result<Vec<Pa
     // paths that `glob` may not resolve, e.g. paths that don't exist yet
     // relative to cwd but do once canonicalized)
     if let Ok(canonical) = fs.canonicalize(pattern) {
-        if fs.is_file(&canonical) {
-            out.push(canonical);
-        } else if fs.is_dir(&canonical) {
-            collect_files_recursive(fs, &canonical, &mut out)?;
-        }
+        collect_path(fs, &canonical, &mut out)?;
     }
 
     Ok(out)

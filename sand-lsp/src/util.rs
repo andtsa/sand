@@ -2,6 +2,7 @@
 
 use lang::castles::project::Project;
 use lang::compiler::context::CompileCtx;
+use lang::compiler::structure::FileRef;
 use lang::compiler::structure::ModuleRef;
 use lang::compiler::structure::Pos;
 use lang::compiler::structure::Range as LangRange;
@@ -9,6 +10,20 @@ use lang::ir_types::typed_hir::Expr;
 use lang::ir_types::typed_hir::Expression;
 use lang::ir_types::typed_hir::Statement;
 use tower_lsp::lsp_types::*;
+
+/// Resolve a request position against `project`: the tracked [`FileRef`] for
+/// `uri` and the compiler [`Pos`] for `lsp_pos`. `None` if the uri isn't
+/// tracked or has no text. Shared prologue for the position-based features
+/// (hover, goto-definition).
+pub(crate) fn file_and_pos(
+    project: &Project,
+    uri: &Url,
+    lsp_pos: Position,
+) -> Option<(FileRef, Pos)> {
+    let file_ref = project.is_tracked(uri)?;
+    let text = project.text_for_file(file_ref)?;
+    Some((file_ref, pos_from_lsp_position(text, lsp_pos)))
+}
 
 pub(super) fn lsp_position_from_pest(text: &str, pos: Pos) -> Position {
     // pest reports 1-based line/col; convert to 0-based

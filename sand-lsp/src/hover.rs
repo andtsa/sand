@@ -3,7 +3,6 @@
 use lang::castles::project::Project;
 use lang::compiler::context::CompileCtx;
 use lang::compiler::context::DefTarget;
-use lang::compiler::structure::FileRef;
 use lang::compiler::structure::RegionParam;
 use lang::compiler::structure::TypeParam;
 use lang::compiler::structure::TypeclassRef;
@@ -23,8 +22,8 @@ use tower_lsp::lsp_types::MarkupKind;
 use tower_lsp::lsp_types::Position;
 use tower_lsp::lsp_types::Url;
 
+use crate::util::file_and_pos;
 use crate::util::find_in_expr;
-use crate::util::pos_from_lsp_position;
 use crate::util::range_contains;
 
 /// Step budget for running `main` in a hover preview. high enough for any
@@ -38,9 +37,7 @@ pub fn hover_at_position<'tcx>(
     ast: &TypedProgram<'tcx>,
     project: &Project,
 ) -> Option<Hover> {
-    let file_ref: FileRef = project.is_tracked(uri)?;
-    let text = project.text_for_file(file_ref)?;
-    let pos = pos_from_lsp_position(text, lsp_pos);
+    let (file_ref, pos) = file_and_pos(project, uri, lsp_pos)?;
 
     // A type / typeclass *name* in a signature, annotation, payload, or
     // `impl`/`where`/`requires` head: show the full declaration. Checked first

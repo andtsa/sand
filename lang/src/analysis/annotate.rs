@@ -5,34 +5,39 @@ use crate::ir_types::typed_hir::Expr;
 use crate::ir_types::typed_hir::Expression;
 use crate::ir_types::typed_hir::MatchPattern;
 use crate::ir_types::typed_hir::Statement;
+use crate::lang::types::Ty;
 
-/// Collect all variable names bound by a `LetPattern`'s match pattern.
-pub fn collect_let_pattern_bindings<'tcx>(pattern: &MatchPattern<'tcx>) -> HashSet<UniqVar<'tcx>> {
-    let mut set = HashSet::new();
-    collect_match_pattern_bindings(pattern, &mut set);
-    set
-}
-
-fn collect_match_pattern_bindings<'tcx>(
+/// Visit every variable bound by `pattern`, calling `f` with the bound variable
+/// and its type. The shared traversal behind the per-pass binding handlers
+/// (collecting into a set here, declaring into an ownership env, ..) which only
+/// differ in what they do at each `Binding` leaf.
+pub fn for_each_binding<'tcx>(
     pattern: &MatchPattern<'tcx>,
-    set: &mut HashSet<UniqVar<'tcx>>,
+    f: &mut impl FnMut(UniqVar<'tcx>, Ty<'tcx>),
 ) {
     match pattern {
-        MatchPattern::Binding { var, .. } => {
-            set.insert(*var);
-        }
+        MatchPattern::Binding { var, ty, .. } => f(*var, *ty),
         MatchPattern::Tuple { elems, .. } => {
             for e in elems {
-                collect_match_pattern_bindings(e, set);
+                for_each_binding(e, f);
             }
         }
         MatchPattern::Variant { payload, .. } => {
             if let Some((_, sub)) = payload {
-                collect_match_pattern_bindings(sub, set);
+                for_each_binding(sub, f);
             }
         }
         MatchPattern::Wildcard | MatchPattern::IntLit(_) | MatchPattern::BoolLit(_) => {}
     }
+}
+
+/// Collect all variable names bound by a `LetPattern`'s match pattern.
+pub fn collect_let_pattern_bindings<'tcx>(pattern: &MatchPattern<'tcx>) -> HashSet<UniqVar<'tcx>> {
+    let mut set = HashSet::new();
+    for_each_binding(pattern, &mut |var, _| {
+        set.insert(var);
+    });
+    set
 }
 
 pub fn get_dependencies<'tcx>(expr: &Expr<'tcx>) -> HashSet<UniqVar<'tcx>> {

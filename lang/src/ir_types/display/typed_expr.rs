@@ -3,40 +3,8 @@
 //! and indentations
 
 use crate::compiler::context::CompileCtx;
+use crate::ir_types::display::fmt_match_pattern;
 use crate::ir_types::typed_hir::*;
-
-/// recursively render a `MatchPattern` as source-like syntax, e.g.
-/// `Shape#Circle(r)`, `(a, b)`, `Wrap((x, y))`, `_`, mirrors the
-/// `Tag(payload)` / `(e1, e2, ...)` conventions used for `Constructor`/`Tuple`
-/// expression display elsewhere in this formatter.
-fn fmt_match_pattern<'tcx>(pattern: &MatchPattern<'tcx>, ctx: &CompileCtx<'tcx>) -> String {
-    match pattern {
-        MatchPattern::Variant {
-            enum_ref,
-            variant_idx,
-            payload,
-            ..
-        } => {
-            let tag = ctx.enum_display(*enum_ref, *variant_idx);
-            match payload {
-                Some((_, p)) => format!("{tag}({})", fmt_match_pattern(p, ctx)),
-                None => tag,
-            }
-        }
-        MatchPattern::Tuple { elems, .. } => format!(
-            "({})",
-            elems
-                .iter()
-                .map(|p| fmt_match_pattern(p, ctx))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-        MatchPattern::IntLit(n) => n.to_string(),
-        MatchPattern::BoolLit(b) => b.to_string(),
-        MatchPattern::Binding { var, .. } => ctx.uniq_variable_name(var),
-        MatchPattern::Wildcard => "_".to_string(),
-    }
-}
 
 impl<'tcx> Expression<'tcx> {
     pub fn format<'fmt>(&'fmt self, ctx: &'fmt CompileCtx<'tcx>) -> TypedExprFormatter<'fmt, 'tcx>

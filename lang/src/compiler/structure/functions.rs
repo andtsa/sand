@@ -1,9 +1,6 @@
 //! Function management.
 
-use std::cmp::Ordering;
 use std::fmt::Display;
-use std::hash::Hash;
-use std::hash::Hasher;
 
 use pest::iterators::Pair;
 
@@ -16,6 +13,7 @@ use crate::lang::intrinsics::Intrinsic;
 use crate::lang::types::RegionConstraint;
 use crate::lang::types::Ty;
 use crate::passes::parse::Rule;
+use crate::util::macros::impl_arena_ref_traits;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct FnName(String);
@@ -29,32 +27,7 @@ pub struct FnName(String);
 #[derive(Copy, Clone)]
 pub struct FunRef<'tcx>(pub(in crate::compiler) &'tcx OriginalFun<'tcx>);
 
-impl PartialEq for FunRef<'_> {
-    fn eq(&self, other: &Self) -> bool {
-        std::ptr::eq(self.0, other.0)
-    }
-}
-impl Eq for FunRef<'_> {}
-impl Hash for FunRef<'_> {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        (self.0 as *const OriginalFun<'_>).hash(state);
-    }
-}
-impl PartialOrd for FunRef<'_> {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-impl Ord for FunRef<'_> {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.0.id.cmp(&other.0.id)
-    }
-}
-impl std::fmt::Debug for FunRef<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "FunRef({}, {})", self.0.id, self.0.name.0)
-    }
-}
+impl_arena_ref_traits!(FunRef<'_>, "FunRef", this => this.0.name.0);
 
 #[derive(Debug, Clone)]
 pub struct OriginalFun<'tcx> {

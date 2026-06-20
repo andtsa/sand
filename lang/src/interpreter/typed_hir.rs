@@ -764,34 +764,6 @@ fn eval_binop<'tcx>(
                 _ => unreachable!(),
             }
         }
-        (
-            Value::Constructor {
-                enum_ref: er_l,
-                variant_idx: vi_l,
-                ..
-            },
-            Value::Constructor {
-                enum_ref: er_r,
-                variant_idx: vi_r,
-                ..
-            },
-            Bop::Comp(cop),
-        ) => {
-            if er_l != er_r {
-                return Err(InterpError::BinOpTypeError(format!(
-                    "{} cannot be compared with {}",
-                    ctx.enum_display(er_l, vi_l),
-                    ctx.enum_display(er_r, vi_r)
-                )));
-            }
-            match cop {
-                CompOp::Ge => Ok(Value::Bool(vi_l >= vi_r)),
-                CompOp::Le => Ok(Value::Bool(vi_l <= vi_r)),
-                CompOp::Gt => Ok(Value::Bool(vi_l > vi_r)),
-                CompOp::Lt => Ok(Value::Bool(vi_l < vi_r)),
-                _ => unreachable!(),
-            }
-        }
         (Value::Tuple(l), Value::Tuple(r), Bop::Comp(CompOp::Eq)) => Ok(Value::Bool(l == r)),
         (Value::Tuple(l), Value::Tuple(r), Bop::Comp(CompOp::Ne)) => Ok(Value::Bool(l != r)),
         (el, er, o) => Err(InterpError::BinOpTypeError(format!(

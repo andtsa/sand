@@ -1,15 +1,13 @@
 //! variable management
 
-use std::cmp::Ordering;
 use std::fmt::Display;
-use std::hash::Hash;
-use std::hash::Hasher;
 
 use pest::iterators::Pair;
 
 use crate::compiler::structure::Range;
 use crate::internal_bug;
 use crate::passes::parse::Rule;
+use crate::util::macros::impl_arena_ref_traits;
 
 /// a globally unique reference to a variable
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -25,32 +23,7 @@ pub struct UniqVar<'tcx> {
 #[derive(Copy, Clone)]
 pub struct OriginalVarRef<'tcx>(pub(in crate::compiler) &'tcx OriginalVar);
 
-impl PartialEq for OriginalVarRef<'_> {
-    fn eq(&self, other: &Self) -> bool {
-        std::ptr::eq(self.0, other.0)
-    }
-}
-impl Eq for OriginalVarRef<'_> {}
-impl Hash for OriginalVarRef<'_> {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        (self.0 as *const OriginalVar).hash(state);
-    }
-}
-impl PartialOrd for OriginalVarRef<'_> {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-impl Ord for OriginalVarRef<'_> {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.0.id.cmp(&other.0.id)
-    }
-}
-impl std::fmt::Debug for OriginalVarRef<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "OriginalVarRef({}, {})", self.0.id, self.0.name.0)
-    }
-}
+impl_arena_ref_traits!(OriginalVarRef<'_>, "OriginalVarRef", this => this.0.name.0);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct VarName(pub(in crate::compiler) String);

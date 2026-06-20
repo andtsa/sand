@@ -4,6 +4,9 @@ use std::panic::AssertUnwindSafe;
 use std::panic::catch_unwind;
 
 use lang::castles::project::CheckResult;
+use lang::castles::project::Project;
+use lang::compiler::context::CompileCtx;
+use lang::ir_types::typed_hir::TypedProgram;
 use tokio::task::block_in_place;
 use tower_lsp::lsp_types::Diagnostic;
 use tower_lsp::lsp_types::DiagnosticSeverity;
@@ -15,6 +18,24 @@ use crate::diagnostics::lsp_diagnostics_from_result;
 use crate::lsp::Backend;
 
 impl Backend {
+    /// Find the slot tracking `uri` and, if its last *good* check succeeded,
+    /// run `f` against that analysis (ctx + AST + project). Returns `None`
+    /// when no slot tracks the uri or there is no good analysis yet.
+    /// Centralises the "scan slots → require `last_good` success"
+    /// boilerplate shared by the read-only language features (hover,
+    /// goto-definition).
+    pub(crate) async fn with_analysis<T>(
+        &self,
+        uri: &Url,
+        f: impl FnOnce(&CompileCtx<'static>, &TypedProgram<'static>, &Project) -> T,
+    ) -> Option<T> {
+        let slots = self.slots.read().await;
+        let slot = slots.iter().find(|s| s.project.is_tracked(uri).is_some())?;
+        let CheckResult::Success { ctx, ast, .. } = slot.last_good.as_ref()? else {
+            return None;
+        };
+        Some(f(ctx, ast, &slot.project))
+    }
     pub async fn uninit_err(&self) {
         self.log(
             MessageType::ERROR,

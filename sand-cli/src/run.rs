@@ -3,10 +3,9 @@ use std::path::PathBuf;
 
 use clap::Args;
 use clap::clap_derive::ValueEnum;
-use lang::castles::project::CheckResult;
-use lang::castles::project::Project;
 use lang::ir_types::mir::MirProgram;
 
+use crate::compile::load_and_check;
 use crate::error::CliError;
 
 #[derive(Default, ValueEnum, Debug, Clone, PartialEq, Eq)]
@@ -36,57 +35,7 @@ pub fn run(args: RunArgs, dry_run: bool) -> Result<(), CliError> {
     let span = tracing::info_span!("run subcommand");
     let _g = span.enter();
 
-    let project_result = if let Some(config) = &args.config {
-        // Load project from config file
-        let span = tracing::debug_span!("loading project from config");
-        let _g1 = span.enter();
-        Project::from_config(config)
-    } else {
-        // Load input files using [`Project::from_paths`]
-        let span = tracing::debug_span!("loading project from paths");
-        let _g1 = span.enter();
-        Project::from_paths(&args.input)
-    }?;
-    let project = project_result.project;
-
-    for warning in project_result.warnings {
-        eprintln!("{}", warning.to_diagnostic().render(&project));
-    }
-
-    tracing::debug!("loaded {} files", project.file_count());
-
-    let span = tracing::debug_span!("compiling modules");
-    let _g2 = span.enter();
-
-    let result = project.check();
-    // Render every accumulated diagnostic (errors *and* warnings) from the sink,
-    // skipping synthetic (core library) files.
-    for (fr, file_diags) in &result.diagnostics().map {
-        if project.is_synthetic_file(*fr) {
-            continue;
-        }
-        for diag in file_diags {
-            eprintln!("{}", diag.render(&project));
-        }
-    }
-    let (ctx, ast) = match result {
-        CheckResult::Success { ctx, ast, .. } => {
-            tracing::debug!(
-                "compilation successful with {} functions",
-                ast.functions.len()
-            );
-            ast.functions
-                .values()
-                .for_each(|f| tracing::trace!(name = ctx.original_fun_name(f.name)));
-            (ctx, ast)
-        }
-        CheckResult::Failure { error, .. } => {
-            return Err(CliError::CompilerError {
-                diagnostic: error.to_string(),
-            });
-        }
-    };
-    drop(_g2);
+    let (ctx, ast) = load_and_check(args.config.as_ref(), &args.input)?;
 
     if args.print_ast {
         println!("{}", ast.dump(&ctx));

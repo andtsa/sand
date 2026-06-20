@@ -10,12 +10,74 @@ use std::path::PathBuf;
 use clap::Args;
 use lang::castles::project::CheckResult;
 use lang::castles::project::Project;
+use lang::compiler::context::CompileCtx;
 use lang::ir_types::mir::MirProgram;
+use lang::ir_types::typed_hir::TypedProgram;
 use lang::passes::llvm_codegen::LlvmCodegen;
 use lang::util::fs::FileOperations;
 use lang::util::fs::real_fs::FileSystem;
 
 use crate::error::CliError;
+
+/// Load a project (from a config file, else from input paths), surface its load
+/// warnings plus every check diagnostic (skipping synthetic core files), and
+/// return the checked program. Shared by the `compile` and `run` subcommands.
+///
+/// The returned tuple is `(ctx, ast)`, `ctx` owns the arena `ast` borrows, so
+/// this order matches [`CheckResult::Success`]'s drop-order invariant.
+pub fn load_and_check(
+    config: Option<&PathBuf>,
+    input: &[PathBuf],
+) -> Result<(CompileCtx<'static>, TypedProgram<'static>), CliError> {
+    let project_result = if let Some(config) = config {
+        // Load project from config file
+        let span = tracing::debug_span!("loading project from config");
+        let _g1 = span.enter();
+        Project::from_config(config)
+    } else {
+        // Load input files using [`Project::from_paths`]
+        let span = tracing::debug_span!("loading project from paths");
+        let _g1 = span.enter();
+        Project::from_paths(input)
+    }?;
+    let project = project_result.project;
+
+    for warning in project_result.warnings {
+        eprintln!("{}", warning.to_diagnostic().render(&project));
+    }
+
+    tracing::debug!("loaded {} files", project.file_count());
+
+    let span = tracing::debug_span!("compiling modules");
+    let _g2 = span.enter();
+
+    let result = project.check();
+    // Render every accumulated diagnostic (errors *and* warnings) from the sink,
+    // skipping synthetic (core library) files.
+    for (fr, file_diags) in &result.diagnostics().map {
+        if project.is_synthetic_file(*fr) {
+            continue;
+        }
+        for diag in file_diags {
+            eprintln!("{}", diag.render(&project));
+        }
+    }
+    match result {
+        CheckResult::Success { ctx, ast, .. } => {
+            tracing::debug!(
+                "compilation successful with {} functions",
+                ast.functions.len()
+            );
+            ast.functions
+                .values()
+                .for_each(|f| tracing::trace!(name = ctx.original_fun_name(f.name)));
+            Ok((ctx, ast))
+        }
+        CheckResult::Failure { error, .. } => Err(CliError::CompilerError {
+            diagnostic: error.to_string(),
+        }),
+    }
+}
 
 #[derive(Debug, Args)]
 pub struct CompileArgs {
@@ -66,57 +128,7 @@ pub fn compile(args: CompileArgs, dry_run: bool) -> Result<(), CliError> {
         output_file.display()
     );
 
-    let project_result = if let Some(config) = &args.config {
-        // Load project from config file
-        let span = tracing::debug_span!("loading project from config");
-        let _g1 = span.enter();
-        Project::from_config(config)
-    } else {
-        // Load input files using [`Project::from_paths`]
-        let span = tracing::debug_span!("loading project from paths");
-        let _g1 = span.enter();
-        Project::from_paths(&args.input)
-    }?;
-    let project = project_result.project;
-
-    for warning in project_result.warnings {
-        eprintln!("{}", warning.to_diagnostic().render(&project));
-    }
-
-    tracing::debug!("loaded {} files", project.file_count());
-
-    let span = tracing::debug_span!("compiling modules");
-    let _g2 = span.enter();
-
-    let result = project.check();
-    // Render every accumulated diagnostic (errors *and* warnings) from the sink,
-    // skipping synthetic (core library) files.
-    for (fr, file_diags) in &result.diagnostics().map {
-        if project.is_synthetic_file(*fr) {
-            continue;
-        }
-        for diag in file_diags {
-            eprintln!("{}", diag.render(&project));
-        }
-    }
-    let (ctx, ast) = match result {
-        CheckResult::Success { ctx, ast, .. } => {
-            tracing::debug!(
-                "compilation successful with {} functions",
-                ast.functions.len()
-            );
-            ast.functions
-                .values()
-                .for_each(|f| tracing::trace!(name = ctx.original_fun_name(f.name)));
-            (ctx, ast)
-        }
-        CheckResult::Failure { error, .. } => {
-            return Err(CliError::CompilerError {
-                diagnostic: error.to_string(),
-            });
-        }
-    };
-    drop(_g2);
+    let (ctx, ast) = load_and_check(args.config.as_ref(), &args.input)?;
 
     if args.print_ast {
         println!("{}", ast.dump(&ctx));

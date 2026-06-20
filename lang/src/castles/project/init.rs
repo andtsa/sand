@@ -88,7 +88,8 @@ impl Project {
                 Ok(Ok(Ok(fr))) => {
                     tracing::debug!("loaded file {url} as {fr:?}");
                 }
-                Ok(Ok(Err(e))) | Err(e) => {
+                // `to_file_path` failed: the URL is not a usable file path.
+                Err(e) => {
                     warnings.push(SetupWarning {
                         kind: SetupWarningKind::UnreadableFile {
                             uri: url.clone(),
@@ -98,10 +99,24 @@ impl Project {
                         url: url.clone(),
                     });
                 }
+                // `read_utf8` failed: the path resolved but the file's contents
+                // could not be read.
                 Ok(Err(e)) => {
                     warnings.push(SetupWarning {
                         kind: SetupWarningKind::UnreadableFile { uri: url.clone(), reason: e.to_string() },
                         message: format!("Failed to read tracked file {}: {}", url, e),
+                        url: url.clone(),
+                    });
+                }
+                // `insert_file` failed: the file was read but could not be
+                // registered (e.g. the URL has no usable file name).
+                Ok(Ok(Err(e))) => {
+                    warnings.push(SetupWarning {
+                        kind: SetupWarningKind::UnreadableFile {
+                            uri: url.clone(),
+                            reason: e.to_string(),
+                        },
+                        message: format!("Failed to register file {}: {}", url, e),
                         url: url.clone(),
                     });
                 }

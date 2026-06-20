@@ -3,7 +3,8 @@ use std::path::PathBuf;
 use clap::Args;
 use lang::Stage;
 use lang::castles::project::Project;
-use lang::castles::project::init::FatalProjectCreationError;
+
+use crate::error::CliError;
 
 #[derive(Debug, Args)]
 pub struct FmtArgs {
@@ -12,21 +13,7 @@ pub struct FmtArgs {
     input: PathBuf,
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum FmtCliError {
-    #[error("project initialization error: {0}")]
-    ProjectInit(Box<FatalProjectCreationError>),
-    #[error("compiler error")]
-    CompilerError,
-}
-
-impl From<FatalProjectCreationError> for FmtCliError {
-    fn from(value: FatalProjectCreationError) -> Self {
-        FmtCliError::ProjectInit(Box::new(value))
-    }
-}
-
-pub fn fmt(args: FmtArgs) -> Result<(), FmtCliError> {
+pub fn fmt(args: FmtArgs) -> Result<(), CliError> {
     let project_result = Project::from_paths(&[args.input])?;
     let project = project_result.project;
 
@@ -55,7 +42,9 @@ pub fn fmt(args: FmtArgs) -> Result<(), FmtCliError> {
                     eprintln!("{}", diag.render(&project));
                 }
             }
-            Err(FmtCliError::CompilerError)
+            Err(CliError::CompilerError {
+                diagnostic: "could not format: program does not type-check".to_string(),
+            })
         }
     }
 }

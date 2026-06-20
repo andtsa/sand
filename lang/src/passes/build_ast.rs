@@ -2589,14 +2589,25 @@ where
     Ok(expr)
 }
 
-// mapping only for token rules used in these folds (or/xor/and)
-// other operators handled in their specific builders
+// Maps every left-associative binary operator token to its `Bop`, for the
+// `binop_fold` precedence levels. (`pow` is right-associative and handled
+// directly in `build_power`.)
 fn bop_from_rule(rule: Rule) -> Bop {
     match rule {
         Rule::or => Bop::Or,
         Rule::xor => Bop::Xor,
         Rule::logand => Bop::And,
         Rule::bitand => Bop::BitAnd,
+        Rule::eq => Bop::Comp(CompOp::Eq),
+        Rule::ne => Bop::Comp(CompOp::Ne),
+        Rule::gt => Bop::Comp(CompOp::Gt),
+        Rule::lt => Bop::Comp(CompOp::Lt),
+        Rule::ge => Bop::Comp(CompOp::Ge),
+        Rule::le => Bop::Comp(CompOp::Le),
+        Rule::add => Bop::Plus,
+        Rule::subtract => Bop::Minus,
+        Rule::multiply => Bop::Mult,
+        Rule::divide => Bop::Div,
         _ => internal_bug!("unexpected bop_from_rule: {rule:?}"),
     }
 }
@@ -2641,30 +2652,7 @@ fn build_equality<'run>(
     src: &str,
 ) -> Result<Expr<'run>, AstError> {
     let range = Range::from(&pair);
-    let mut inner = pair.into_inner();
-
-    let mut expr = build_comparison(ctx, inner.next().missing("eq expression", range)?, src)?;
-
-    while let Some(op_pair) = inner.next() {
-        let rhs_pair = inner.next().missing("eq right", range)?;
-        let rhs = build_comparison(ctx, rhs_pair, src)?;
-        let op = match op_pair.as_rule() {
-            Rule::eq => Bop::Comp(CompOp::Eq),
-            Rule::ne => Bop::Comp(CompOp::Ne),
-            other => internal_bug!("unexpected equality operator: {other:?}"),
-        };
-
-        expr = Expr {
-            expr: Expression::BinOp {
-                left: Box::new(expr),
-                op,
-                right: Box::new(rhs),
-            },
-            range,
-        };
-    }
-
-    Ok(expr)
+    binop_fold(ctx, pair.into_inner(), build_comparison, src, range)
 }
 
 // comparison = { add_sub ~ ( (gt | lt | ge | le) ~ add_sub )* }
@@ -2674,32 +2662,7 @@ fn build_comparison<'run>(
     src: &str,
 ) -> Result<Expr<'run>, AstError> {
     let range = Range::from(&pair);
-    let mut inner = pair.into_inner();
-
-    let mut expr = build_add_sub(ctx, inner.next().missing("comp expression", range)?, src)?;
-
-    while let Some(op_pair) = inner.next() {
-        let rhs_pair = inner.next().missing("comp right", range)?;
-        let rhs = build_add_sub(ctx, rhs_pair, src)?;
-        let comp_op = match op_pair.as_rule() {
-            Rule::gt => CompOp::Gt,
-            Rule::lt => CompOp::Lt,
-            Rule::ge => CompOp::Ge,
-            Rule::le => CompOp::Le,
-            other => internal_bug!("unexpected comp operator: {other:?}"),
-        };
-
-        expr = Expr {
-            expr: Expression::BinOp {
-                left: Box::new(expr),
-                op: Bop::Comp(comp_op),
-                right: Box::new(rhs),
-            },
-            range,
-        };
-    }
-
-    Ok(expr)
+    binop_fold(ctx, pair.into_inner(), build_add_sub, src, range)
 }
 
 // add_sub = { mul_div ~ ( (add | subtract) ~ mul_div )* }
@@ -2709,30 +2672,7 @@ fn build_add_sub<'run>(
     src: &str,
 ) -> Result<Expr<'run>, AstError> {
     let range = Range::from(&pair);
-    let mut inner = pair.into_inner();
-
-    let mut expr = build_mul_div(ctx, inner.next().missing("add_sub expression", range)?, src)?;
-
-    while let Some(op_pair) = inner.next() {
-        let rhs_pair = inner.next().missing("add_sub right", range)?;
-        let rhs = build_mul_div(ctx, rhs_pair, src)?;
-        let op = match op_pair.as_rule() {
-            Rule::add => Bop::Plus,
-            Rule::subtract => Bop::Minus,
-            other => internal_bug!("unexpected add_sub op: {other:?}"),
-        };
-
-        expr = Expr {
-            expr: Expression::BinOp {
-                left: Box::new(expr),
-                op,
-                right: Box::new(rhs),
-            },
-            range,
-        };
-    }
-
-    Ok(expr)
+    binop_fold(ctx, pair.into_inner(), build_mul_div, src, range)
 }
 
 // mul_div = { power ~ ( (multiply | divide) ~ power )* }
@@ -2742,30 +2682,7 @@ fn build_mul_div<'run>(
     src: &str,
 ) -> Result<Expr<'run>, AstError> {
     let range = Range::from(&pair);
-    let mut inner = pair.into_inner();
-
-    let mut expr = build_power(ctx, inner.next().missing("mul_div expression", range)?, src)?;
-
-    while let Some(op_pair) = inner.next() {
-        let rhs_pair = inner.next().missing("mul_div right", range)?;
-        let rhs = build_power(ctx, rhs_pair, src)?;
-        let op = match op_pair.as_rule() {
-            Rule::multiply => Bop::Mult,
-            Rule::divide => Bop::Div,
-            other => internal_bug!("unexpected mul_div op: {other:?}"),
-        };
-
-        expr = Expr {
-            expr: Expression::BinOp {
-                left: Box::new(expr),
-                op,
-                right: Box::new(rhs),
-            },
-            range,
-        };
-    }
-
-    Ok(expr)
+    binop_fold(ctx, pair.into_inner(), build_power, src, range)
 }
 
 // power = { unary ~ (pow ~ power)? }  -> right-assoc

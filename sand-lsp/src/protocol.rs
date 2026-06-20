@@ -73,26 +73,14 @@ impl LanguageServer for Backend {
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
         let uri = &params.text_document_position_params.text_document.uri;
         let lsp_pos = params.text_document_position_params.position;
-        let slots_guard = self.slots.read().await;
-        for slot in slots_guard.iter() {
-            if slot.project.is_tracked(uri).is_some() {
-                // Use the last *good* analysis, so hover keeps working while the
-                // current edit doesn't check.
-                let Some(lang::castles::project::CheckResult::Success { ctx, ast, .. }) =
-                    slot.last_good.as_ref()
-                else {
-                    return Ok(None);
-                };
-                return Ok(hover::hover_at_position(
-                    lsp_pos,
-                    uri,
-                    ctx,
-                    ast,
-                    &slot.project,
-                ));
-            }
-        }
-        Ok(None)
+        // `with_analysis` uses the last *good* analysis, so hover keeps working
+        // while the current edit doesn't check.
+        Ok(self
+            .with_analysis(uri, |ctx, ast, project| {
+                hover::hover_at_position(lsp_pos, uri, ctx, ast, project)
+            })
+            .await
+            .flatten())
     }
 
     async fn goto_definition(
@@ -101,22 +89,13 @@ impl LanguageServer for Backend {
     ) -> Result<Option<GotoDefinitionResponse>> {
         let uri = &params.text_document_position_params.text_document.uri;
         let lsp_pos = params.text_document_position_params.position;
-        let slots_guard = self.slots.read().await;
-        for slot in slots_guard.iter() {
-            if slot.project.is_tracked(uri).is_some() {
-                // Use the last *good* analysis, so goto keeps working while the
-                // current edit doesn't check.
-                let Some(lang::castles::project::CheckResult::Success { ctx, ast, .. }) =
-                    slot.last_good.as_ref()
-                else {
-                    return Ok(None);
-                };
-                let loc =
-                    goto_definition::definition_at_position(lsp_pos, uri, ctx, ast, &slot.project);
-                return Ok(loc.map(GotoDefinitionResponse::Scalar));
-            }
-        }
-        Ok(None)
+        Ok(self
+            .with_analysis(uri, |ctx, ast, project| {
+                goto_definition::definition_at_position(lsp_pos, uri, ctx, ast, project)
+                    .map(GotoDefinitionResponse::Scalar)
+            })
+            .await
+            .flatten())
     }
 
     async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {

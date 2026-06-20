@@ -4,6 +4,7 @@ use std::hash::Hash;
 use std::hash::Hasher;
 
 use crate::compiler::structure::AdtDef;
+use crate::util::macros::impl_arena_ref_traits;
 
 /// The kind of a type reflects how its values may be used.
 ///
@@ -180,32 +181,7 @@ impl<'tcx> AdtRef<'tcx> {
     }
 }
 
-impl PartialEq for AdtRef<'_> {
-    fn eq(&self, other: &Self) -> bool {
-        std::ptr::eq(self.0, other.0)
-    }
-}
-impl Eq for AdtRef<'_> {}
-impl Hash for AdtRef<'_> {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        (self.0 as *const AdtDef<'_>).hash(state);
-    }
-}
-impl PartialOrd for AdtRef<'_> {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-impl Ord for AdtRef<'_> {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.0.id.cmp(&other.0.id)
-    }
-}
-impl fmt::Debug for AdtRef<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "EnumRef({}, {})", self.0.id, self.0.name)
-    }
-}
+impl_arena_ref_traits!(AdtRef<'_>, "EnumRef", this => this.0.name);
 
 /// The structural signature of a type.
 ///

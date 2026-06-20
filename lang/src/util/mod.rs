@@ -4,4 +4,5 @@ pub mod bugs;
 pub mod constants;
 pub mod error_ctx;
 pub mod fs;
+pub mod macros;
 pub mod traits;

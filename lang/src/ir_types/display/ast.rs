@@ -4,6 +4,7 @@ use std::fmt::Write as _;
 
 use crate::compiler::context::CompileCtx;
 use crate::ir_types::display::INDENT;
+use crate::ir_types::display::fmt_match_pattern;
 use crate::ir_types::typed_hir::*;
 
 impl<'tcx> TypedProgram<'tcx> {
@@ -169,43 +170,12 @@ fn dump_expr<'tcx>(out: &mut String, expr: &Expr<'tcx>, ctx: &CompileCtx<'tcx>, 
             let _ = writeln!(out, "match");
             dump_expr(out, scrutinee, ctx, level + 1);
             for arm in arms {
-                let pattern_str = dump_match_pattern(&arm.pattern, ctx);
+                let pattern_str = fmt_match_pattern(&arm.pattern, ctx);
                 indent(out, level + 1);
                 let _ = writeln!(out, "arm {} =>", pattern_str);
                 dump_expr(out, &arm.body, ctx, level + 2);
             }
         }
-    }
-}
-
-/// recursively render a `MatchPattern` as source-like syntax, e.g.
-/// `Shape#Circle(r)`, `(a, b)`, `Wrap((x, y))`, `_`.
-fn dump_match_pattern<'tcx>(pattern: &MatchPattern<'tcx>, ctx: &CompileCtx<'tcx>) -> String {
-    match pattern {
-        MatchPattern::Variant {
-            enum_ref,
-            variant_idx,
-            payload,
-            ..
-        } => {
-            let tag = ctx.enum_display(*enum_ref, *variant_idx);
-            match payload {
-                Some((_, p)) => format!("{tag}({})", dump_match_pattern(p, ctx)),
-                None => tag,
-            }
-        }
-        MatchPattern::Tuple { elems, .. } => format!(
-            "({})",
-            elems
-                .iter()
-                .map(|p| dump_match_pattern(p, ctx))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-        MatchPattern::IntLit(n) => n.to_string(),
-        MatchPattern::BoolLit(b) => b.to_string(),
-        MatchPattern::Binding { var, .. } => ctx.uniq_variable_name(var),
-        MatchPattern::Wildcard => "_".to_string(),
     }
 }
 
@@ -240,7 +210,7 @@ fn dump_statement<'tcx>(
             ..
         } => {
             indent(out, level);
-            let _ = writeln!(out, "let {} =", dump_match_pattern(pattern, ctx));
+            let _ = writeln!(out, "let {} =", fmt_match_pattern(pattern, ctx));
             dump_expr(out, val, ctx, level + 1);
             indent(out, level);
             let _ = writeln!(out, "else");

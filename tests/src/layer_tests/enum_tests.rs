@@ -365,6 +365,21 @@ fn adhoc_tag_inequality() {
     );
 }
 
+/// Ordering comparisons (`<`, `>`, `<=`, `>=`) are defined only on `Int`;
+/// applying them to enum values is a type error. This guards the invariant that
+/// makes the typed_hir interpreter's enum-ordering branch (and the MIR
+/// interpreter's *absence* of one) unreachable in well-typed programs.
+#[test]
+fn enum_ordering_is_a_type_error() {
+    typecheck_fails(
+        "def main(): Bool := {
+             let a: #lo | #hi = #lo;
+             let b: #lo | #hi = #hi;
+             a < b
+         }",
+    );
+}
+
 /// A `let` binding annotated with an ad-hoc tag-union type.
 #[test]
 fn adhoc_tag_in_let_annotation() {

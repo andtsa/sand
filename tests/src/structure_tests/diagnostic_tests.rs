@@ -80,6 +80,57 @@ fn duplicate_main_diagnostic_file_field_matches_key() {
     }
 }
 
+/// The same invariant across *two distinct files* (a cross-module duplicate
+/// `main`). This is the case that actually exercises the per-module file
+/// mapping: the diagnostic filed under the second file must reference the
+/// second file, not the first. (Regression guard: previously both diagnostics
+/// carried the first module's file.)
+#[test]
+fn cross_module_duplicate_main_diagnostic_file_matches_key() {
+    use lang::compiler::context::ProjectCtx;
+    use lang::compiler::diagnostics::SandDiagnostic;
+    use url::Url;
+
+    let mut project_ctx = ProjectCtx::initial();
+    let fr_a = project_ctx
+        .register_file(Url::parse("file:///project/a.sand").unwrap())
+        .expect("a.sand ok");
+    let fr_b = project_ctx
+        .register_file(Url::parse("file:///project/b.sand").unwrap())
+        .expect("b.sand ok");
+
+    let mut ctx = CompileCtx::initial();
+    ctx.create_default_module(fr_a, "a");
+    ctx.create_default_module(fr_b, "b");
+
+    let code = Map::from([
+        (fr_a, "def main(): Int := 1"),
+        (fr_b, "def main(): Int := 2"),
+    ]);
+
+    let err = compile_hir(code, &mut ctx).expect_err("should fail with DuplicateMain");
+    let diagnostics = SandDiagnostic::from_compiler_error(&ctx, &err);
+
+    // Two duplicate-main diagnostics, filed under two distinct files.
+    assert_eq!(
+        diagnostics.map.len(),
+        2,
+        "expected duplicate-main diagnostics under two distinct files, got {:?}",
+        diagnostics.map.keys().collect::<Vec<_>>()
+    );
+    for (file_key, diags) in &diagnostics.map {
+        for d in diags {
+            assert_eq!(
+                d.file.unwrap(),
+                *file_key,
+                "diagnostic.file ({:?}) does not match the key it's stored under ({:?})",
+                d.file,
+                file_key
+            );
+        }
+    }
+}
+
 /// [GUARD] A type error produces a non-empty diagnostic list.
 #[test]
 fn type_error_produces_diagnostics() {

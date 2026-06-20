@@ -1,9 +1,6 @@
 //! types relating to projects and their structure
 
-use std::cmp::Ordering;
 use std::fmt::Display;
-use std::hash::Hash;
-use std::hash::Hasher;
 use std::path::Path;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -13,38 +10,14 @@ use url::Url;
 
 use crate::util::fs::FileOperations;
 use crate::util::fs::expand_to_files;
+use crate::util::macros::impl_arena_ref_traits;
 
 /// A `Copy` handle to an arena-allocated [`CodeModule`]. Equality/hashing by
 /// pointer identity, ordering by the monotonic registration `id`.
 #[derive(Copy, Clone)]
 pub struct ModuleRef<'tcx>(pub(in crate::compiler) &'tcx CodeModule);
 
-impl PartialEq for ModuleRef<'_> {
-    fn eq(&self, other: &Self) -> bool {
-        std::ptr::eq(self.0, other.0)
-    }
-}
-impl Eq for ModuleRef<'_> {}
-impl Hash for ModuleRef<'_> {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        (self.0 as *const CodeModule).hash(state);
-    }
-}
-impl PartialOrd for ModuleRef<'_> {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-impl Ord for ModuleRef<'_> {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.0.id.cmp(&other.0.id)
-    }
-}
-impl std::fmt::Debug for ModuleRef<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "ModuleRef({}, {})", self.0.id, self.0.name)
-    }
-}
+impl_arena_ref_traits!(ModuleRef<'_>, "ModuleRef", this => this.0.name);
 
 /// A module's `use` imports. Source modules are kept by name and
 /// resolved to a [`ModuleRef`] lazily at name-resolution time.
@@ -129,13 +102,6 @@ impl FileName {
 
     pub fn virt(name: &str) -> Self {
         FileName::Virtual(name.to_string())
-    }
-
-    /// not sure if there's a point to this since file name is needed for module
-    /// references
-    #[allow(dead_code)]
-    fn from_uri(uri: &Url) -> Self {
-        Self::extract(uri).into()
     }
 
     fn extract(uri: &Url) -> Option<String> {
