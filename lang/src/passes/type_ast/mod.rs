@@ -53,9 +53,30 @@ impl<'tcx> typed_hir::TypedProgram<'tcx> {
             Vec::with_capacity(ast.functions.len());
         let mut errors: Vec<TypeError<'tcx>> = Vec::new();
         for f in ast.functions.values() {
-            match infer_function(ctx, f) {
-                Ok(typed) => fn_list.push(typed),
-                Err(e) => errors.push(e),
+            let result = infer_function(ctx, f);
+            // Recovered statement-level errors (see `infer_statements_recovering`)
+            // accumulate on the context; collect them for this function, tagged
+            // with its module.
+            let recovered = ctx.take_type_errors().into_iter().map(|error| TypeError {
+                error,
+                module: f.src_module,
+            });
+            match result {
+                // A function is kept only if it checked *and* recovered nothing;
+                // otherwise every error (the hard one, plus any recovered) is
+                // reported and the function is excluded from the program.
+                Ok(typed) => {
+                    let recovered: Vec<_> = recovered.collect();
+                    if recovered.is_empty() {
+                        fn_list.push(typed);
+                    } else {
+                        errors.extend(recovered);
+                    }
+                }
+                Err(e) => {
+                    errors.push(e);
+                    errors.extend(recovered);
+                }
             }
         }
 

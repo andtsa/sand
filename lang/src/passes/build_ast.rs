@@ -242,11 +242,15 @@ impl<T> AstExt<T> for Option<T> {
 }
 
 impl<'run> ProgramModule<'run> {
+    /// Parse + build a source file. A pest failure is returned as `Err` (the
+    /// file is unrecoverable); *build* errors (unknown types, malformed
+    /// signatures, …) are collected per item and returned alongside the modules
+    /// that built successfully, so callers can report several at once.
     pub fn parse_source_file(
         ctx: &mut CompileCtx<'run>,
         src: &str,
         file: FileRef,
-    ) -> Result<Vec<ProgramModule<'run>>, AstError> {
+    ) -> Result<(Vec<ProgramModule<'run>>, Vec<AstError>), AstError> {
         let mut pairs = LangParser::parse(Rule::program, src).map_err(Box::new)?;
 
         let program_pair = match pairs.next() {
@@ -261,19 +265,25 @@ impl<'run> ProgramModule<'run> {
 
         let dm = ctx.default_module(file);
 
-        let map = build_program(ctx, program_pair, src, dm, file)?;
-        Ok(map
+        let (map, errors) = build_program(ctx, program_pair, src, dm, file)?;
+        let modules = map
             .into_iter()
             .map(|(module_name, functions)| ProgramModule {
                 functions,
                 module_name,
             })
-            .collect::<Vec<_>>())
+            .collect::<Vec<_>>();
+        Ok((modules, errors))
     }
 
     pub fn parse_stub(ctx: &mut CompileCtx<'run>, src: &str) -> Result<Self, AstError> {
         let fr = ctx.stub_file();
-        let modules = Self::parse_source_file(ctx, src, fr)?;
+        let (modules, errors) = Self::parse_source_file(ctx, src, fr)?;
+        // `parse_stub` keeps an all-or-nothing contract (tests rely on it): a
+        // build error surfaces as `Err`, collapsing the collected list.
+        if let Some(e) = errors.into_iter().next() {
+            return Err(e);
+        }
         if modules.len() == 1 {
             Ok(modules.into_iter().next().unwrap())
         } else {
@@ -288,13 +298,16 @@ impl<'run> ProgramModule<'run> {
 
 // ============== top level ==============
 
+/// Functions grouped by the module they were declared in
+type BuiltModules<'run> = Map<ModuleRef<'run>, Vec<Function<'run>>>;
+
 pub fn build_program<'i, 'run>(
     ctx: &mut CompileCtx<'run>,
     pair: Pair<'i, Rule>,
     src: &str,
     default_module: ModuleRef<'run>,
     file: FileRef,
-) -> Result<Map<ModuleRef<'run>, Vec<Function<'run>>>, AstError> {
+) -> Result<(BuiltModules<'run>, Vec<AstError>), AstError> {
     assert_eq!(pair.as_rule(), Rule::program);
     let children: Vec<Pair<'i, Rule>> = pair.into_inner().collect();
 
@@ -306,6 +319,8 @@ pub fn build_program<'i, 'run>(
     //     variance soundness, declared variance vs. payload positions;
     //
     //  2. build function bodies, names resolve against the collected decls.
+    let mut errors: Vec<AstError> = Vec::new();
+
     let collected = collect_declarations(ctx, &children, default_module, file)?;
     resolve_enum_payloads(ctx, collected.pending_payloads)?;
     // Heap-strategy legality (Calculus, `K-HeapedRec`): a (mutually) recursive
@@ -323,16 +338,20 @@ pub fn build_program<'i, 'run>(
     // Build defaulted methods (as generic functions) *before* impls, so an impl
     // that omits a defaulted method can point its instance entry at the default.
     let default_fns = build_default_methods(ctx, defaults, src)?;
-    let mut mods = build_functions(ctx, children, src, default_module, file)?;
+    let mut mods = build_functions(ctx, children, src, default_module, file, &mut errors);
     default_fns.into_iter().for_each(|(module, f)| {
         mods.entry(module).or_default().push(f);
     });
     // Instance-set checks need every instance registered (build_functions did
     // that): a subclass instance requires its superclass instances for the same
     // head type (Calculus: Typeclasses, `requires`).
-    check_superclass_instances(ctx)?;
-    check_copy_instances(ctx)?;
-    Ok(mods)
+    // Skip them when functions already failed to build,
+    // the instance set is partial and they would only cascade.
+    if errors.is_empty() {
+        check_superclass_instances(ctx)?;
+        check_copy_instances(ctx)?;
+    }
+    Ok((mods, errors))
 }
 
 /// The declarations gathered in phase 1, to be resolved in later phases.
@@ -1069,7 +1088,8 @@ fn build_functions<'i, 'run>(
     src: &str,
     default_module: ModuleRef<'run>,
     file: FileRef,
-) -> Result<Map<ModuleRef<'run>, Vec<Function<'run>>>, AstError> {
+    errors: &mut Vec<AstError>,
+) -> BuiltModules<'run> {
     let mut mods: Map<ModuleRef, Vec<Function>> = Map::new();
     let mut funcs = Vec::new();
     let mut current_module = default_module;
@@ -1077,17 +1097,24 @@ fn build_functions<'i, 'run>(
         match child.as_rule() {
             Rule::module => {
                 let child_span = child.as_span();
-                let modname_pair = child
-                    .into_inner()
-                    .next()
-                    .missing("module name", Range::from(child_span))?;
+                let modname_pair = match child.into_inner().next() {
+                    Some(p) => p,
+                    None => {
+                        errors.push(AstError::Missing {
+                            expected: "module name",
+                            range: Range::from(child_span),
+                        });
+                        continue;
+                    }
+                };
                 let mod_span = modname_pair.as_span();
                 if modname_pair.as_rule() != Rule::identifier {
-                    return Err(AstError::UnexpectedRule {
+                    errors.push(AstError::UnexpectedRule {
                         expected: "identifier",
                         got: modname_pair.as_rule(),
                         range: Range::from(&modname_pair),
                     });
+                    continue;
                 }
                 // flush accumulated functions into the current module slot
                 if !funcs.is_empty() {
@@ -1097,26 +1124,29 @@ fn build_functions<'i, 'run>(
                     .get_mod_by_name(mod_span.as_str())
                     .unwrap_or_else(|| ctx.register_module(mod_span.as_str(), file));
             }
-            Rule::function => {
-                funcs.push(build_function(ctx, child, src, &current_module, None)?);
-            }
+            Rule::function => match build_function(ctx, child, src, &current_module, None) {
+                Ok(f) => funcs.push(f),
+                Err(e) => errors.push(e),
+            },
             Rule::extern_decl => {
-                collect_extern(ctx, child, &current_module)?;
+                if let Err(e) = collect_extern(ctx, child, &current_module) {
+                    errors.push(e);
+                }
             }
             Rule::impl_decl => {
-                build_impl(ctx, child, src, &current_module, &mut funcs)?;
+                if let Err(e) = build_impl(ctx, child, src, &current_module, &mut funcs) {
+                    errors.push(e);
+                }
             }
             // enum / `use` / typeclass declarations were handled in phase 1
             // (typeclass method *bodies*, the defaults, are built separately).
             Rule::type_alias | Rule::use_decl | Rule::typeclass_decl => {}
             Rule::EOI => continue,
             other => {
-                let range = Range::from(child);
-                eprintln!("parse error: unexpected top-level rule at {range} - got {other:?}");
-                return Err(AstError::UnexpectedRule {
+                errors.push(AstError::UnexpectedRule {
                     expected: "function or module declaration",
                     got: other,
-                    range,
+                    range: Range::from(child),
                 });
             }
         }
@@ -1124,7 +1154,7 @@ fn build_functions<'i, 'run>(
     if !funcs.is_empty() {
         mods.entry(current_module).or_default().append(&mut funcs);
     }
-    Ok(mods)
+    mods
 }
 
 fn build_function<'run>(

@@ -212,12 +212,6 @@ pub fn type_error_to_diagnostic<'tcx>(
                 ),
             );
         }
-        DuplicateMatchPattern { pattern, range } => {
-            diagnostics.add_one(
-                file,
-                SandDiagnostic::error(file, *range, format!("duplicate match pattern '{pattern}'")),
-            );
-        }
         MatchWrongEnumType {
             expected_enum,
             found_enum,

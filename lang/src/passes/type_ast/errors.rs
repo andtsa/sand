@@ -87,8 +87,6 @@ pub enum AstTypeError<'tcx> {
         uncovered: Vec<String>,
         range: Range,
     },
-    #[error("duplicate match pattern '{pattern}' at {range}")]
-    DuplicateMatchPattern { pattern: String, range: Range },
     #[error(
         "match arm pattern is for enum '{found_enum}' but scrutinee has type '{expected_enum}' at {range}"
     )]

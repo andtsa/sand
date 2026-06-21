@@ -338,4 +338,82 @@ mod tests {
             "the function defined after the broken one survives recovery"
         );
     }
+
+    /// Statement-level recovery: two independently ill-typed statements in the
+    /// *same* function both produce a diagnostic (the old first-error path
+    /// would have reported only the first).
+    #[test]
+    fn multiple_type_errors_in_one_function_are_all_reported() {
+        let mut proj = Project::empty();
+        proj.create_virtual_file(
+            "def main(): Int := {\n\
+             \x20  let x: Int = true;\n\
+             \x20  let y: Bool = 5;\n\
+             \x20  0\n\
+             }"
+            .to_string(),
+            "m",
+        );
+
+        let c = proj.check_to(Stage::Typed);
+        assert_eq!(c.reached, Stage::Typed);
+        let total: usize = c.diagnostics.map.values().map(Vec::len).sum();
+        assert_eq!(total, 2, "both bad statements should be reported");
+    }
+
+    /// two functions whose signatures each
+    /// reference an unknown type both produce a diagnostic; the pipeline halts
+    /// at `Parsed` (a partial declaration set is not safe to qualify).
+    #[test]
+    fn multiple_build_errors_are_all_reported() {
+        let mut proj = Project::empty();
+        proj.create_virtual_file(
+            "def f(x: Bogus): Int := 0\n\
+             def g(y: Alsobad): Int := 0\n\
+             def main(): Int := 0"
+                .to_string(),
+            "m",
+        );
+
+        let c = proj.check_to(Stage::Typed);
+        assert_eq!(c.reached, Stage::Parsed, "build errors halt at Parsed");
+        let total: usize = c.diagnostics.map.values().map(Vec::len).sum();
+        assert_eq!(total, 2, "both unknown-type signatures should be reported");
+    }
+
+    /// A function that fails to build does not suppress the others: a good
+    /// function still parses past a bad one (and the bad one is reported).
+    #[test]
+    fn a_good_function_survives_a_bad_build() {
+        let mut proj = Project::empty();
+        proj.create_virtual_file(
+            "def bad(x: Bogus): Int := 0\n\
+             def good(): Int := 0"
+                .to_string(),
+            "m",
+        );
+
+        let c = proj.check_to(Stage::Typed);
+        let total: usize = c.diagnostics.map.values().map(Vec::len).sum();
+        assert_eq!(total, 1, "only the bad function errors");
+    }
+
+    /// A failed `let` binds its name at `Top`, so a later use does not cascade
+    /// into a spurious second error.
+    #[test]
+    fn failed_declaration_does_not_cascade() {
+        let mut proj = Project::empty();
+        proj.create_virtual_file(
+            "def main(): Int := {\n\
+             \x20  let x: Int = true;\n\
+             \x20  x\n\
+             }"
+            .to_string(),
+            "m",
+        );
+
+        let c = proj.check_to(Stage::Typed);
+        let total: usize = c.diagnostics.map.values().map(Vec::len).sum();
+        assert_eq!(total, 1, "the use of `x` must not add a cascade error");
+    }
 }

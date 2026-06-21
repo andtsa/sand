@@ -51,6 +51,7 @@ use crate::lang::types::Ty;
 use crate::lang::types::TyKind;
 use crate::lang::types::TypeParamId;
 use crate::passes::parse::Rule;
+use crate::passes::type_ast::AstTypeError;
 
 /// This should not be used and is intentionally misspelled to be easily
 /// detectable.
@@ -211,6 +212,12 @@ pub struct CompileCtx<'tcx> {
     /// The file currently being checked, set per-function by `infer_function`.
     /// Used to anchor inline warnings (a [`Range`] alone has no file).
     pub cur_file: Option<FileRef>,
+    /// Recovered (non-aborting) type errors collected while checking the
+    /// current function: a statement that fails to type-check is recorded
+    /// here and the pass continues (see `type_ast`'s statement-level `Top`
+    /// recovery), so a single bad statement no longer hides errors in its
+    /// siblings. Drained per-function by `TypedProgram::from_ast_program`.
+    pub type_errors: Vec<AstTypeError<'tcx>>,
 }
 
 #[derive(Debug, Error)]
@@ -348,7 +355,18 @@ impl<'tcx> CompileCtx<'tcx> {
             type_refs: Vec::new(),
             diagnostics: Vec::new(),
             cur_file: None,
+            type_errors: Vec::new(),
         }
+    }
+
+    /// Record a recovered (non-aborting) type error for the current function.
+    pub fn push_type_error(&mut self, err: AstTypeError<'tcx>) {
+        self.type_errors.push(err);
+    }
+
+    /// Drain the recovered type errors collected so far (per-function).
+    pub fn take_type_errors(&mut self) -> Vec<AstTypeError<'tcx>> {
+        std::mem::take(&mut self.type_errors)
     }
 
     /// Emit a non-fatal warning at `range` in the file currently being checked
