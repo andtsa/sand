@@ -364,6 +364,45 @@ fn region_param_name(params: &[RegionParam], r: Region) -> String {
     }
 }
 
+/// Type-check a block's statements with per-statement error recovery: a failed
+/// statement is recorded into the function-level error sink ([`CompileCtx::
+/// push_type_error`]) and dropped from the output, so a single bad statement no
+/// longer hides errors in its siblings. A failed `let` still binds its name at
+/// [`Ty::Top`](crate::lang::types::Ty) (compatible with any type), so later
+/// statements referring to it don't cascade into spurious errors. Returns the
+/// surviving typed statements and the resulting environment.
+///
+/// The recovered program is never lowered (the pipeline halts at `Typed` once
+/// any error exists), so dropping statements is sound — its only purpose is to
+/// surface as many real errors as possible in one pass.
+pub(super) fn infer_statements_recovering<'tcx>(
+    ctx: &mut CompileCtx<'tcx>,
+    env: &TypeEnv<'tcx>,
+    statements: &[qhir::Statement<'tcx>],
+) -> (Vec<typed_hir::Statement<'tcx>>, TypeEnv<'tcx>) {
+    let mut stmts = Vec::with_capacity(statements.len());
+    let mut env = env.clone();
+    for stmt in statements {
+        match infer_statement(ctx, &mut env, stmt) {
+            Ok(s) => stmts.push(s),
+            Err(e) => {
+                ctx.push_type_error(e);
+                // A failed declaration's env is left untouched by
+                // `infer_statement` (it checks the initialiser before binding),
+                // so bind the name at `Top` here to stop later uses cascading.
+                if let qhir::Statement::Declaration {
+                    name, is_mutable, ..
+                } = stmt
+                {
+                    let home = ctx.current_scope_region();
+                    env.insert(*name, (ctx.types.top, Kind::Owned, *is_mutable, home));
+                }
+            }
+        }
+    }
+    (stmts, env)
+}
+
 pub(super) fn infer_statement<'tcx>(
     ctx: &mut CompileCtx<'tcx>,
     env: &mut TypeEnv<'tcx>,
@@ -1536,13 +1575,8 @@ pub(super) fn infer<'tcx>(
             let block_depth = ctx.region_depth(block_region);
 
             let computed = (|| {
-                let (typed_statements, final_env) = statements.iter().try_fold(
-                    (Vec::with_capacity(statements.len()), env.clone()),
-                    |(mut stmts, mut env), stmt| {
-                        stmts.push(infer_statement(ctx, &mut env, stmt)?);
-                        Ok((stmts, env))
-                    },
-                )?;
+                let (typed_statements, final_env) =
+                    infer_statements_recovering(ctx, env, statements);
 
                 let (typed_expr, ret_ty, kind) = if let Some(e) = ret_expr {
                     let t_expr = infer(ctx, &final_env, e)?;

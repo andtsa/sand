@@ -201,9 +201,21 @@ fn run_pipeline<'proj>(
     };
 
     // ── parse ────────────────────────────────────────────────────────────────
+    // A pest failure is unrecoverable for that file (no native error recovery) and
+    // aborts the run; *build* errors (unknown types, bad signatures, …) are
+    // collected per item and merely halt the pipeline at `Parsed` (since the
+    // partial declaration set is not safe to qualify) so every build error is
+    // reported.
     let core_file = ctx.ensure_core_module();
     let core_modules = match hhir::ProgramModule::parse_source_file(ctx, CORE_SRC, core_file) {
-        Ok(m) => m,
+        // the core library is trusted: it should never carry build errors.
+        Ok((m, errs)) => {
+            if errs.is_empty() {
+                m
+            } else {
+                internal_bug!("error in core library: {errs:?}");
+            }
+        }
         Err(e) => {
             record_error(&mut out, ctx, SandLangErrorContext::default().wrap_err(e));
             return out;
@@ -212,7 +224,16 @@ fn run_pipeline<'proj>(
     let mut modules = core_modules;
     for (file, source) in code {
         match hhir::ProgramModule::parse_source_file(ctx, source, file) {
-            Ok(mut m) => modules.append(&mut m),
+            Ok((mut m, build_errors)) => {
+                modules.append(&mut m);
+                for e in build_errors {
+                    let ectx = SandLangErrorContext {
+                        module: None,
+                        file: Some(file),
+                    };
+                    record_error(&mut out, ctx, ectx.wrap_err(e));
+                }
+            }
             Err(e) => {
                 let ectx = SandLangErrorContext {
                     module: None,
@@ -224,6 +245,11 @@ fn run_pipeline<'proj>(
         }
     }
     out.reached = Stage::Parsed;
+    // Any build error makes the declaration set partial; stop before qualify
+    // (which assumes every referenced item exists).
+    if out.first_error.is_some() {
+        return out;
+    }
     if target <= Stage::Parsed {
         return out;
     }

@@ -22,7 +22,7 @@ use crate::passes::type_ast::infer::infer_call;
 use crate::passes::type_ast::infer::infer_constructor;
 use crate::passes::type_ast::infer::infer_method_call;
 use crate::passes::type_ast::infer::infer_ptr_op;
-use crate::passes::type_ast::infer::infer_statement;
+use crate::passes::type_ast::infer::infer_statements_recovering;
 use crate::passes::type_ast::infer::join_region_ty;
 
 /// Variable bindings introduced by a pattern: each is the uniquified variable,
@@ -983,13 +983,8 @@ pub(super) fn check<'tcx>(
             let block_depth = ctx.region_depth(block_region);
 
             let computed = (|| {
-                let (typed_statements, final_env) = statements.iter().try_fold(
-                    (Vec::with_capacity(statements.len()), env.clone()),
-                    |(mut stmts, mut env), stmt| {
-                        stmts.push(infer_statement(ctx, &mut env, stmt)?);
-                        Ok((stmts, env))
-                    },
-                )?;
+                let (typed_statements, final_env) =
+                    infer_statements_recovering(ctx, env, statements);
                 let typed_ret = check(ctx, &final_env, ret, expected)?;
                 Ok::<_, AstTypeError<'tcx>>((typed_statements, typed_ret))
             })();
