@@ -204,7 +204,6 @@ pub fn ast_error_to_diagnostics(
         // carries a full message; surface it with the variant's range.
         err @ (AstError::UnknownTypeclass { range, .. }
         | AstError::TypeclassParamArity { range, .. }
-        | AstError::MethodGenericsUnsupported { range }
         | AstError::UnknownSuperclass { range, .. }
         | AstError::DuplicateMethodName { range, .. }
         | AstError::NonInstanceableType { range }
