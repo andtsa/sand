@@ -102,7 +102,7 @@ impl Display for Range {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "Range({}:{} – {}:{})",
+            "Range({}:{} - {}:{})",
             self.start.line, self.start.col, self.end.line, self.end.col
         )
     }

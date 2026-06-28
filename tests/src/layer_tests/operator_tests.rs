@@ -16,9 +16,7 @@ fn run_both(src: &str) -> Expression<'static> {
     hir
 }
 
-// ── logical AND: `and` on Bool
-// ────────────────────────────────────────────────
-
+// --- logical AND: `and` on Bool// --- ---
 #[test]
 fn logical_and_true() {
     assert_eq!(
@@ -43,9 +41,7 @@ fn logical_and_chains_comparisons() {
     );
 }
 
-// ── bitwise AND: `&&` on Int
-// ──────────────────────────────────────────────────
-
+// --- bitwise AND: `&&` on Int// --- ---
 #[test]
 fn bitwise_and_ints() {
     // 6 = 0b110, 5 = 0b101, 6 & 5 = 0b100 = 4
@@ -57,9 +53,7 @@ fn bitwise_and_odd_check() {
     assert_eq!(run_both("def main(): Int := 7 && 1"), Expression::Int(1));
 }
 
-// ── the operators are type-restricted
-// ─────────────────────────────────────────
-
+// --- the operators are type-restricted// --- ---
 #[test]
 fn logical_and_on_int_is_rejected() {
     typecheck_fails("def main(): Int := 5 and 3");
@@ -76,9 +70,7 @@ fn both_operators_type_check_in_their_domain() {
     typecheck("def main(): Int := 5 && 3");
 }
 
-// ── single `&` is no longer an operator (freed for borrows)
-// ───────────────────
-
+// --- single `&` is no longer an operator (freed for borrows)// --- ---
 #[test]
 fn single_ampersand_is_not_an_operator() {
     parse_fails("def main(): Bool := true & false");

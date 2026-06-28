@@ -152,9 +152,7 @@ pub struct RegionConstraint {
 }
 
 /// Lifetime-elision rule scaffolding. These describe how an omitted region in a
-/// function signature *would* be filled in. The data structures exist so
-/// elision can be recorded and applied, but elision is **not active**: every
-/// borrow's region is still explicit or the shared elided-borrow region.
+/// function signature *would* be filled in
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ElisionRule {
     /// With exactly one input reference, every elided output region is that
@@ -168,7 +166,7 @@ pub enum ElisionRule {
 ///
 /// Equality and hashing are by pointer identity: each distinct enum (named
 /// enums deduplicated by name, anonymous tag-unions by tag set) is allocated
-/// exactly once, so identical enum ↔ identical pointer. Ordering is by the
+/// exactly once, so identical enum <=> identical pointer. Ordering is by the
 /// monotonic registration `id` for deterministic iteration.
 #[derive(Copy, Clone)]
 pub struct AdtRef<'tcx>(pub(crate) &'tcx AdtDef<'tcx>);
@@ -265,20 +263,6 @@ impl<'tcx> Ty<'tcx> {
     #[inline]
     pub fn kind(self) -> &'tcx TyKind<'tcx> {
         self.0
-    }
-
-    /// `true` for types that are implicitly copied on use (Int, Bool, Unit).
-    /// Enum types are *not* Copy and are subject to move semantics.
-    pub fn is_copy(self) -> bool {
-        match self.kind() {
-            TyKind::Int | TyKind::Bool | TyKind::Unit => true,
-            TyKind::Region(t, _) => t.is_copy(),
-            // shared references are freely copyable (immutable, no ownership).
-            TyKind::Ref(..) => true,
-            // raw pointers are `Copy` and outside the affine discipline.
-            TyKind::Ptr(_) => true,
-            _ => false,
-        }
     }
 
     /// `true` if this type mentions any type parameter (directly or nested in a

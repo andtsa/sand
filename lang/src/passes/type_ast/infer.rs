@@ -373,7 +373,7 @@ fn region_param_name(params: &[RegionParam], r: Region) -> String {
 /// surviving typed statements and the resulting environment.
 ///
 /// The recovered program is never lowered (the pipeline halts at `Typed` once
-/// any error exists), so dropping statements is sound — its only purpose is to
+/// any error exists), so dropping statements is sound; its only purpose is to
 /// surface as many real errors as possible in one pass.
 pub(super) fn infer_statements_recovering<'tcx>(
     ctx: &mut CompileCtx<'tcx>,
@@ -630,10 +630,12 @@ pub(super) fn infer_statement<'tcx>(
     }
 }
 
-/// Check that a `where T : class` constraint is satisfied for the concrete type
-/// `ty` at a call site. A concrete type needs a registered instance;
-/// a still-abstract type parameter must itself be constrained in the caller
-/// (the bound propagates upward).
+/// Check that a `where T : class` constraint is satisfied for `ty` at a call
+/// site, deferring to [`CompileCtx::satisfies`] (the single authority shared
+/// with the affine/move checker) under the enclosing function's `where`
+/// assumptions. So the builtin structural `Copy`/`Clone` instances (`&T`,
+/// `Ptr<T>`, tuples) that the move checker recognises also satisfy a bound
+/// here.
 fn check_type_constraint<'tcx>(
     ctx: &CompileCtx<'tcx>,
     class: TypeclassRef,
@@ -641,24 +643,16 @@ fn check_type_constraint<'tcx>(
     range: Range,
     required_by: Option<ConstraintOrigin>,
 ) -> Result<(), AstTypeError<'tcx>> {
-    let no_instance = || AstTypeError::TypeclassNoInstance {
-        class: ctx.get_typeclass(class).name.clone(),
-        ty,
-        range,
-        required_by: required_by.clone(),
-    };
-    if let TyKind::Param(pid) = ty.kind() {
-        let licensed = ctx
-            .type_assumptions()
-            .iter()
-            .any(|tc| tc.param == *pid && ctx.class_satisfies(tc.class, class));
-        return if licensed { Ok(()) } else { Err(no_instance()) };
+    if ctx.satisfies(class, ty, ctx.type_assumptions()) {
+        Ok(())
+    } else {
+        Err(AstTypeError::TypeclassNoInstance {
+            class: ctx.get_typeclass(class).name.clone(),
+            ty,
+            range,
+            required_by,
+        })
     }
-    let ok = ctx
-        .type_head(ty)
-        .map(|head| ctx.lookup_instance(class, head).is_some())
-        .unwrap_or(false);
-    if ok { Ok(()) } else { Err(no_instance()) }
 }
 
 /// Type-check a raw-pointer op (`__ptr_read` / `__ptr_write` / `__ptr_cast`).
@@ -805,7 +799,7 @@ pub(super) fn infer_method_call<'tcx>(
     }
     // Bidirectional argument handling (arity is guaranteed equal above). A method
     // like `bind(x: F<A>, f: A -> F<B>)` takes a *function* argument (the
-    // continuation) whose body needs an expected type to resolve — so we solve
+    // continuation) whose body needs an expected type to resolve, so we solve
     // the receiver and type parameters from the non-function arguments first,
     // seed the rest from the expected result, then *check* the function-typed
     // arguments against their now-solved declared types (rather than inferring
@@ -893,7 +887,7 @@ pub(super) fn infer_method_call<'tcx>(
     // Concrete receiver: validate the call against the *solved* method signature
     // before committing to an instance. The receiver/parameter solving above is
     // best-effort (it ignores unification failures), so without this a
-    // wrong-typed argument — e.g. `same(5, true)` with `same(x: T, y: T)` — would
+    // wrong-typed argument (e.g. `same(5, true)` with `same(x: T, y: T)`) would
     // slip through into the emitted `Call` and reach codegen.
     for (decl, a) in mdef.param_tys.iter().zip(&arg_exprs) {
         let want = subst(ctx, *decl, &mapping);
@@ -951,7 +945,7 @@ pub(super) fn infer_method_call<'tcx>(
 
 /// Type-check a direct function call `f(args)`. When `expected` is given (the
 /// bidirectional `check` path), it seeds the type-parameter solution from the
-/// callee's *return* type — so a parameter appearing only in the result
+/// callee's *return* type, so a parameter appearing only in the result
 /// (`fail<A>(c: Int): Check<A>`) is recovered from the call's expected type,
 /// the same way [`infer_method_call`] resolves `pure`. With `expected = None`
 /// (plain `infer`), type parameters come from the arguments alone.

@@ -21,9 +21,7 @@ fn run_both(src: &str) -> Expression<'static> {
     hir
 }
 
-// ── primitives are Copy (builtin)
-// ─────────────────────────────────────────────
-
+// --- primitives are Copy (builtin)// --- ---
 #[test]
 fn an_int_is_used_twice_without_clone() {
     assert_eq!(
@@ -32,9 +30,7 @@ fn an_int_is_used_twice_without_clone() {
     );
 }
 
-// ── user `Copy` types
-// ─────────────────────────────────────────────────────────
-
+// --- user `Copy` types// --- ---
 #[test]
 fn a_copy_enum_is_used_twice() {
     assert_eq!(
@@ -69,9 +65,7 @@ fn a_non_copy_value_used_twice_is_rejected() {
     );
 }
 
-// ── `clone` produces a fresh owned value
-// ──────────────────────────────────────
-
+// --- `clone` produces a fresh owned value// --- ---
 #[test]
 fn clone_returns_a_fresh_value() {
     assert_eq!(
@@ -85,9 +79,7 @@ fn clone_returns_a_fresh_value() {
     );
 }
 
-// ── `Copy` is structural
-// ──────────────────────────────────────────────────────
-
+// --- `Copy` is structural// --- ---
 #[test]
 fn copy_for_an_all_copy_enum_is_accepted() {
     typecheck(
@@ -129,9 +121,7 @@ fn copy_without_clone_is_rejected() {
     );
 }
 
-// ── generic `where T : Copy`
-// ──────────────────────────────────────────────────
-
+// --- generic `where T : Copy`// --- ---
 #[test]
 fn where_t_copy_allows_using_a_generic_value_twice() {
     assert_eq!(
@@ -153,4 +143,36 @@ fn using_a_generic_value_twice_without_copy_is_rejected() {
          def doubled<T>(x: T): Int where T : ToInt := to_int(x) + to_int(x) \n \
          def main(): Int := 0",
     );
+}
+
+// --- builtin structural `Copy` ---
+// references / pointers / tuples satisfy a bound the same way the move checker
+// treats them (one shared `satisfies` authority).
+
+const DUP: &str = "def dup<T>(x: T): Int where T : Copy := { let a = x; let b = x; 0 }\n";
+
+#[test]
+fn shared_reference_satisfies_a_copy_bound() {
+    // the headline reconciliation: `&T` is `Copy` to the move checker, so it must
+    // also satisfy `where T : Copy`.
+    typecheck(&format!("{DUP} def main(): Int := dup(&5)"));
+}
+
+#[test]
+fn tuple_of_copy_satisfies_a_copy_bound() {
+    typecheck(&format!("{DUP} def main(): Int := dup((1, 2))"));
+}
+
+#[test]
+fn mut_reference_does_not_satisfy_a_copy_bound() {
+    // `&mut T` is move-only, *not* `Copy`; the structural rule admits only
+    // shared references.
+    typecheck_fails(&format!("{DUP} def main(): Int := dup(&mut 5)"));
+}
+
+#[test]
+fn tuple_with_a_non_copy_element_does_not_satisfy_a_copy_bound() {
+    typecheck_fails(&format!(
+        "type E = A | B \n {DUP} def main(): Int := dup((1, E#A))"
+    ));
 }

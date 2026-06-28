@@ -40,8 +40,7 @@ fn dropped_vars_in(src: &str, func_name: &str) -> Vec<String> {
 
 const BOX: &str = "type Box = Mk(Int) \n";
 
-// ── scope-exit drops ──────────────────────────────────────────────────────
-
+// --- scope-exit drops ---
 #[test]
 fn owned_local_is_dropped_at_scope_exit() {
     // `b` owns a non-Copy value never moved out → dropped before the block
@@ -88,8 +87,7 @@ fn locals_drop_in_reverse_declaration_order() {
     );
 }
 
-// ── parameters dropped at function exit ───────────────────────────────────
-
+// --- parameters dropped at function exit ---
 #[test]
 fn unused_owned_param_is_dropped_at_function_exit() {
     let drops = dropped_vars_in(
@@ -116,8 +114,7 @@ fn moved_param_is_not_dropped() {
     assert_eq!(drops, vec!["x"]);
 }
 
-// ── completing drops at branch merges ─────────────────────────────────────
-
+// --- completing drops at branch merges ---
 #[test]
 fn completing_drop_on_the_branch_that_keeps_the_value() {
     // `b` is moved on the `else` branch (passed to `sink`) but not the `then`

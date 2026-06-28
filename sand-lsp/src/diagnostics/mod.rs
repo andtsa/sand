@@ -19,9 +19,9 @@ pub type LspDiagnostics = Diagnostics<Url, Diagnostic>;
 /// Convert a CheckResult into LSP diagnostics, using the project
 /// to look up the correct source text for each file.
 ///
-/// Reads the result's *full* diagnostics multi-map — every error the pipeline
+/// Reads the result's *full* diagnostics multi-map: every error the pipeline
 /// accumulated (multiple type errors, all ownership errors, …), not just the
-/// single fatal one — plus any warnings on success.
+/// single fatal one, plus any warnings on success.
 pub fn lsp_diagnostics_from_result(result: &CheckResult, project: &Project) -> LspDiagnostics {
     let sand_diags = result.diagnostics();
 

@@ -48,9 +48,14 @@ pub enum MirValue<'tcx> {
         payload: Option<Box<MirValue<'tcx>>>,
     },
     Tuple(Vec<MirValue<'tcx>>),
-    /// A reference: a shared handle to the cell it points at. Produced by
-    /// [`RValue::Ref`], consumed by reads/writes through a `[Deref]` place.
-    Ref(Cell<'tcx>),
+    /// A reference: a shared handle to a storage location (a root cell plus a
+    /// path of field indices into the value it holds). An empty path points at
+    /// the whole cell (`&x`, raw pointers); a non-empty path points at an
+    /// interior field (`&(*r).field`, produced by a borrowing `match`). Reads
+    /// and writes through the reference navigate the path into the *live*
+    /// aggregate, so a `&mut` field borrow mutates the original, never a
+    /// snapshot.
+    Ref(Cell<'tcx>, Vec<usize>),
     /// A closure value: the lifted function and a pointer to its captured
     /// environment (a `Ref` to a cell holding the env value: `Unit`,
     /// the single capture, or a tuple). Consumed by `CallIndirect`, which
@@ -165,9 +170,10 @@ fn execute_statement<'tcx>(
             // the pointee type, not the reference type.
             let dst_ty = place_ty(dst, local_decls);
             let v = eval_rvalue(value, dst_ty, locals, prog, ctx)?;
-            // store into the cell the place names (a `[Deref]` follows the
-            // reference held in the local; write-through).
-            *place_cell(dst, locals)?.borrow_mut() = Some(v);
+            // store into the location the place names (a `[Deref]` follows the
+            // reference held in the local; a `[Field]` targets an interior field;
+            // write-through mutates the live aggregate).
+            write_loc(&resolve_place(dst, locals)?, v);
             Ok(())
         }
         Statement::Eval { value, .. } => {
@@ -182,23 +188,92 @@ fn execute_statement<'tcx>(
     }
 }
 
-/// Resolve a [`Place`] to the storage cell it names, following each `[Deref]`
-/// projection through the reference held in the cell so far.
-fn place_cell<'tcx>(place: &Place, locals: &[Cell<'tcx>]) -> Result<Cell<'tcx>, MirInterpError> {
+/// A storage *location*: a root cell plus a path of field indices into the
+/// value it holds. The interpreter's value model nests an aggregate's fields
+/// inside one cell rather than giving each its own, so an interior place can't
+/// be a bare cell; it's a cell + a path navigated live on each read/write.
+type Loc<'tcx> = (Cell<'tcx>, Vec<usize>);
+
+/// Resolve a [`Place`] to the [`Loc`] it names: each `[Deref]` follows the
+/// reference at the current location (composing its path), each `[Field(i)]`
+/// extends the path.
+fn resolve_place<'tcx>(place: &Place, locals: &[Cell<'tcx>]) -> Result<Loc<'tcx>, MirInterpError> {
     let mut cell = locals[place.local.0].clone();
+    let mut path: Vec<usize> = Vec::new();
     for elem in &place.projection {
         match elem {
             ProjElem::Deref => {
-                let target = match cell.borrow().as_ref() {
-                    Some(MirValue::Ref(target)) => target.clone(),
-                    Some(v) => internal_bug!("Deref projection on non-reference value {:?}", v),
-                    None => return Err(MirInterpError::UninitializedLocal(place.local)),
+                let next = {
+                    let guard = cell.borrow();
+                    let root = guard
+                        .as_ref()
+                        .ok_or(MirInterpError::UninitializedLocal(place.local))?;
+                    match nav(root, &path) {
+                        MirValue::Ref(c, p) => (c.clone(), p.clone()),
+                        v => internal_bug!("Deref projection on non-reference value {:?}", v),
+                    }
                 };
-                cell = target;
+                cell = next.0;
+                path = next.1;
             }
+            ProjElem::Field(i) => path.push(*i),
         }
     }
-    Ok(cell)
+    Ok((cell, path))
+}
+
+/// Navigate `path` (a sequence of field indices) into `v`, returning the
+/// sub-value it names (tuple element `i`, or an enum's payload at index 1).
+fn nav<'a, 'tcx>(v: &'a MirValue<'tcx>, path: &[usize]) -> &'a MirValue<'tcx> {
+    let mut cur = v;
+    for &i in path {
+        cur = match cur {
+            MirValue::Tuple(elems) => &elems[i],
+            MirValue::EnumVariant {
+                payload: Some(p), ..
+            } if i == 1 => p,
+            other => internal_bug!("field {} of non-aggregate value {:?}", i, other),
+        };
+    }
+    cur
+}
+
+/// Mutable counterpart of [`nav`].
+fn nav_mut<'a, 'tcx>(v: &'a mut MirValue<'tcx>, path: &[usize]) -> &'a mut MirValue<'tcx> {
+    let mut cur = v;
+    for &i in path {
+        cur = match cur {
+            MirValue::Tuple(elems) => &mut elems[i],
+            MirValue::EnumVariant {
+                payload: Some(p), ..
+            } if i == 1 => p.as_mut(),
+            _ => internal_bug!("field {i} projection on a non-aggregate value"),
+        };
+    }
+    cur
+}
+
+/// Read the value at a location (cloned).
+fn read_loc<'tcx>(loc: &Loc<'tcx>) -> Result<MirValue<'tcx>, MirInterpError> {
+    let guard = loc.0.borrow();
+    let root = guard
+        .as_ref()
+        .ok_or_else(|| MirInterpError::Runtime("read of uninitialised location".into()))?;
+    Ok(nav(root, &loc.1).clone())
+}
+
+/// Write `val` to the location: replace the whole cell for an empty path, or
+/// the named interior field otherwise (mutating the live aggregate in place).
+fn write_loc<'tcx>(loc: &Loc<'tcx>, val: MirValue<'tcx>) {
+    let mut guard = loc.0.borrow_mut();
+    if loc.1.is_empty() {
+        *guard = Some(val);
+    } else {
+        let root = guard
+            .as_mut()
+            .unwrap_or_else(|| internal_bug!("interior write into an uninitialised cell"));
+        *nav_mut(root, &loc.1) = val;
+    }
 }
 
 /// The `Ty` of a place after its projections (each `[Deref]` strips one
@@ -211,6 +286,17 @@ fn place_ty<'tcx>(place: &Place, local_decls: &[LocalDecl<'tcx>]) -> Ty<'tcx> {
                 ty = match ty.kind() {
                     TyKind::Ref(_, t) | TyKind::RefMut(_, t) => *t,
                     _ => internal_bug!("Deref projection on non-reference type {ty:?}"),
+                };
+            }
+            ProjElem::Field(i) => {
+                ty = match ty.kind() {
+                    TyKind::Tuple(tys) => tys[*i],
+                    TyKind::Enum(_) | TyKind::App(..) if *i == 0 => {
+                        // discriminant; the interpreter is layout-free, but mirror
+                        // codegen's `proj_field_ty`.
+                        ty
+                    }
+                    _ => internal_bug!("no field type for index {i} of {ty:?}"),
                 };
             }
         }
@@ -236,7 +322,10 @@ fn eval_rvalue<'tcx>(
         // Address-of: yield a shared handle to the cell the place names (not a
         // copy of its value). Reads/writes through a `[Deref]` of this handle hit
         // that same cell, so write-through is observable across aliases.
-        RValue::Ref(place) => Ok(MirValue::Ref(place_cell(place, locals)?)),
+        RValue::Ref(place) => {
+            let (cell, path) = resolve_place(place, locals)?;
+            Ok(MirValue::Ref(cell, path))
+        }
 
         RValue::BinaryOp { op, left, right } => {
             let l = eval_operand(left, locals)?;
@@ -278,7 +367,7 @@ fn eval_rvalue<'tcx>(
                 1 => vals.pop().unwrap(),
                 _ => MirValue::Tuple(vals),
             };
-            let env_ptr = MirValue::Ref(Rc::new(RefCell::new(Some(env_value))));
+            let env_ptr = MirValue::Ref(Rc::new(RefCell::new(Some(env_value))), Vec::new());
             Ok(MirValue::Closure {
                 fn_name: *fn_name,
                 env: Box::new(env_ptr),
@@ -369,12 +458,10 @@ fn eval_operand<'tcx>(
             Constant::Bool(b) => MirValue::Bool(*b),
             Constant::Unit => MirValue::Unit,
         }),
-        // Read the cell the place names. A `[Deref]` projection loads *through*
-        // the reference held in the local (the inverse of `RValue::Ref`).
-        Operand::Copy(place) => place_cell(place, locals)?
-            .borrow()
-            .clone()
-            .ok_or(MirInterpError::UninitializedLocal(place.local)),
+        // Read the location the place names. A `[Deref]` loads *through* the
+        // reference held in the local (the inverse of `RValue::Ref`); a `[Field]`
+        // reads an interior field of the live aggregate.
+        Operand::Copy(place) => resolve_place(place, locals).and_then(|loc| read_loc(&loc)),
     }
 }
 
@@ -476,7 +563,7 @@ fn eval_extern<'tcx>(
 ) -> Result<MirValue<'tcx>, MirInterpError> {
     match symbol {
         // size argument is ignored: one cell holds one value of any type.
-        "malloc" | "calloc" => Ok(MirValue::Ref(Rc::new(RefCell::new(None)))),
+        "malloc" | "calloc" => Ok(MirValue::Ref(Rc::new(RefCell::new(None)), Vec::new())),
         "free" => Ok(MirValue::Unit),
         other => Err(MirInterpError::Runtime(format!(
             "extern function '{other}' is not supported by the interpreter"
@@ -554,9 +641,7 @@ fn eval_intrinsic<'tcx>(
         Intrinsic::PtrRead => {
             debug_assert_eq!(args.len(), 1, "__ptr_read expects 1 arg");
             match &args[0] {
-                MirValue::Ref(cell) => cell.borrow().clone().ok_or_else(|| {
-                    MirInterpError::Runtime("__ptr_read: read of uninitialised pointer".into())
-                }),
+                MirValue::Ref(cell, path) => read_loc(&(cell.clone(), path.clone())),
                 v => Err(MirInterpError::Runtime(format!(
                     "__ptr_read: expected a pointer, got {v:?}"
                 ))),
@@ -565,8 +650,8 @@ fn eval_intrinsic<'tcx>(
         Intrinsic::PtrWrite => {
             debug_assert_eq!(args.len(), 2, "__ptr_write expects 2 args");
             match &args[0] {
-                MirValue::Ref(cell) => {
-                    *cell.borrow_mut() = Some(args[1].clone());
+                MirValue::Ref(cell, path) => {
+                    write_loc(&(cell.clone(), path.clone()), args[1].clone());
                     Ok(MirValue::Unit)
                 }
                 v => Err(MirInterpError::Runtime(format!(
@@ -618,9 +703,9 @@ fn fmt_value<'tcx>(v: &MirValue<'tcx>, ctx: &CompileCtx<'tcx>) -> String {
         }
         // a reference prints as the value it points at (matches its transparent
         // display in the typed-HIR interpreter and the `&`-erased surface).
-        MirValue::Ref(cell) => match cell.borrow().as_ref() {
-            Some(v) => format!("&{}", fmt_value(v, ctx)),
-            None => "&<uninit>".to_string(),
+        MirValue::Ref(cell, path) => match read_loc(&(cell.clone(), path.clone())) {
+            Ok(v) => format!("&{}", fmt_value(&v, ctx)),
+            Err(_) => "&<uninit>".to_string(),
         },
         MirValue::Closure { fn_name, .. } => {
             format!("<closure {}>", ctx.original_fun_name(*fn_name))

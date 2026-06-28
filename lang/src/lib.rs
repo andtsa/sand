@@ -79,12 +79,12 @@ pub enum Stage {
     Parsed,
     /// names resolved (`qhir::Program`).
     Qualified,
-    /// type-checked (`TypedProgram`), *before* heap-lowering — the
+    /// type-checked (`TypedProgram`), *before* heap-lowering: the
     /// source-faithful form IDE features want.
     Typed,
     /// heap-lowered + ownership-checked (pre-monomorphisation).
     Owned,
-    /// monomorphised — concrete types only, ready for MIR / codegen.
+    /// monomorphised: concrete types only, ready for MIR / codegen.
     Monomorphised,
 }
 
@@ -200,7 +200,7 @@ fn run_pipeline<'proj>(
         first_error: None,
     };
 
-    // ── parse ────────────────────────────────────────────────────────────────
+    // --- parse ---
     // A pest failure is unrecoverable for that file (no native error recovery) and
     // aborts the run; *build* errors (unknown types, bad signatures, …) are
     // collected per item and merely halt the pipeline at `Parsed` (since the
@@ -254,7 +254,7 @@ fn run_pipeline<'proj>(
         return out;
     }
 
-    // ── qualify ──────────────────────────────────────────────────────────────
+    // --- qualify ---
     let program = match qhir::Program::combine(ctx, modules) {
         Ok(p) => p,
         Err(e) => {
@@ -270,7 +270,7 @@ fn run_pipeline<'proj>(
         return out;
     }
 
-    // ── type-check ───────────────────────────────────────────────────────────
+    // --- type-check ---
     // Function-granular recovery: `from_ast_program` checks every function and
     // returns the ones that succeeded plus *all* the errors. We always reach
     // `Typed` (the partial program is still useful to IDE / formatting), but a
@@ -298,7 +298,7 @@ fn run_pipeline<'proj>(
 
     let ice_anchor = user_files.first().copied().unwrap_or(core_file);
 
-    // ── heap-lower + ownership ───────────────────────────────────────────────
+    // --- heap-lower + ownership ---
     // Heap lowering rewrites every `deriving Heaped` enum into a `Unique<Node>`
     // handle *before* ownership (uniform drops) and *before* mono (so the
     // injected `unique_*` calls instantiate normally).
@@ -315,7 +315,7 @@ fn run_pipeline<'proj>(
     let owned = match passes::ownership::check(ctx, lowered) {
         Ok(o) => o,
         Err(errs) => {
-            // Ownership already yields *all* its errors — record every one.
+            // Ownership already yields *all* its errors; record every one.
             for e in errs {
                 let ectx = SandLangErrorContext::with_module(e.module);
                 record_error(&mut out, ctx, ectx.wrap_err(e.error));
@@ -328,7 +328,7 @@ fn run_pipeline<'proj>(
         return out;
     }
 
-    // ── monomorphise ─────────────────────────────────────────────────────────
+    // --- monomorphise ---
     let mono = match catch_ice(|| passes::mono::monomorphise(ctx, &owned)) {
         Ok(m) => m,
         Err(msg) => {

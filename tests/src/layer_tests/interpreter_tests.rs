@@ -22,8 +22,7 @@ fn run_both(src: &str) -> Expression<'static> {
     hir
 }
 
-// ── literals ─────────────────────────────────────────────────────────────────
-
+// --- literals ---
 #[test]
 fn interpret_int_literal() {
     assert_eq!(run_both("def main(): Int := 7"), Expression::Int(7));
@@ -47,9 +46,7 @@ fn interpret_unit() {
     assert_eq!(run_both("def main(): Unit := { }"), Expression::Unit);
 }
 
-// ── arithmetic
-// ────────────────────────────────────────────────────────────────
-
+// --- arithmetic// --- ---
 #[test]
 fn interpret_addition() {
     assert_eq!(run_both("def main(): Int := 3 + 4"), Expression::Int(7));
@@ -96,9 +93,7 @@ fn interpret_parenthesised_expr() {
     );
 }
 
-// ── boolean operations
-// ────────────────────────────────────────────────────────
-
+// --- boolean operations// --- ---
 #[test]
 fn interpret_bool_and_true() {
     assert_eq!(
@@ -131,9 +126,7 @@ fn interpret_bool_not() {
     );
 }
 
-// ── comparisons
-// ───────────────────────────────────────────────────────────────
-
+// --- comparisons// --- ---
 #[test]
 fn interpret_eq_true() {
     assert_eq!(
@@ -198,9 +191,7 @@ fn interpret_ge_greater() {
     );
 }
 
-// ── if / else
-// ─────────────────────────────────────────────────────────────────
-
+// --- if / else// --- ---
 #[test]
 fn interpret_if_takes_true_branch() {
     assert_eq!(
@@ -226,8 +217,7 @@ fn interpret_nested_if() {
     assert_eq!(run_both(src), Expression::Int(20));
 }
 
-// ── while ─────────────────────────────────────────────────────────────────────
-
+// --- while ---
 #[test]
 fn interpret_while_not_entered_when_false() {
     let src = "def main(): Int := {
@@ -263,9 +253,7 @@ fn interpret_while_accumulator() {
     assert_eq!(run_both(src), Expression::Int(55));
 }
 
-// ── blocks and let-bindings
-// ───────────────────────────────────────────────────
-
+// --- blocks and let-bindings// --- ---
 #[test]
 fn interpret_block_trailing_expression() {
     let src = "def main(): Int := {
@@ -300,9 +288,7 @@ fn interpret_assignment_updates_value() {
     assert_eq!(run_both(src), Expression::Int(42));
 }
 
-// ── function calls
-// ────────────────────────────────────────────────────────────
-
+// --- function calls// --- ---
 #[test]
 fn interpret_function_call_no_args() {
     let src = "def answer(): Int := 42
@@ -365,9 +351,7 @@ fn interpret_mutual_recursion() {
     assert_eq!(run_both(src), Expression::Bool(true));
 }
 
-// ── edge cases
-// ────────────────────────────────────────────────────────────────
-
+// --- edge cases// --- ---
 #[test]
 fn interpret_zero_power_is_one() {
     assert_eq!(run_both("def main(): Int := 99 ^ 0"), Expression::Int(1));
@@ -406,8 +390,7 @@ fn interpret_block_with_only_statements_returns_unit() {
     );
 }
 
-// ── tuples and enum payloads ─────────────────────────────────────────────────
-
+// --- tuples and enum payloads ---
 #[test]
 fn interpret_tuple_literal() {
     let result = run_both("def main(): (Int, Bool) := (1, true)");
@@ -566,11 +549,10 @@ fn interpret_match_dispatches_on_payload_variant_tag() {
     );
 }
 
-// ── interpreter step budget (LSP hover guard, R4/S2)
-// ────────────────────────── `interpret_with_output_bounded` aborts after a
-// fixed number of evaluated expressions so latency-sensitive callers (the LSP
-// hover preview) can run user code without risking a hang on an accidental
-// infinite loop.
+// --- interpreter step budget (LSP hover guard) ---
+// `interpret_with_output_bounded` aborts after a fixed number of evaluated
+// expressions so latency-sensitive callers (the LSP hover preview) can run user
+// code without risking a hang on an accidental infinite loop.
 
 #[test]
 fn bounded_interpret_aborts_nonterminating_program() {

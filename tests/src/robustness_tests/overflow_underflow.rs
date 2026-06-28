@@ -46,10 +46,10 @@ fn subtraction_underflow_is_caught() {
     }
 }
 
-/// Negating i64::MIN overflows (-(−2^63) = 2^63 which doesn't fit).
+/// Negating i64::MIN overflows (-(-2^63) = 2^63 which doesn't fit).
 #[test]
 fn negation_of_i64_min_overflows() {
-    // The expression `-(−9223372036854775808)` has to be built via
+    // The expression `-(-9223372036854775808)` has to be built via
     // subtraction because the parser only accepts positive literals.
     // 0 - i64::MIN should equal i64::MIN (wrapping), not i64::MAX + 1.
     let result = run_mir_result(&format!(

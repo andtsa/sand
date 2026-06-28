@@ -59,6 +59,12 @@ pub fn monomorphise<'tcx>(
         mono.request_function(ctx, fr, &Subst::new());
     }
 
+    // All program types now exist; pre-intern `&'static T` for each so the
+    // (parallel, `&self`) MIR-lowering pass can build interior-borrow temp types
+    // by lookup instead of mutating the shared arena. (Mono is the last
+    // type-creating pass before MIR.)
+    ctx.intern_static_refs();
+
     TypedProgram {
         functions: mono.output,
     }

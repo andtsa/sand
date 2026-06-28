@@ -9,9 +9,7 @@ use lang::ir_types::typed_hir::Expression;
 
 use crate::common::*;
 
-// ── basic named-enum match
-// ────────────────────────────────────────────────────
-
+// --- basic named-enum match// --- ---
 /// A simple match on all variants compiles and runs.
 #[test]
 fn match_named_enum_all_variants() {
@@ -57,8 +55,7 @@ fn match_named_enum_last_variant() {
     assert_eq!(val, MirValue::Int(2));
 }
 
-// ── wildcard arm ─────────────────────────────────────────────────────────────
-
+// --- wildcard arm ---
 /// A wildcard arm catches any variant not matched earlier.
 #[test]
 fn match_wildcard_catches_remaining() {
@@ -98,9 +95,7 @@ fn match_partial_then_wildcard() {
     assert_eq!(val, MirValue::Bool(false));
 }
 
-// ── bare-tag patterns
-// ─────────────────────────────────────────────────────────
-
+// --- bare-tag patterns// --- ---
 /// A match arm can use a bare `#tag` pattern when the scrutinee is an ad-hoc
 /// tag-union type.
 #[test]
@@ -161,9 +156,7 @@ fn match_bare_tag_with_wildcard() {
     assert_eq!(val, MirValue::Bool(true));
 }
 
-// ── match returns an enum value
-// ───────────────────────────────────────────────
-
+// --- match returns an enum value// --- ---
 /// A match expression can return an enum variant.
 #[test]
 fn match_returns_enum_variant() {
@@ -183,9 +176,7 @@ fn match_returns_enum_variant() {
     }
 }
 
-// ── check mode in match bodies
-// ────────────────────────────────────────────────
-
+// --- check mode in match bodies// --- ---
 /// Bare tags in match arm bodies are resolved by the return type annotation.
 #[test]
 fn match_bare_tag_in_arm_body_resolved_by_return_type() {
@@ -205,9 +196,7 @@ fn match_bare_tag_in_arm_body_resolved_by_return_type() {
     }
 }
 
-// ── match in expression context
-// ───────────────────────────────────────────────
-
+// --- match in expression context// --- ---
 /// A match expression can be used inside a block.
 #[test]
 fn match_in_block() {
@@ -241,9 +230,7 @@ fn match_result_used_in_arithmetic() {
     assert_eq!(val, MirValue::Int(11));
 }
 
-// ── cross-module enum match
-// ───────────────────────────────────────────────────
-
+// --- cross-module enum match// --- ---
 /// A match on a cross-module enum: the scrutinee is qualified
 /// (`colors::Light#…`) and the arms use bare `#tag` patterns, which resolve
 /// against the scrutinee's type. (Under the module redesign, the foreign type
@@ -266,9 +253,7 @@ fn match_cross_module_enum() {
     assert_eq!(val, MirValue::Int(1));
 }
 
-// ── two-variant enum
-// ──────────────────────────────────────────────────────────
-
+// --- two-variant enum// --- ---
 /// A boolean-like two-variant enum works with match.
 #[test]
 fn match_two_variant_enum() {
@@ -284,9 +269,7 @@ fn match_two_variant_enum() {
     }
 }
 
-// ── single-variant enum
-// ───────────────────────────────────────────────────────
-
+// --- single-variant enum// --- ---
 /// A single-variant enum can be matched.
 #[test]
 fn match_single_variant_enum() {
@@ -298,9 +281,7 @@ fn match_single_variant_enum() {
     assert_eq!(val, MirValue::Int(42));
 }
 
-// ── match in recursive function
-// ───────────────────────────────────────────────
-
+// --- match in recursive function// --- ---
 /// A recursive function using match works correctly.
 #[test]
 fn match_in_recursive_function() {
@@ -317,9 +298,7 @@ fn match_in_recursive_function() {
     assert_eq!(val, MirValue::Int(10));
 }
 
-// ── error cases
-// ───────────────────────────────────────────────────────────────
-
+// --- error cases// --- ---
 /// A match missing a variant (no wildcard) is a type error.
 #[test]
 fn match_non_exhaustive_is_error() {
@@ -446,9 +425,7 @@ fn match_arm_type_mismatch_is_error() {
     );
 }
 
-// ── ad-hoc single-tag match
-// ───────────────────────────────────────────────────
-
+// --- ad-hoc single-tag match// --- ---
 /// A single-tag ad-hoc type matched with the wildcard works.
 #[test]
 fn match_single_adhoc_tag_wildcard() {
@@ -469,7 +446,7 @@ fn match_single_adhoc_tag_exhaustive() {
     assert_eq!(val, MirValue::Int(99));
 }
 
-// ── destructuring patterns ───────────────────────────────────────────────────
+// --- destructuring patterns ---
 //
 // covers the destructuring-patterns feature: binding a payload-carrying
 // variant's payload (`Circle(r)`), tuple destructuring (`(a, b)`), nested
@@ -603,9 +580,7 @@ fn match_destructure_dispatches_and_binds_correct_arm() {
     assert_eq!(val, MirValue::Int(49));
 }
 
-// ── destructuring error cases
-// ──────────────────────────────────────────────
-
+// --- destructuring error cases// --- ---
 /// duplicate bindings in the same pattern (`(x, x)`) are a uniquify error
 /// (mirrors Rust's E0416).
 #[test]
@@ -689,8 +664,7 @@ fn match_nested_variant_partial_inner_coverage_is_error() {
     );
 }
 
-// ─── Nested exhaustiveness (todo 7) ─────────────────────────────────────────
-
+// --- Nested exhaustiveness ---
 /// The false-positive bug: a tuple-wrapped refutable sub-pattern (e.g. the
 /// `List#Empty` inside `Cons((x, List#Empty))`) must make the outer Cons arm
 /// count as refutable → NonExhaustiveMatch.
@@ -773,8 +747,7 @@ fn match_nested_variant_then_wildcard_typechecks() {
     assert_eq!(result, Expression::Int(2));
 }
 
-// ─── Nested enum-variant patterns in payload position ─────────────────
-
+// --- Nested enum-variant patterns in payload position ---
 /// a nested variant pattern with a *reachable* wildcard catch-all type-checks
 /// (the wildcard covers `Wrap(A)`, which is not matched explicitly).
 #[test]
@@ -879,8 +852,7 @@ fn match_tuple_pattern_against_non_tuple_is_error() {
     );
 }
 
-// ─── Int / Bool literal patterns ──────────────────────────────────────
-
+// --- Int / Bool literal patterns ---
 /// match on Int with literal patterns requires a wildcard/binding catch-all.
 #[test]
 fn match_int_literal_exhaustive_with_wildcard() {
@@ -1007,10 +979,10 @@ fn match_bool_pattern_on_int_scrutinee_is_error() {
     );
 }
 
-// ── Maranget decision-tree lowering: nested variants, shared discriminant
-// dispatch, and literal columns with a default. Each runs through *both*
-// interpreters (HIR vs MIR) to confirm the tree agrees with direct
-// interpretation. ────────────────────────────────────────────────────────────
+// --- Maranget decision-tree lowering ---
+// nested variants, shared discriminant dispatch, and literal columns with a
+// default. Each runs through *both* interpreters (HIR vs MIR) to confirm the
+// tree agrees with direct interpretation.
 
 fn run_both(src: &str) -> Expression<'static> {
     let (hir, mir) = run_hir_and_mir(src);
@@ -1083,10 +1055,10 @@ fn decision_tree_many_arms_same_enum() {
     );
 }
 
-// ── Usefulness-based exhaustiveness / reachability (replaces the ad-hoc
-// coverage checker). These exercise cases the old checker got wrong:
-// refutable patterns nested in tuples (a soundness hole) and precise
-// redundancy detection across product/nested patterns. ───────────────────────
+// --- Usefulness-based exhaustiveness / reachability ---
+// replaces the ad-hoc coverage checker. These exercise cases the old checker
+// got wrong: refutable patterns nested in tuples (a soundness hole) and precise
+// redundancy detection across product/nested patterns.
 
 /// Refutable patterns nested in a tuple are now checked column-wise: a match
 /// covering only one product combination is non-exhaustive (the old checker
@@ -1115,7 +1087,7 @@ fn tuple_with_refutable_elements_exhaustive_runs() {
 }
 
 /// A wildcard arm after a set of arms that already exhaust the type is
-/// redundant and flagged unreachable — a *warning*, not an error (matches
+/// redundant and flagged unreachable: a *warning*, not an error (matches
 /// Rust's `unreachable_patterns` lint). The old checker missed this when
 /// exhaustiveness came from nested variant coverage.
 #[test]

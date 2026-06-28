@@ -24,8 +24,7 @@ fn run_both(src: &str) -> Expression<'static> {
     hir
 }
 
-// ── declaration + call resolution ────────────────────────────────────────
-
+// --- declaration + call resolution ---
 #[test]
 fn extern_decl_and_call_typecheck() {
     // The extern resolves like an ordinary function; the call checks against
@@ -48,8 +47,7 @@ fn extern_ptr_roundtrips_as_a_value() {
     std::mem::forget(ctx);
 }
 
-// ── monomorphisation passes extern callees through (the mono guard) ───────
-
+// --- monomorphisation passes extern callees through (the mono guard) ---
 #[test]
 fn reachable_extern_call_lowers_to_mir() {
     // `malloc` is reachable from `main`, so monomorphisation visits the call.
@@ -65,8 +63,7 @@ fn reachable_extern_call_lowers_to_mir() {
     std::mem::forget(ctx);
 }
 
-// ── end-to-end: alloc / write / read / free round-trip ───────────────────
-
+// --- end-to-end: alloc / write / read / free round-trip ---
 #[test]
 fn alloc_write_read_free_roundtrips() {
     // The acceptance shape: allocate a cell, cast the raw pointer to a
@@ -105,8 +102,7 @@ fn ptr_write_then_read_returns_stored_value() {
     );
 }
 
-// ── drop_in_place (no-op substrate) ──────────────────────────────────────
-
+// --- drop_in_place (no-op substrate) ---
 #[test]
 fn drop_in_place_is_a_noop() {
     // `__drop_in_place` accepts any type and yields unit; it is inert for a
@@ -117,8 +113,7 @@ fn drop_in_place_is_a_noop() {
     );
 }
 
-// ── FFI-safety of boundary types ─────────────────────────────────────────
-
+// --- FFI-safety of boundary types ---
 #[test]
 fn non_ffi_safe_param_is_rejected() {
     // A user enum may not cross the C boundary.

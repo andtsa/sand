@@ -18,9 +18,7 @@ fn run_both(src: &str) -> Expression<'static> {
     hir
 }
 
-// ── a function can read its borrowed parameters (the usability win)
-// ───────────
-
+// --- a function can read its borrowed parameters (the usability win)// --- ---
 #[test]
 fn function_reads_a_borrowed_parameter() {
     assert_eq!(
@@ -38,9 +36,7 @@ fn function_adds_two_borrowed_parameters() {
     );
 }
 
-// ── deref round-trips
-// ─────────────────────────────────────────────────────────
-
+// --- deref round-trips// --- ---
 #[test]
 fn deref_of_borrow_round_trips() {
     assert_eq!(
@@ -70,9 +66,7 @@ fn deref_of_a_borrowed_bool() {
     typecheck("def not(b: &Bool): Bool := if *b then false else true \n def main(): Int := 0");
 }
 
-// ── ill-typed / unsound derefs are rejected
-// ───────────────────────────────────
-
+// --- ill-typed / unsound derefs are rejected// --- ---
 #[test]
 fn deref_of_a_non_reference_is_rejected() {
     typecheck_fails("def main(): Int := *5");

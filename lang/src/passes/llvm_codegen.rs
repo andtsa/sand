@@ -690,8 +690,10 @@ impl<'ctx> LlvmCodegen<'ctx> {
         place: &Place,
         fn_ctx: &FnCtx<'_, 'ctx, 'tcx>,
     ) -> Result<llvm::PointerValue<'ctx>, CodegenError> {
+        let ctx = fn_ctx.compile_ctx;
         let mut addr = fn_ctx.locals[&place.local];
-        for elem in &place.projection {
+        let mut cur_ty = fn_ctx.local_tys[&place.local];
+        for (idx, elem) in place.projection.iter().enumerate() {
             match elem {
                 ProjElem::Deref => {
                     let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
@@ -699,6 +701,33 @@ impl<'ctx> LlvmCodegen<'ctx> {
                         .builder
                         .build_load(ptr_ty, addr, "deref")?
                         .into_pointer_value();
+                    cur_ty = match cur_ty.kind() {
+                        TyKind::Ref(_, t) | TyKind::RefMut(_, t) => *t,
+                        _ => internal_bug!("Deref projection on non-reference {cur_ty:?}"),
+                    };
+                }
+                // Interior borrow of field `i`: GEP into the aggregate's struct
+                // layout (enum `{ i64, payload }`, tuple `{ e0, .. }`) to get the
+                // field's address without loading it.
+                ProjElem::Field(i) => {
+                    let struct_ty = match cur_ty.kind() {
+                        TyKind::Enum(er) | TyKind::App(er, _, _) => self.enum_struct_type(ctx, *er),
+                        TyKind::Tuple(tys) => {
+                            let field_tys: Vec<_> =
+                                tys.iter().map(|t| self.llvm_type(ctx, *t)).collect();
+                            self.context.struct_type(&field_tys, false)
+                        }
+                        _ => internal_bug!("Field projection on non-aggregate {cur_ty:?}"),
+                    };
+                    addr =
+                        self.builder
+                            .build_struct_gep(struct_ty, addr, *i as u32, "field_addr")?;
+                    // Only the last projection step needs no successor type; an
+                    // enum payload (field 1) has no single static type, so it is
+                    // only ever the final step of a place (see `ProjElem::Field`).
+                    if idx + 1 < place.projection.len() {
+                        cur_ty = Self::proj_field_ty(ctx, cur_ty, *i);
+                    }
                 }
             }
         }
@@ -706,7 +735,8 @@ impl<'ctx> LlvmCodegen<'ctx> {
     }
 
     /// The MIR `Ty` of a place after its projections (each `Deref` strips one
-    /// reference, yielding the pointee type).
+    /// reference, yielding the pointee type; each `Field` yields the field
+    /// type).
     fn place_ty<'tcx>(place: &Place, fn_ctx: &FnCtx<'_, '_, 'tcx>) -> Ty<'tcx> {
         let mut ty = fn_ctx.local_tys[&place.local];
         for elem in &place.projection {
@@ -717,9 +747,24 @@ impl<'ctx> LlvmCodegen<'ctx> {
                         _ => internal_bug!("Deref projection on non-reference {ty:?}"),
                     };
                 }
+                ProjElem::Field(i) => {
+                    ty = Self::proj_field_ty(fn_ctx.compile_ctx, ty, *i);
+                }
             }
         }
         ty
+    }
+
+    /// The type of field `i` of an aggregate type (tuple element, or an enum's
+    /// discriminant at index 0). An enum payload (index 1) has no single static
+    /// type across variants and is never *read* through a `Field` projection
+    /// (only its address is taken, as the last step of a place).
+    fn proj_field_ty<'tcx>(ctx: &CompileCtx<'tcx>, ty: Ty<'tcx>, i: usize) -> Ty<'tcx> {
+        match ty.kind() {
+            TyKind::Tuple(tys) => tys[i],
+            TyKind::Enum(_) | TyKind::App(..) if i == 0 => ctx.types.int,
+            _ => internal_bug!("no field type for index {i} of {ty:?}"),
+        }
     }
 
     /// Return a global `[N x ptr]` constant whose elements point to
@@ -856,8 +901,7 @@ impl<'ctx> LlvmCodegen<'ctx> {
         self.module.add_function("free", fn_ty, None)
     }
 
-    // ── drop glue ─────────────────────────────────────────────────────────────
-
+    // --- drop glue ---
     /// Whether dropping a value of `ty` does any work: it (transitively) owns a
     /// `Unique<…>` heap handle that must be freed. Pure scalars, raw pointers,
     /// references, and payload-free enums need no glue.
@@ -1157,11 +1201,11 @@ impl<'ctx> LlvmCodegen<'ctx> {
                 let disc_val = self.emit_operand(&fields[0], fn_ctx)?.into_int_value();
 
                 if !Self::enum_has_payload(ctx, er) {
-                    // ── all-nullary: just the discriminant ────────────────────
+                    // --- all-nullary: just the discriminant ---
                     return Ok(disc_val.into());
                 }
 
-                // ── stack tagged-union `{ i64 disc, [P x i8] }` ──
+                // --- stack tagged-union `{ i64 disc, [P x i8] }` ---
                 // Build via a temporary alloca, then load the struct value. The
                 // payload is stored at field 1's address as its own type (opaque
                 // pointers; the `[P x i8]` only sizes the slot). Heaped enums no

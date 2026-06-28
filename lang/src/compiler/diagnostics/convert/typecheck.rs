@@ -195,6 +195,19 @@ pub fn type_error_to_diagnostic<'tcx>(
                 ),
             );
         }
+        BorrowMatchUnsupported { ty, reason, range } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic::error(
+                    file,
+                    *range,
+                    format!(
+                        "cannot destructure {} by reference: {reason}",
+                        ctx.display_ty(*ty)
+                    ),
+                ),
+            );
+        }
         NonExhaustiveMatch {
             enum_name,
             uncovered,

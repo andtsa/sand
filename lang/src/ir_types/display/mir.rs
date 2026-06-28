@@ -69,6 +69,7 @@ fn fmt_place(p: &Place) -> String {
     for elem in &p.projection {
         match elem {
             ProjElem::Deref => s = format!("(*{s})"),
+            ProjElem::Field(i) => s = format!("{s}.{i}"),
         }
     }
     s

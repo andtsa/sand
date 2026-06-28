@@ -21,9 +21,7 @@ fn run_both(src: &str) -> Expression<'static> {
     hir
 }
 
-// ── kind lattice (Calculus: Kinds)
-// ───────────────────────────────────────
-
+// --- kind lattice (Calculus: Kinds)// --- ---
 #[test]
 fn subkinding() {
     assert!(Kind::Never.is_subkind(Kind::Owned)); // Never is the bottom
@@ -40,9 +38,7 @@ fn kind_join() {
     assert_eq!(Kind::Never.join(Kind::Never), Kind::Never);
 }
 
-// ── divergence type-checks against any type
-// ───────────────────────────────────
-
+// --- divergence type-checks against any type// --- ---
 #[test]
 fn infinite_loop_inhabits_int() {
     // `while true` is `Never`, so it satisfies the `Int` return type.
@@ -89,9 +85,8 @@ fn non_diverging_while_as_unit_ok() {
     typecheck("def f(c: Bool): Unit := while c do {} \n def main(): Int := 0");
 }
 
-// ── divergence compiles and runs (guarded so the loop is never executed)
-// ──────
-
+// --- divergence compiles and runs (guarded so the loop is never executed)//
+// --- ---
 #[test]
 fn guarded_divergence_runs() {
     // the diverging branch compiles but is never taken at runtime.

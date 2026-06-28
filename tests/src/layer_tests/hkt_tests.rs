@@ -95,8 +95,7 @@ fn hkt_over_a_nested_constructor_argument() {
     );
 }
 
-// ── kind errors ──────────────────────────────────────────────────────────
-
+// --- kind errors ---
 #[test]
 fn applying_a_value_parameter_is_rejected() {
     // `T : Owned` is not a constructor, so `T<A>` is a kind error.
@@ -122,10 +121,10 @@ fn constructor_arity_mismatch_is_rejected() {
     );
 }
 
-// ── the `Functor`/`Applicative`/`Monad` hierarchy (from `core.sand`)
+// --- the `Functor`/`Applicative`/`Monad` hierarchy (from `core.sand`) ---
 // instantiated for `Option`, exercising HKT instances whose methods take and
 // return lambdas. The codegen path is covered by `examples/monad.sand`; these
-// assert HIR/MIR interpreter agreement. ──────────────────────────────────────
+// assert HIR/MIR interpreter agreement.
 
 /// An `Option` with `Functor`/`Applicative`/`Monad` instances, plus an
 /// `or_else` to project the result back to an `Int` for assertions.
@@ -232,8 +231,9 @@ fn monad_instance_requires_superclasses() {
     );
 }
 
-// ── do-notation: any block containing a top-level `<-` desugars to nested
-// `bind` calls. Reuses the `MONAD` Option instance above. ─────────────────────
+// --- do-notation ---
+// any block containing a top-level `<-` desugars to nested `bind` calls.
+// Reuses the `MONAD` Option instance above.
 
 #[test]
 fn do_notation_single_bind() {
@@ -298,9 +298,8 @@ fn ordinary_block_without_bind_is_unaffected() {
     );
 }
 
-// ── soundness: method-call argument validation + unsolved-param guards
-// ────────
-
+// --- soundness: method-call argument validation + unsolved-param guards// ---
+// ---
 #[test]
 fn method_call_rejects_wrong_arg_type() {
     // A `Bool` in an `Int` parameter of a typeclass method must be rejected
@@ -332,7 +331,7 @@ fn method_call_rejects_wrong_arity() {
 #[test]
 fn generic_fn_with_uninferable_return_param_is_rejected() {
     // A type parameter that appears only in the return type, called with no
-    // expected type, must be a clean error — not an unbound-Param crash in mono.
+    // expected type, must be a clean error, not an unbound-Param crash in mono.
     typecheck_fails(
         "type Opt<a> = None | Some(a) \n \
          def mkempty<A>(c: Int): Opt<A> := Opt#None \n \

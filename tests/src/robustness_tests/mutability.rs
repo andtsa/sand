@@ -103,9 +103,7 @@ fn assignment_to_inferred_mutable_let_succeeds() {
     );
 }
 
-// ── mutable parameters
-// ────────────────────────────────────────────────────────
-
+// --- mutable parameters// --- ---
 /// A `mut` parameter can be reassigned inside the function body.
 #[test]
 fn mutable_parameter_can_be_reassigned() {

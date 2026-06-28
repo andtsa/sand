@@ -52,9 +52,7 @@ fn run_both(src: &str) -> Expression<'static> {
     hir
 }
 
-// ── parsing: type parameters are captured on the declaration
-// ──────────────────
-
+// --- parsing: type parameters are captured on the declaration// --- ---
 #[test]
 fn parse_single_type_param() {
     let pm = parse("def id<T>(x: T): T := x");
@@ -84,9 +82,7 @@ fn non_generic_function_has_no_type_params() {
     assert!(pm.functions[0].type_params.is_empty());
 }
 
-// ── type checking: a parameter is opaque but self-consistent
-// ──────────────────
-
+// --- type checking: a parameter is opaque but self-consistent// --- ---
 #[test]
 fn generic_identity_type_checks() {
     // body `x : T` must match the declared return type `T`.
@@ -115,9 +111,7 @@ fn type_param_in_body_annotation_type_checks() {
     typecheck("def id<T>(x: T): T := { let y: T = x; y } \n def main(): Int := 0");
 }
 
-// ── type checking: distinct parameters are distinct opaque types
-// ──────────────
-
+// --- type checking: distinct parameters are distinct opaque types// --- ---
 #[test]
 fn returning_wrong_param_fails() {
     // `a : A` cannot satisfy a declared return type of `B`.
@@ -130,9 +124,7 @@ fn returning_param_where_concrete_expected_fails() {
     typecheck_fails("def bad<T>(x: T): Int := x \n def main(): Int := 0");
 }
 
-// ── resolution: the declaration is what makes `T` a type
-// ──────────────────────
-
+// --- resolution: the declaration is what makes `T` a type// --- ---
 #[test]
 fn undeclared_type_param_is_unknown_type() {
     // without `<T>`, `T` is an unknown enum type, not a parameter.
@@ -146,9 +138,7 @@ fn type_param_shadows_same_named_enum() {
     typecheck("type T = A | B \n def f<T>(x: T): T := x \n def main(): Int := 0");
 }
 
-// ── generic function calls: instantiation by unifying arguments
-// ───────────────
-
+// --- generic function calls: instantiation by unifying arguments// --- ---
 #[test]
 fn call_generic_identity_with_int() {
     // `id(5)` instantiates `T = Int`, so the call's type is `Int`.
@@ -209,9 +199,7 @@ fn call_generic_tuple_argument_inner_mismatch_fails() {
     typecheck_fails("def f<T>(p: (T, Int)): Int := 0 \n def main(): Int := f((true, false))");
 }
 
-// ── generic enum declarations
-// ─────────────────────────────────────────────────
-
+// --- generic enum declarations// --- ---
 #[test]
 fn generic_enum_declaration_compiles() {
     typecheck("type Option<T> = None | Some(T) \n def main(): Int := 0");
@@ -228,9 +216,8 @@ fn generic_enum_recursive_payload_compiles() {
     typecheck("type Pair<T> = Wrap((T, T)) \n def main(): Int := 0");
 }
 
-// ── generic enum uses: instantiation via annotations and constructors
-// ─────────
-
+// --- generic enum uses: instantiation via annotations and constructors// ---
+// ---
 const OPTION: &str = "type Option<T> = None | Some(T) \n";
 
 #[test]
@@ -318,9 +305,7 @@ fn instantiating_non_generic_enum_fails() {
     );
 }
 
-// ── matching on generic enums substitutes the binding types
-// ───────────────────
-
+// --- matching on generic enums substitutes the binding types// --- ---
 #[test]
 fn match_generic_enum_binds_concrete_payload() {
     // `Option#Some(x)` against an `Option<Int>` scrutinee binds `x : Int`, so
@@ -362,9 +347,8 @@ fn let_pattern_on_generic_enum_binds_concrete_payload() {
     ));
 }
 
-// ── end-to-end execution: generics monomorphise, lower to MIR, and run
-// ────────
-
+// --- end-to-end execution: generics monomorphise, lower to MIR, and run// ---
+// ---
 #[test]
 fn run_generic_identity() {
     assert_eq!(
@@ -439,9 +423,7 @@ fn run_generic_function_returning_generic_enum() {
     assert_eq!(run_both(src), Expression::Int(13));
 }
 
-// ── kind and variance annotations on type parameters
-// ──────────────────
-
+// --- kind and variance annotations on type parameters// --- ---
 use lang::lang::types::Kind;
 use lang::lang::types::Variance;
 
@@ -490,8 +472,9 @@ fn contravariant_on_phantom_param_is_accepted() {
     typecheck("type Phantom<-a> = Red | Green \n def main(): Int := 0");
 }
 
-// ── variance follow-up: function arrows are the first consumer
-// (contravariant) positions, and applications compose nested variance. ────────
+// --- variance follow-up ---
+// function arrows are the first consumer (contravariant) positions, and
+// applications compose nested variance.
 
 #[test]
 fn contravariant_param_in_function_argument_is_accepted() {
@@ -562,8 +545,9 @@ fn generic_function_with_annotated_params_type_checks() {
     typecheck("def id<+a : Owned>(x: a): a := x \n def main(): Int := id(5)");
 }
 
-// ── generic-over-borrow: type parameters unify and substitute through
-// references (`&T`, `&mut T`) and region ascriptions (`T @ 'r`) ───────────────
+// --- generic-over-borrow ---
+// type parameters unify and substitute through references (`&T`, `&mut T`) and
+// region ascriptions (`T @ 'r`)
 
 #[test]
 fn generic_borrow_parameter_infers_type() {
@@ -627,10 +611,9 @@ fn monomorphises_generic_borrow_function() {
     );
 }
 
-// ── bare (under-applied) generic type names are an arity error, not a cryptic
-//    downstream failure (regression: examples/lists2.sand)
-// ─────────────────────
-
+// --- bare (under-applied) generic type names ---
+// an arity error, not a cryptic downstream failure
+// (regression: examples/lists2.sand)
 #[test]
 fn bare_generic_enum_name_in_a_payload_is_an_arity_error() {
     // `List` (generic) used without its type argument in its own recursive
