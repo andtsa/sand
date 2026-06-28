@@ -89,7 +89,7 @@ fn kind_note(kind: Kind) -> Option<&'static str> {
 }
 
 /// Append an ownership note inferred from a type's outermost shape (used where
-/// only a type, not an expression kind, is available — e.g. parameters).
+/// only a type, not an expression kind, is available, e.g. parameters).
 fn append_kind(s: &mut String, ty: Ty<'_>) {
     use lang::lang::types::TyKind;
     let note = match ty.kind() {
@@ -278,7 +278,7 @@ fn format_function_hover<'tcx>(
             module.name, orig.declaration.start.line
         );
         if let Some(sym) = ctx.extern_symbol(fun.name) {
-            s.push_str(&format!("\n\nExternal (FFI) — bound to C symbol `{sym}`"));
+            s.push_str(&format!("\n\nExternal (FFI), bound to C symbol `{sym}`"));
         }
         make_hover(s)
     }
@@ -352,7 +352,7 @@ fn format_hover<'tcx>(expr: &Expr<'tcx>, ctx: &CompileCtx<'tcx>) -> Hover {
             let name = ctx.uniq_variable_name(uv);
             let decl = ctx.uniq_var_declaration(uv);
             format!(
-                "```sand\n{}: {}\n```\nlocal — declared at line {}, col {}",
+                "```sand\n{}: {}\n```\nlocal, declared at line {}, col {}",
                 name,
                 fmt_ty(ctx, expr.ty),
                 decl.start.line,
@@ -432,7 +432,7 @@ fn format_hover<'tcx>(expr: &Expr<'tcx>, ctx: &CompileCtx<'tcx>) -> Hover {
         }
         _ => format!(": {}", fmt_ty(ctx, expr.ty)),
     };
-    // Surface the expression's ownership kind (borrow / divergence) — the
+    // Surface the expression's ownership kind (borrow / divergence); the
     // owned-value case is left unannotated to avoid noise.
     if let Some(note) = kind_note(expr.kind) {
         content.push_str(&format!("\n\n*{note}*"));
@@ -500,7 +500,7 @@ def main(): Int := hello(P#Mk) + loud(P#Mk)
         let CheckResult::Success { ctx, ast, .. } = &result else {
             panic!("expected success");
         };
-        // Hover on the `hello(...)` call — must produce something, not panic.
+        // Hover on the `hello(...)` call; must produce something, not panic.
         let pos = position_of(src, "hello(P#Mk)");
         let hov = super::hover_at_position(pos, &uri, ctx, ast, &proj);
         assert!(
@@ -563,7 +563,7 @@ def main(): Int := match wrap(3) { Box#Full(v) => show(v), Box#Empty => 0 }
         assert!(ctor.contains("variant `Full`"), "ctor hover: {ctor}");
 
         // A *generic* function header → its real source signature with the
-        // `where` clause intact (pre-mono — no `wrap$Int` specialisation).
+        // `where` clause intact (pre-mono, no `wrap$Int` specialisation).
         let f = hover_at("wrap<T>");
         assert!(
             f.contains("def wrap<") && f.contains("where") && f.contains(": Show"),

@@ -99,8 +99,8 @@ fn returning_a_call_result_tied_to_a_parameter_is_accepted() {
     );
 }
 
-// ── `where 'a >= 'b` checked at call sites (Calculus: Region Substitution at
-// Call Sites) ─────────────
+// --- `where 'a >= 'b` checked at call sites ---
+// (Calculus: Region Substitution at Call Sites)
 //
 // The call's region substitution maps each callee lifetime parameter to the
 // actual argument region; the callee's `where` clauses are then checked under

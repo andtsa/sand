@@ -417,7 +417,10 @@ module.exports = grammar({
       'match',
       field('scrutinee', $._expression),
       '{',
-      repeat1($.match_arm),
+      // `repeat` (not `repeat1`): an editor grammar should accept a `match … {`
+      // mid-edit with no arms yet, so indentation/highlighting still apply while
+      // typing. The compiler enforces exhaustiveness (≥1 arm) separately.
+      repeat($.match_arm),
       '}'
     ),
 

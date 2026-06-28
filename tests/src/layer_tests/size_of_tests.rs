@@ -56,8 +56,7 @@ fn size_of_used_in_arithmetic() {
     );
 }
 
-// ── turbofish is restricted to `size_of` ─────────────────────────────────
-
+// --- turbofish is restricted to `size_of` ---
 #[test]
 fn turbofish_on_regular_function_is_rejected() {
     typecheck_fails("def id<T>(x: T): T := x \n def main(): Int := id::<Int>(5)");

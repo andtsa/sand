@@ -8,6 +8,7 @@
 use im::HashSet as Set;
 use im::OrdMap as Map;
 
+use super::liveness::Liveness;
 use crate::compiler::structure::Range;
 use crate::compiler::structure::UniqVar;
 use crate::lang::types::Ty;
@@ -21,16 +22,18 @@ pub enum OwnershipState {
     Moved { at: Range },
 }
 
-/// the outstanding-borrow state of a place (variable), used to enforce the
-/// mutable-borrow exclusivity invariant (Calculus: Ownership and Drop). A place
-/// may have any number of shared borrows *or* a single exclusive borrow, never
-/// both. `Mut` dominates `Shared` when merging branches.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BorrowState {
-    /// one or more live shared (`&x`) borrows.
-    Shared,
-    /// a live exclusive (`&mut x`) borrow.
-    Mut,
+/// A single outstanding loan of a place, for the mutable-borrow exclusivity
+/// invariant (Calculus: Ownership and Drop). A place may have any number of
+/// shared loans *or* a single exclusive loan, never both.
+///
+/// `holder` is the variable the resulting reference is bound to (`let h = &x`),
+/// or `None` for a temporary borrow (`f(&x)`). The holder drives non-lexical
+/// release: the loan is dead once the holder's last use has passed (see
+/// [`OwnershipEnv::prune_dead_loans`]). Temporaries stay lexically scoped.
+#[derive(Debug, Clone, Copy)]
+pub struct Loan<'tcx> {
+    pub mutable: bool,
+    pub holder: Option<UniqVar<'tcx>>,
 }
 
 /// the ownership environment is a map from every in-scope variable to its
@@ -41,11 +44,12 @@ pub enum BorrowState {
 #[derive(Debug, Clone, Default)]
 pub struct OwnershipEnv<'tcx> {
     states: Map<UniqVar<'tcx>, OwnershipState>,
-    /// outstanding borrows of each place, for the exclusivity invariant.
-    /// Borrows are lexically scoped: snapshotted on block entry and
-    /// restored on exit, so borrows created inside a block are released
-    /// when it closes.
-    borrows: Map<UniqVar<'tcx>, BorrowState>,
+    /// outstanding loans of each place, for the exclusivity invariant. Loans
+    /// are released non-lexically: pruned once their holder's last use has
+    /// passed ([`prune_dead_loans`](Self::prune_dead_loans)), with the
+    /// lexical block-entry snapshot / block-exit restore kept as a backstop
+    /// for temporaries and any untracked loans.
+    borrows: Map<UniqVar<'tcx>, Vec<Loan<'tcx>>>,
     /// the declared type of each in-scope variable, so scope-exit drop
     /// insertion can exempt `Copy` bindings. A variable's type is
     /// fixed at declaration and never changes.
@@ -83,31 +87,87 @@ impl<'tcx> OwnershipEnv<'tcx> {
         self.states.insert(var, OwnershipState::Moved { at });
     }
 
-    /// the current borrow state of `var`, if any.
-    pub fn borrow_state(&self, var: &UniqVar<'tcx>) -> Option<BorrowState> {
-        self.borrows.get(var).copied()
+    /// Record a loan of `var` (`mutable` = exclusive). `holder` is the variable
+    /// the reference is bound to, or `None` for a temporary. Exclusivity is
+    /// checked by the caller (via [`borrow_conflict`](Self::borrow_conflict))
+    /// *before* recording.
+    pub fn add_borrow(&mut self, var: UniqVar<'tcx>, mutable: bool, holder: Option<UniqVar<'tcx>>) {
+        self.borrows
+            .entry(var)
+            .or_default()
+            .push(Loan { mutable, holder });
     }
 
-    /// record a borrow of `var`. A second shared borrow leaves the state
-    /// `Shared`; exclusivity conflicts are checked by the caller *before*
-    /// calling this.
-    pub fn add_borrow(&mut self, var: UniqVar<'tcx>, mutable: bool) {
-        let state = if mutable {
-            BorrowState::Mut
-        } else {
-            BorrowState::Shared
+    /// Attach `holder` to the most recently recorded loan of `var`, used when a
+    /// `let h = &var` binding's holder becomes known after the borrow's been
+    /// checked.
+    pub fn attach_holder(&mut self, var: &UniqVar<'tcx>, holder: UniqVar<'tcx>) {
+        if let Some(loans) = self.borrows.get_mut(var)
+            && let Some(last) = loans.last_mut()
+        {
+            last.holder = Some(holder);
+        }
+    }
+
+    /// Drop loans of `var` that are dead at `point`: a holder whose last use
+    /// precedes `point` (or which is never used) can no longer conflict. This
+    /// is the non-lexical release.
+    ///
+    /// A loan is kept (not pruned) when its holder is `None` (a temporary) or
+    /// *escaping* (used in any non-dereference position, so the borrow may have
+    /// propagated to a longer-lived place; see [`Liveness::holder_escapes`]).
+    /// Such loans remain lexically scoped via the snapshot/restore backstop,
+    /// which is sound: we only ever keep loans live too long, never too short.
+    pub fn prune_dead_loans(&mut self, var: &UniqVar<'tcx>, live: &Liveness<'tcx>, point: usize) {
+        let Some(loans) = self.borrows.get(var) else {
+            return;
         };
-        self.borrows.insert(var, state);
+        let kept: Vec<Loan<'tcx>> = loans
+            .iter()
+            .copied()
+            .filter(|l| match l.holder {
+                None => true,
+                Some(h) => {
+                    live.holder_escapes(&h) || live.last_use_of(&h).is_some_and(|lu| lu >= point)
+                }
+            })
+            .collect();
+        if kept.len() == loans.len() {
+            return;
+        }
+        if kept.is_empty() {
+            self.borrows.remove(var);
+        } else {
+            self.borrows.insert(*var, kept);
+        }
     }
 
-    /// snapshot the outstanding borrows (taken on block entry).
-    pub fn borrows_snapshot(&self) -> Map<UniqVar<'tcx>, BorrowState> {
+    /// Whether `var` has any live loan. Call *after* [`prune_dead_loans`].
+    pub fn has_live_borrow(&self, var: &UniqVar<'tcx>) -> bool {
+        self.borrows.get(var).is_some_and(|l| !l.is_empty())
+    }
+
+    /// If introducing a `mutable` borrow of `var` would conflict with an
+    /// existing live loan, returns `Some(existing_is_mutable)`; else `None`.
+    /// Any number of shared loans coexist; a mutable loan excludes all
+    /// others. Call *after* [`prune_dead_loans`].
+    pub fn borrow_conflict(&self, var: &UniqVar<'tcx>, mutable: bool) -> Option<bool> {
+        let loans = self.borrows.get(var)?;
+        if loans.is_empty() {
+            return None;
+        }
+        let any_mut = loans.iter().any(|l| l.mutable);
+        (mutable || any_mut).then_some(any_mut)
+    }
+
+    /// snapshot the outstanding loans (taken on block entry).
+    pub fn borrows_snapshot(&self) -> Map<UniqVar<'tcx>, Vec<Loan<'tcx>>> {
         self.borrows.clone() // clones are cheap over immutable data structures
     }
 
-    /// restore the borrows to a snapshot (on block exit), releasing every
-    /// borrow created within the block.
-    pub fn restore_borrows(&mut self, snapshot: Map<UniqVar<'tcx>, BorrowState>) {
+    /// restore the loans to a snapshot (on block exit), releasing every loan
+    /// created within the block (the lexical backstop).
+    pub fn restore_borrows(&mut self, snapshot: Map<UniqVar<'tcx>, Vec<Loan<'tcx>>>) {
         self.borrows = snapshot;
     }
 
@@ -131,16 +191,23 @@ impl<'tcx> OwnershipEnv<'tcx> {
                 }
             }
         }
-        for (var, state) in &right.borrows {
+        // a loan live in *either* branch is live in the result: union the loan
+        // lists per place (deduping identical loans).
+        for (var, loans) in &right.borrows {
             merged
                 .borrows
                 .entry(*var)
-                .and_modify(|s| {
-                    if *state == BorrowState::Mut {
-                        *s = BorrowState::Mut;
+                .and_modify(|existing| {
+                    for l in loans {
+                        if !existing
+                            .iter()
+                            .any(|e| e.mutable == l.mutable && e.holder == l.holder)
+                        {
+                            existing.push(*l);
+                        }
                     }
                 })
-                .or_insert(*state);
+                .or_insert_with(|| loans.clone());
         }
         // types are identical for a var on both branches; union is enough.
         for (var, ty) in &right.types {

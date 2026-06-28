@@ -9,8 +9,7 @@
 //! - Variable binding and assignment
 //! - Error cases for type mismatches
 
-// ── happy-path type checking ──────────────────────────────────────────
-
+// --- happy-path type checking ---
 use lang::interpreter::mir::MirValue;
 use lang::ir_types::typed_hir::Expression;
 
@@ -151,8 +150,7 @@ fn typecheck_power_operator() {
     typecheck("def main(): Int := 2 ^ 10");
 }
 
-// ── type-error cases ──────────────────────────────────────────────────
-
+// --- type-error cases ---
 #[test]
 fn typecheck_fails_wrong_return_type() {
     // Function declares Int return, body produces Bool.
@@ -251,8 +249,7 @@ fn typecheck_fails_comparison_mixed_types() {
     typecheck_fails("def main(): Bool := true < false");
 }
 
-// ── let-tuple binding ────────────────────────────────────────────────────
-
+// --- let-tuple binding ---
 /// `let (a, b) = (expr, expr)` typechecks when the RHS is a tuple of the
 /// matching arity.
 #[test]
@@ -359,8 +356,7 @@ fn let_tuple_arity_mismatch_too_many_is_error() {
     );
 }
 
-// ── let-pattern (constructor) binding ────────────────────────────────────────
-
+// --- let-pattern (constructor) binding ---
 /// Basic let-pattern binding typechecks when the else branch produces the
 /// same variant as the pattern.
 #[test]
@@ -468,9 +464,7 @@ fn let_pattern_nested_variant_sub_pattern_is_error() {
     );
 }
 
-// ── bare-tag constructor inference (todo 6)
-// ───────────────────────────────────
-
+// --- bare-tag constructor inference (todo 6)// --- ---
 /// A bare #Tag with payload typechecks when the expected type is known.
 #[test]
 fn tag_inference_with_payload_in_let_annotation() {

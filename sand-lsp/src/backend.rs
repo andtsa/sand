@@ -62,7 +62,7 @@ impl Backend {
     /// workspace.
     ///
     /// The (blocking, potentially slow) compiler check runs under a **shared
-    /// read lock**, not the exclusive write lock — so hover / goto / formatting
+    /// read lock**, not the exclusive write lock, so hover / goto / formatting
     /// (all readers) stay responsive while a check is in flight. Results are
     /// stored under a brief write lock afterward. Each check is wrapped in
     /// `catch_unwind`, so a compiler panic on in-progress code becomes an error

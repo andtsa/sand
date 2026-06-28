@@ -94,9 +94,8 @@ fn lambda_typechecks_as_a_value() {
     std::mem::forget(ctx);
 }
 
-// ── calling modes: `->` (reusable), `-[Owned]>` (consuming), `-[BorrowedMut]>`
-// ──
-
+// --- calling modes ---
+// `->` (reusable), `-[Owned]>` (consuming), `-[BorrowedMut]>`
 #[test]
 fn reusable_closure_is_callable_repeatedly() {
     assert_eq!(

@@ -23,6 +23,8 @@ def read_int(): Int := __read_int()
 
 def exit(code: Int): Unit := __exit(code)
 
+// ============= Ownership model ==================
+
 // Types that implement `Clone` can use
 // `clone(x : &T) -> T` to receive a duplicate of the borrowed value `x`.
 // `clone` returns a fresh owned value; for primitives that is just a dereference,
@@ -42,6 +44,10 @@ impl Copy for Bool { }
 impl Clone for Unit { def clone(x: &Unit): Unit := *x }
 impl Copy for Unit { }
 
+
+
+// ================ Monad heirarchy ==================
+
 // A `Functor` lets you map a function over the contents of an `F<A>`.
 typeclass Functor<F : Owned -> Owned> {
     def fmap<A, B>(x: F<A>, f: A -> B): F<B>
@@ -60,6 +66,27 @@ typeclass Applicative<F : Owned -> Owned> requires Functor {
 typeclass Monad<F : Owned -> Owned> requires Applicative {
     def bind<A, B>(x: F<A>, f: A -> F<B>): F<B>
 }
+
+
+// ============= Useful builtins ================
+
+// type Result<T, E> = Ok(T) | Err(E);
+// 
+// type Option<T> = None | Some(T);
+// 
+// impl Functor for Result<T, E> {
+//     def fmap<T, U>(x: Result<T, E>, f: T -> U) -> Result<U, E> {
+//         match x {
+//             Ok(t) => Ok(f(t)),
+//             Err(e) => Err(e),
+//         }
+//     }
+// }
+
+
+
+// ============== Heaping methods ===============
+
 
 // Heaped: the `Unique` (Box-like) allocation strategy
 //

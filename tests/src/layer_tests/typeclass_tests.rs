@@ -18,9 +18,7 @@ fn run_both(src: &str) -> Expression<'static> {
     hir
 }
 
-// ── 10a: declarations register and validate
-// ───────────────────────────────────
-
+// --- 10a: declarations register and validate// --- ---
 #[test]
 fn typeclass_and_impl_declare() {
     typecheck(
@@ -49,9 +47,7 @@ fn a_default_method_may_be_omitted_by_an_impl() {
     );
 }
 
-// ── coherence / completeness / orphan-ish rejections
-// ──────────────────────────
-
+// --- coherence / completeness / orphan-ish rejections// --- ---
 #[test]
 fn duplicate_instance_is_rejected() {
     typecheck_fails(
@@ -95,9 +91,7 @@ fn impl_for_a_reference_type_is_rejected() {
     );
 }
 
-// ── classes: arity, method names, superclasses
-// ────────────────────────────────
-
+// --- classes: arity, method names, superclasses// --- ---
 #[test]
 fn typeclass_must_have_exactly_one_type_parameter() {
     typecheck_fails("typeclass Bad<T, U> { def f(a: T): Bool := true } \n def main(): Int := 0");
@@ -140,9 +134,7 @@ fn requires_unknown_superclass_is_rejected() {
     );
 }
 
-// ── 10b: method dispatch runs (HIR + MIR agree)
-// ───────────────────────────────
-
+// --- 10b: method dispatch runs (HIR + MIR agree)// --- ---
 #[test]
 fn concrete_method_call_runs() {
     assert_eq!(
@@ -215,9 +207,7 @@ fn superclass_method_dispatch_runs() {
     );
 }
 
-// ── dispatch rejections
-// ───────────────────────────────────────────────────────
-
+// --- dispatch rejections// --- ---
 #[test]
 fn method_call_with_no_instance_is_rejected() {
     typecheck_fails(

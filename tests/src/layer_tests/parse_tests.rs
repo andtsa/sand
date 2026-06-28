@@ -10,8 +10,7 @@ use lang::ir_types::hhir::ProgramModule;
 use crate::common::parse;
 use crate::common::parse_fails;
 
-// ── happy-path parsing ────────────────────────────────────────────────
-
+// --- happy-path parsing ---
 #[test]
 fn parse_minimal_unit_function() {
     // A function returning Unit with no parameters.
@@ -195,8 +194,7 @@ fn parse_multiple_functions() {
     );
 }
 
-// ── keyword-prefixed type names ───────────────────────────────────────
-
+// --- keyword-prefixed type names ---
 #[test]
 fn parse_type_name_with_keyword_prefix() {
     // A type name that begins with a primitive-type keyword (`Int`) must lex
@@ -220,8 +218,7 @@ fn parse_type_names_with_each_keyword_prefix() {
     );
 }
 
-// ── number of functions ───────────────────────────────────────────────
-
+// --- number of functions ---
 #[test]
 fn function_count_is_correct() {
     let mut ctx = CompileCtx::initial();
@@ -235,8 +232,7 @@ fn function_count_is_correct() {
     assert_eq!(pm.functions.len(), 3);
 }
 
-// ── parse failures ────────────────────────────────────────────────────
-
+// --- parse failures ---
 #[test]
 fn parse_fails_empty_string() {
     // An empty program has no functions, which parse_stub forbids

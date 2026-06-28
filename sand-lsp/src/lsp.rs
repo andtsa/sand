@@ -32,7 +32,7 @@ impl ProjectSlot {
 
     /// Fold a fresh check outcome into the slot. A `Success` becomes the new
     /// `last_good` and clears any stale `Failure`; a `Failure` is recorded in
-    /// `last_result` but **leaves `last_good` intact** — that retained success
+    /// `last_result` but **leaves `last_good` intact**: that retained success
     /// is what keeps features alive on broken code.
     pub fn record(&mut self, result: CheckResult) {
         match result {
@@ -96,7 +96,7 @@ impl Backend {
 
     /// Begin a work-done progress for a long-running operation (e.g. the
     /// initial load). Returns the token, or `None` if the client declined
-    /// to create it — in which case
+    /// to create it, in which case
     /// [`Self::progress_report`]/[`Self::progress_end`] are no-ops,
     /// so callers don't need to branch. Must be called only after the server is
     /// initialized (tower-lsp drops notifications / errors requests before

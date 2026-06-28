@@ -1,5 +1,6 @@
 //! a function's context for explicate control
 
+use crate::compiler::context::CompileCtx;
 use crate::compiler::structure::FunRef;
 use crate::compiler::structure::Map;
 use crate::compiler::structure::Range;
@@ -83,7 +84,7 @@ fn cell_matches_const(cell: Cell<'_, '_>, k: &Constant) -> bool {
     }
 }
 
-pub(super) struct FnCx<'tcx> {
+pub(super) struct FnCx<'a, 'tcx> {
     #[allow(dead_code)]
     name: FunRef<'tcx>,
     #[allow(dead_code)]
@@ -98,14 +99,19 @@ pub(super) struct FnCx<'tcx> {
     next_temp: usize,
 
     types: CommonTypes<'tcx>,
+    /// The compilation context, for looking up the (pre-interned) `&'static T`
+    /// types of the interior-borrow temps a borrowing `match` introduces (see
+    /// `borrow_ref_ty`). Read-only here, so this `&self` pass stays safe to run
+    /// in parallel over functions.
+    ctx: &'a CompileCtx<'tcx>,
 }
 
-impl<'tcx> FnCx<'tcx> {
+impl<'a, 'tcx> FnCx<'a, 'tcx> {
     pub(super) fn new(
         name: FunRef<'tcx>,
         range: Range,
         ret_type: Ty<'tcx>,
-        types: CommonTypes<'tcx>,
+        ctx: &'a CompileCtx<'tcx>,
     ) -> Self {
         Self {
             name,
@@ -115,8 +121,23 @@ impl<'tcx> FnCx<'tcx> {
             local_map: Map::new(),
             blocks: Vec::new(),
             next_temp: 0,
-            types,
+            types: ctx.types,
+            ctx,
         }
+    }
+
+    /// The type `&'static T` for an interior-borrow temp in a borrowing
+    /// `match`. Post-monomorphisation, reference regions are erased to
+    /// `'static` (codegen treats every `&T` as an opaque pointer). Looked
+    /// up from the interner (pre-populated by
+    /// [`CompileCtx::intern_static_refs`] at the end of mono), so it is a
+    /// proper interned type (pointer-comparable) and this `&self`
+    /// pass never mutates the shared arena.
+    pub(super) fn borrow_ref_ty(&self, inner: Ty<'tcx>) -> Ty<'tcx> {
+        self.ctx.lookup_static_ref(inner).expect(
+            "`&'static T` for a borrowing-match temp should have been pre-interned \
+             by `intern_static_refs` before MIR lowering",
+        )
     }
 
     pub(super) fn new_block(
@@ -404,6 +425,88 @@ impl<'tcx> FnCx<'tcx> {
         }
     }
 
+    /// Binding extraction for a **borrowing** `match` (destructuring through a
+    /// shared reference): bind each pattern leaf to an *interior borrow* of the
+    /// corresponding field, never moving or copying it. `agg_ref` is a local
+    /// holding `&Aggregate` for the aggregate currently being destructured (the
+    /// scrutinee reference at the top level). Mirrors `lower_pattern_bindings`,
+    /// but threads a reference (rather than a value operand) and emits
+    /// `RValue::Ref` at the leaves.
+    pub(super) fn lower_borrow_pattern_bindings(
+        &mut self,
+        pattern: &th::MatchPattern<'tcx>,
+        agg_ref: LocalId,
+        range: Range,
+        statements: &mut Vec<Statement<'tcx>>,
+    ) {
+        match pattern {
+            th::MatchPattern::Wildcard
+            | th::MatchPattern::IntLit(_)
+            | th::MatchPattern::BoolLit(_) => {}
+            th::MatchPattern::Binding {
+                var,
+                ty,
+                range: brange,
+            } => {
+                // The whole current aggregate is bound by reference: the binding
+                // *is* the reference we already hold (`ty` is `&Aggregate`).
+                let local = self.get_or_create_local(*var, *ty, *brange);
+                statements.push(self.assign_stmt(
+                    local,
+                    RValue::Use(Operand::Copy(Self::place(agg_ref))),
+                    *brange,
+                ));
+            }
+            th::MatchPattern::Tuple { elems, .. } => {
+                for (i, sub) in elems.iter().enumerate() {
+                    self.lower_borrow_projected(sub, agg_ref, i, range, statements);
+                }
+            }
+            th::MatchPattern::Variant { payload, .. } => {
+                if let Some((_, sub)) = payload {
+                    // payload is always field 1 (field 0 is the discriminant)
+                    self.lower_borrow_projected(sub, agg_ref, 1, range, statements);
+                }
+            }
+        }
+    }
+
+    /// Bind `sub` against an interior borrow of field `index` of the aggregate
+    /// behind `agg_ref`. A binding leaf becomes `&(*agg_ref).index`; a compound
+    /// sub-pattern first materialises a reference temp to that field (so every
+    /// `Place` stays `[Deref, Field]`; see `ProjElem::Field`) and recurses.
+    fn lower_borrow_projected(
+        &mut self,
+        sub: &th::MatchPattern<'tcx>,
+        agg_ref: LocalId,
+        index: usize,
+        range: Range,
+        statements: &mut Vec<Statement<'tcx>>,
+    ) {
+        let field_place = Place::deref(agg_ref).project(ProjElem::Field(index));
+        match sub {
+            th::MatchPattern::Wildcard
+            | th::MatchPattern::IntLit(_)
+            | th::MatchPattern::BoolLit(_) => {}
+            th::MatchPattern::Binding {
+                var,
+                ty,
+                range: brange,
+            } => {
+                let local = self.get_or_create_local(*var, *ty, *brange);
+                statements.push(self.assign_stmt(local, RValue::Ref(field_place), *brange));
+            }
+            // Compound sub-pattern: take a reference to the sub-aggregate (its
+            // structural `ty` is the unwrapped field type), then recurse.
+            th::MatchPattern::Tuple { ty, .. } | th::MatchPattern::Variant { ty, .. } => {
+                let field_ref_ty = self.borrow_ref_ty(*ty);
+                let field_ref = self.fresh_temp("borrow_field", field_ref_ty, range);
+                statements.push(self.assign_stmt(field_ref, RValue::Ref(field_place), range));
+                self.lower_borrow_pattern_bindings(sub, field_ref, range, statements);
+            }
+        }
+    }
+
     pub(super) fn lower_tail(&mut self, expr: &th::Expr<'tcx>) -> BlockId {
         // A diverging expression never returns: lower it for its effects and
         // terminate the path as unreachable (no value is produced).
@@ -584,7 +687,7 @@ impl<'tcx> FnCx<'tcx> {
 
                 let scrut_tmp = self.fresh_temp("let_pattern_scrut", *scrut_ty, *range);
 
-                // ── then branch: extract from the matched value ─────────────────────────
+                // --- then branch: extract from the matched value ---
                 let mut then_stmts = Vec::new();
                 if let Some((_, sub)) = payload {
                     self.lower_projected_pattern(
@@ -597,7 +700,7 @@ impl<'tcx> FnCx<'tcx> {
                 }
                 let then_bb = self.new_block(then_stmts, Terminator::Goto { target: cont });
 
-                // ── else branch: evaluate fallback; extract from it ─────────────────────
+                // --- else branch: evaluate fallback; extract from it ---
                 let fallback_tmp = self.fresh_temp("let_pattern_fallback", *scrut_ty, *range);
                 let mut else_stmts = Vec::new();
                 if let Some((_, sub)) = payload {
@@ -613,7 +716,7 @@ impl<'tcx> FnCx<'tcx> {
                     self.new_block(else_stmts, Terminator::Goto { target: cont });
                 let else_bb = self.lower_assign(else_branch, fallback_tmp, after_extract_bb);
 
-                // ── discriminant check: disc == variant_idx ──────────────────────────────
+                // --- discriminant check: disc == variant_idx ---
                 let disc_tmp = self.fresh_temp("let_pattern_disc", self.types.int, *range);
                 let cmp_tmp = self.fresh_temp("let_pattern_cmp", self.types.bool, *range);
                 let check_bb = self.new_block(
@@ -643,7 +746,7 @@ impl<'tcx> FnCx<'tcx> {
                     },
                 );
 
-                // ── evaluate main value into scrut_tmp ──────────────────────────────────
+                // --- evaluate main value into scrut_tmp ---
                 self.lower_assign(val, scrut_tmp, check_bb)
             }
 
@@ -954,6 +1057,15 @@ impl<'tcx> FnCx<'tcx> {
             }
 
             th::Expression::Match { scrutinee, arms } => {
+                // A `match` on a reference destructures *through* the borrow: the
+                // scrutinee temp holds a pointer, the discriminant is read through
+                // it, and bindings become interior `&field` / `&mut field` borrows
+                // rather than moves. Shared and mutable lower identically: a
+                // reference is an opaque pointer at this stage, and the binding
+                // leaves were already typed `&`/`&mut` by the type checker; only
+                // the heaped case was rejected there.
+                let borrowed = matches!(scrutinee.ty.kind(), TyKind::Ref(..) | TyKind::RefMut(..));
+
                 // evaluate scrutinee into a fresh temp.
                 let scrut_tmp = self.fresh_temp("match_scrutinee", scrutinee.ty, scrutinee.range);
                 let scrut_operand = Operand::Copy(Self::place(scrut_tmp));
@@ -974,12 +1086,23 @@ impl<'tcx> FnCx<'tcx> {
                     .iter()
                     .map(|arm| {
                         let mut bind_stmts = Vec::new();
-                        self.lower_pattern_bindings(
-                            &arm.pattern,
-                            scrut_operand.clone(),
-                            arm.range,
-                            &mut bind_stmts,
-                        );
+                        if borrowed {
+                            // scrut_tmp holds `&Aggregate`; bind fields as
+                            // interior borrows without moving anything.
+                            self.lower_borrow_pattern_bindings(
+                                &arm.pattern,
+                                scrut_tmp,
+                                arm.range,
+                                &mut bind_stmts,
+                            );
+                        } else {
+                            self.lower_pattern_bindings(
+                                &arm.pattern,
+                                scrut_operand.clone(),
+                                arm.range,
+                                &mut bind_stmts,
+                            );
+                        }
                         let body_bb = self.lower_assign(&arm.body, dst, cont);
                         if bind_stmts.is_empty() {
                             body_bb
@@ -1002,8 +1125,14 @@ impl<'tcx> FnCx<'tcx> {
                     })
                     .collect();
                 let occ = vec![(scrut_tmp, scrutinee.ty)];
-                let fallthrough_bb =
-                    self.compile_match_matrix(&occ, &rows, &arm_bbs, fail_bb, scrutinee.range);
+                let fallthrough_bb = self.compile_match_matrix(
+                    &occ,
+                    &rows,
+                    &arm_bbs,
+                    fail_bb,
+                    borrowed,
+                    scrutinee.range,
+                );
 
                 // lower the scrutinee, then jump into the dispatch chain
                 self.lower_assign(scrutinee, scrut_tmp, fallthrough_bb)
@@ -1035,6 +1164,11 @@ impl<'tcx> FnCx<'tcx> {
         rows: &[Row<'_, 'tcx>],
         arm_bbs: &[BlockId],
         fail_bb: BlockId,
+        // Borrowing match: each occurrence local holds `&Aggregate` rather than
+        // the aggregate value, so reads go *through* a `[Deref]` and
+        // sub-occurrences are interior-borrow temps (`&field`), never moved-out
+        // value temps. Threaded into the sub-matrix recursion unchanged.
+        borrowed: bool,
         range: Range,
     ) -> BlockId {
         // No rows left: nothing can match here.
@@ -1050,6 +1184,13 @@ impl<'tcx> FnCx<'tcx> {
         // Sub-occurrence types come from the constructor patterns (or the tuple
         // type), so the occurrence's own type is not needed here, only its local.
         let occ_local = occ[col].0;
+        // The place to read this occurrence's value/fields from: directly for an
+        // owned match, or through the held reference for a borrowing match.
+        let occ_base = if borrowed {
+            Place::deref(occ_local)
+        } else {
+            Self::place(occ_local)
+        };
 
         match first.cells[col] {
             // unreachable: `is_wild` excluded these, and a `Pat` at `col` must
@@ -1067,9 +1208,14 @@ impl<'tcx> FnCx<'tcx> {
                     TyKind::Tuple(es) => es.to_vec(),
                     _ => internal_bug!("tuple pattern with non-tuple type {tup_ty}"),
                 };
+                // A borrowing match keeps each element as an interior borrow
+                // (`&elem`); an owned match moves the element value into a temp.
                 let sub_occ: Vec<(LocalId, Ty<'tcx>)> = elem_tys
                     .iter()
-                    .map(|t| (self.fresh_temp("match_tuple_elem", *t, range), *t))
+                    .map(|t| {
+                        let occ_ty = if borrowed { self.borrow_ref_ty(*t) } else { *t };
+                        (self.fresh_temp("match_tuple_elem", occ_ty, range), occ_ty)
+                    })
                     .collect();
                 let new_occ = splice(occ, col, &sub_occ);
                 let new_rows: Vec<Row> = rows
@@ -1079,20 +1225,23 @@ impl<'tcx> FnCx<'tcx> {
                         arm: r.arm,
                     })
                     .collect();
-                let body = self.compile_match_matrix(&new_occ, &new_rows, arm_bbs, fail_bb, range);
-                // Materialise the element temps, then continue.
+                let body = self
+                    .compile_match_matrix(&new_occ, &new_rows, arm_bbs, fail_bb, borrowed, range);
+                // Materialise the element temps, then continue: an interior borrow
+                // (`&base.i`) for a borrowing match, a moved-out value otherwise.
                 let stmts = sub_occ
                     .iter()
                     .enumerate()
                     .map(|(i, (tmp, _))| {
-                        self.assign_stmt(
-                            *tmp,
+                        let value = if borrowed {
+                            RValue::Ref(occ_base.project(ProjElem::Field(i)))
+                        } else {
                             RValue::Field {
-                                base: Operand::Copy(Self::place(occ_local)),
+                                base: Operand::Copy(occ_base.clone()),
                                 index: i,
-                            },
-                            range,
-                        )
+                            }
+                        };
+                        self.assign_stmt(*tmp, value, range)
                     })
                     .collect();
                 self.new_block(stmts, Terminator::Goto { target: body })
@@ -1134,6 +1283,7 @@ impl<'tcx> FnCx<'tcx> {
                             &default_rows,
                             arm_bbs,
                             fail_bb,
+                            borrowed,
                             range,
                         )
                     }
@@ -1152,12 +1302,16 @@ impl<'tcx> FnCx<'tcx> {
                             *payload_ty,
                             arm_bbs,
                             fail_bb,
+                            borrowed,
                             range,
                         )
                     })
                     .collect();
 
-                // Read the discriminant once, then a chain of equality tests.
+                // Read the discriminant once, then a chain of equality tests. For
+                // a borrowing match the read goes through the held reference
+                // (`(*r).0`); `emit_field` handles both payload and all-nullary
+                // enum layouts from the loaded value.
                 let disc = self.fresh_temp("match_disc", self.types.int, range);
                 let mut else_bb = default_bb;
                 for ((vi, _), target) in ctors.iter().zip(&ctor_bbs).rev() {
@@ -1168,7 +1322,7 @@ impl<'tcx> FnCx<'tcx> {
                     vec![self.assign_stmt(
                         disc,
                         RValue::Field {
-                            base: Operand::Copy(Self::place(occ_local)),
+                            base: Operand::Copy(occ_base.clone()),
                             index: 0,
                         },
                         range,
@@ -1206,7 +1360,14 @@ impl<'tcx> FnCx<'tcx> {
                 let default_bb = if default_rows.is_empty() {
                     fail_bb
                 } else {
-                    self.compile_match_matrix(&default_occ, &default_rows, arm_bbs, fail_bb, range)
+                    self.compile_match_matrix(
+                        &default_occ,
+                        &default_rows,
+                        arm_bbs,
+                        fail_bb,
+                        borrowed,
+                        range,
+                    )
                 };
 
                 let mut else_bb = default_bb;
@@ -1221,9 +1382,13 @@ impl<'tcx> FnCx<'tcx> {
                         })
                         .collect();
                     let lit_occ = remove(occ, col);
-                    let target =
-                        self.compile_match_matrix(&lit_occ, &lit_rows, arm_bbs, fail_bb, range);
-                    else_bb = self.eq_branch(occ_local, k.clone(), target, else_bb, range);
+                    let target = self.compile_match_matrix(
+                        &lit_occ, &lit_rows, arm_bbs, fail_bb, borrowed, range,
+                    );
+                    // `occ_base` reads the scalar value directly (owned) or through
+                    // the held reference (borrowing), so the compare is value-vs-value.
+                    else_bb =
+                        self.eq_branch_place(occ_base.clone(), k.clone(), target, else_bb, range);
                 }
                 else_bb
             }
@@ -1245,10 +1410,16 @@ impl<'tcx> FnCx<'tcx> {
         payload_ty: Option<Ty<'tcx>>,
         arm_bbs: &[BlockId],
         fail_bb: BlockId,
+        borrowed: bool,
         range: Range,
     ) -> BlockId {
         let arity = if payload_ty.is_some() { 1 } else { 0 };
-        let payload_tmp = payload_ty.map(|t| (self.fresh_temp("match_payload", t, range), t));
+        // The payload sub-occurrence: an interior borrow (`&payload`) for a
+        // borrowing match, a moved-out payload value otherwise.
+        let payload_tmp = payload_ty.map(|t| {
+            let occ_ty = if borrowed { self.borrow_ref_ty(t) } else { t };
+            (self.fresh_temp("match_payload", occ_ty, range), occ_ty)
+        });
         let sub_occ: Vec<(LocalId, Ty<'tcx>)> = payload_tmp.into_iter().collect();
         let new_occ = splice(occ, col, &sub_occ);
 
@@ -1275,19 +1446,28 @@ impl<'tcx> FnCx<'tcx> {
             })
             .collect();
 
-        let body = self.compile_match_matrix(&new_occ, &new_rows, arm_bbs, fail_bb, range);
+        let body =
+            self.compile_match_matrix(&new_occ, &new_rows, arm_bbs, fail_bb, borrowed, range);
+        let occ_base = if borrowed {
+            Place::deref(occ_local)
+        } else {
+            Self::place(occ_local)
+        };
         match payload_tmp {
-            Some((tmp, _)) => self.new_block(
-                vec![self.assign_stmt(
-                    tmp,
+            Some((tmp, _)) => {
+                let value = if borrowed {
+                    RValue::Ref(occ_base.project(ProjElem::Field(1)))
+                } else {
                     RValue::Field {
-                        base: Operand::Copy(Self::place(occ_local)),
+                        base: Operand::Copy(occ_base),
                         index: 1,
-                    },
-                    range,
-                )],
-                Terminator::Goto { target: body },
-            ),
+                    }
+                };
+                self.new_block(
+                    vec![self.assign_stmt(tmp, value, range)],
+                    Terminator::Goto { target: body },
+                )
+            }
             None => body,
         }
     }
@@ -1302,13 +1482,26 @@ impl<'tcx> FnCx<'tcx> {
         else_bb: BlockId,
         range: Range,
     ) -> BlockId {
+        self.eq_branch_place(Self::place(lhs), k, then_bb, else_bb, range)
+    }
+
+    /// As [`Self::eq_branch`], but the left operand is read from an arbitrary
+    /// place (e.g. `(*r)` for a borrowing match's scalar occurrence).
+    fn eq_branch_place(
+        &mut self,
+        lhs: Place,
+        k: Constant,
+        then_bb: BlockId,
+        else_bb: BlockId,
+        range: Range,
+    ) -> BlockId {
         let cmp = self.fresh_temp("match_cmp", self.types.bool, range);
         self.new_block(
             vec![self.assign_stmt(
                 cmp,
                 RValue::BinaryOp {
                     op: Bop::Comp(CompOp::Eq),
-                    left: Operand::Copy(Self::place(lhs)),
+                    left: Operand::Copy(lhs),
                     right: Operand::Const(k),
                 },
                 range,

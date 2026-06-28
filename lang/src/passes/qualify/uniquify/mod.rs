@@ -7,14 +7,14 @@
 //! This pass is the textbook `State (ScopeStack, &mut CompileCtx) (Except
 //! UniquifyError)` computation, so it is written against the small transformer
 //! toolkit in [`crate::compiler::structure::mtl`]. The monad threads the scope
-//! stack *and* the `&mut CompileCtx` (by move — the State monad lets a `&mut`
+//! stack *and* the `&mut CompileCtx` (by move: the State monad lets a `&mut`
 //! flow linearly without aliasing) and short-circuits on the first error; the
 //! pass code only sequences primitive actions with [`mdo!`] and `traverse`.
 //!
 //! Three lifetimes appear in the computation type [`Uniq`]:
-//! * `'a` — the borrow of the *input* AST that an action's closures capture;
-//! * `'u` — the borrow of the `&mut CompileCtx` carried in the state;
-//! * `'tcx` — the arena lifetime of the IR.
+//! * `'a`: the borrow of the *input* AST that an action's closures capture;
+//! * `'u`: the borrow of the `&mut CompileCtx` carried in the state;
+//! * `'tcx`: the arena lifetime of the IR.
 //!
 //! Keeping `'u` separate from `'a` is what lets a child action (whose captured
 //! borrow `'a` is shorter) thread the *same* state value.

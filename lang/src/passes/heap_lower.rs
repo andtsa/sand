@@ -106,7 +106,7 @@ pub fn lower<'tcx>(ctx: &mut CompileCtx<'tcx>, program: TypedProgram<'tcx>) -> T
     // Phase 2.5: rewrite the payloads of every *non-heaped* enum in place. A
     // non-heaped type that wraps a heaped one (`S = MkS(E)`, a stack struct
     // holding a heaped `E`) must refer to the `Unique<Node>` handle, not the raw
-    // heaped enum — otherwise the original recursive enum survives into codegen,
+    // heaped enum; otherwise the original recursive enum survives into codegen,
     // where it has no `Unique` indirection and `type_needs_drop` / drop-glue
     // generation recurse forever. `rewrite_ty` is the identity on payloads with
     // no heaped sub-structure, so this is safe to apply to every non-heaped enum
@@ -310,7 +310,7 @@ impl<'tcx> HeapLower<'_, 'tcx> {
                 }
             }
 
-            // ── structural recursion for everything else ───────────────────
+            // --- structural recursion for everything else ---
             Expression::If { cond, t, f } => Expression::If {
                 cond: Box::new(self.rewrite_expr(*cond)),
                 t: Box::new(self.rewrite_expr(*t)),

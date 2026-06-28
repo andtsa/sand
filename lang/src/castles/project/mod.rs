@@ -215,7 +215,7 @@ pub struct Compilation {
 pub enum CheckResult {
     // Field order is load-bearing: `ast`/`error` borrow the arena that `ctx`
     // owns and frees on `Drop`. Struct fields drop in declaration order, so the
-    // borrower must come *before* `ctx` — otherwise the arena would be freed
+    // borrower must come *before* `ctx`; otherwise the arena would be freed
     // while the borrowing value is still being dropped. (The borrowers are
     // `Copy`/trivial-drop today, so this is defensive, but it makes the drop
     // order correct by construction rather than by that invariant.)
@@ -298,7 +298,7 @@ mod tests {
     use super::*;
 
     /// Function-granular recovery: two functions that each fail to type-check
-    /// must yield *two* diagnostics (one per function), not just the first —
+    /// must yield *two* diagnostics (one per function), not just the first,
     /// and the pipeline must still reach the `Typed` stage.
     #[test]
     fn multiple_type_errors_are_all_reported() {

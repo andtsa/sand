@@ -147,7 +147,7 @@ impl<'qual, 'run> QualfiyCtx<'qual, 'run> {
             })
     }
 
-    /// Composed getter, second half: `(EnumRef, variant name)` ──▶
+    /// Composed getter, second half: `(EnumRef, variant name)` ->
     /// `variant_idx`.
     ///
     /// Factored out of [`Self::resolve_constructor`] /
@@ -172,7 +172,7 @@ impl<'qual, 'run> QualfiyCtx<'qual, 'run> {
             })
     }
 
-    /// A **composed getter**: `(type_name, variant)` ──▶ `(EnumRef,
+    /// A **composed getter**: `(type_name, variant)` -> `(EnumRef,
     /// variant_idx)`.
     ///
     /// This is the two-step lookup `lookup_enum_by_name` then `lookup_variant`

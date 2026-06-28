@@ -1,6 +1,6 @@
 //! the different contexts for the compiler
 
-mod arenas;
+pub(crate) mod arenas;
 mod compile;
 mod doc;
 mod project;

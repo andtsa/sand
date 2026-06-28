@@ -106,7 +106,7 @@ impl Monad for IdW {
 
 // transformer: StateT<'a, S, MW>
 
-/// `StateT<'a, S, MW, A>` — a stateful computation `S -> MW (A, S)` over base
+/// `StateT<'a, S, MW, A>`: a stateful computation `S -> MW (A, S)` over base
 /// monad witness `MW`, boxed so it can capture borrows of lifetime `'a` (e.g.
 /// `&'tcx` IR nodes). The state `S` is threaded by move, so it may itself hold
 /// a `&mut` without being `Clone`.
@@ -162,7 +162,7 @@ where
         self.bind(move |a| StateT::pure(f(a)))
     }
 
-    /// `MonadTrans::lift` — lift a base-monad action into the transformer.
+    /// `MonadTrans::lift`: lift a base-monad action into the transformer.
     pub fn lift(m: Ap<MW, A>) -> Self
     where
         MW: Apply<A>,

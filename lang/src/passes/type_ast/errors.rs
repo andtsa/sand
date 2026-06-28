@@ -79,6 +79,12 @@ pub enum AstTypeError<'tcx> {
         "match scrutinee has type {ty} but match requires an enum, tuple, Int, or Bool type at {range}"
     )]
     MatchNonAggregateScrutinee { ty: Ty<'tcx>, range: Range },
+    #[error("cannot destructure {ty} by reference at {range}: {reason}")]
+    BorrowMatchUnsupported {
+        ty: Ty<'tcx>,
+        reason: &'static str,
+        range: Range,
+    },
     #[error(
         "match on enum '{enum_name}' is not exhaustive at {range}; uncovered variants: {uncovered:?}"
     )]
@@ -138,7 +144,7 @@ pub enum AstTypeError<'tcx> {
     #[error("pattern type error at {range}: {message}")]
     PatternTypeMismatch { message: String, range: Range },
 
-    // ── let-pattern errors ──────────────────────────────────────
+    // --- let-pattern errors ---
     #[error(
         "`let E#V(…) = …` at {range} requires an `else` branch because the pattern is refutable"
     )]

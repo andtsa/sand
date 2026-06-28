@@ -20,9 +20,7 @@ fn run_both(src: &str) -> Expression<'static> {
     hir
 }
 
-// ── declaration: a payload borrow must name a lifetime parameter
-// ──────────────
-
+// --- declaration: a payload borrow must name a lifetime parameter// --- ---
 #[test]
 fn elided_borrow_in_a_payload_is_rejected() {
     // `&Int` in a payload has no trackable lifetime; require `<'a>` + `&'a Int`.
@@ -40,9 +38,7 @@ fn static_borrow_in_a_payload_is_accepted() {
     typecheck("type Holder = H(&'static Int) \n def main(): Int := 0");
 }
 
-// ── the hole: an ADT holding a borrow of a local cannot escape
-// ────────────────
-
+// --- the hole: an ADT holding a borrow of a local cannot escape// --- ---
 #[test]
 fn returning_an_adt_holding_a_local_borrow_is_rejected() {
     typecheck_fails(
@@ -73,9 +69,8 @@ fn extracting_a_local_borrow_from_an_adt_and_returning_it_is_rejected() {
     );
 }
 
-// ── accepted: borrows that outlive the call, or never leave their scope
-// ────────
-
+// --- accepted: borrows that outlive the call, or never leave their scope// ---
+// ---
 #[test]
 fn returning_an_adt_holding_a_parameter_borrow_is_accepted() {
     typecheck(
@@ -127,9 +122,8 @@ fn adt_region_flows_modularly_across_a_call() {
     );
 }
 
-// ── multiple independent lifetimes (A's advantage over a meet collapse)
-// ────────
-
+// --- multiple independent lifetimes (A's advantage over a meet collapse)// ---
+// ---
 #[test]
 fn a_pair_keeps_two_distinct_lifetimes() {
     assert_eq!(
@@ -141,9 +135,7 @@ fn a_pair_keeps_two_distinct_lifetimes() {
     );
 }
 
-// ── use-site syntax + arity
-// ───────────────────────────────────────────────────
-
+// --- use-site syntax + arity// --- ---
 #[test]
 fn region_parametric_enum_in_a_signature_type_checks() {
     typecheck(

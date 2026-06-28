@@ -9,8 +9,7 @@ use lang::ir_types::qhir;
 
 use crate::common::qualify;
 
-// ── happy-path qualification ──────────────────────────────────────────
-
+// --- happy-path qualification ---
 #[test]
 fn qualify_simple_program() {
     qualify("def main(): Int := 42");
@@ -83,8 +82,7 @@ fn qualify_shadowed_variable_in_nested_block() {
     );
 }
 
-// ── qualify failures ──────────────────────────────────────────────────
-
+// --- qualify failures ---
 #[test]
 fn qualify_fails_undefined_function() {
     let mut ctx = CompileCtx::initial();

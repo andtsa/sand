@@ -1,0 +1,42 @@
+//@TEST:{20}[]
+
+// Implementing `Clone` for a non-`Copy` aggregate.
+//
+// `clone` receives a shared borrow `&T` and must return a fresh owned `T`. That
+// requires *reading the borrowed value's fields* — which a borrowing `match`
+// provides: matching through a `&T` binds each payload field as a `&` borrow
+// (here `a, b : &Int`, `p, q : &Pair`), so the impl recurses with `clone(field)`
+// without ever moving out of the borrow. No `Copy` instance is needed.
+
+type Pair = P(Int, Int)
+
+type Shape = Dot | Seg(Pair) | Box(Pair, Pair)
+
+impl Clone for Pair {
+    def clone(x: &Pair): Pair := match x {
+        Pair#P(a, b) => Pair#P(clone(a), clone(b))
+    }
+}
+
+impl Clone for Shape {
+    def clone(s: &Shape): Shape := match s {
+        Shape#Dot => Shape#Dot,
+        Shape#Seg(p) => Shape#Seg(clone(p)),
+        Shape#Box(p, q) => Shape#Box(clone(p), clone(q)),
+    }
+}
+
+def area(s: &Shape): Int := match s {
+    Shape#Dot => 0,
+    Shape#Seg(p) => match p { Pair#P(a, b) => *a + *b },
+    Shape#Box(p, q) => match p {
+        Pair#P(a, b) => match q { Pair#P(c, d) => (*a + *b) + (*c + *d) }
+    },
+}
+
+def main(): Int := {
+    let s: Shape = Shape#Box(Pair#P(1, 2), Pair#P(3, 4));
+    // A borrowing match does not consume `s`: it is still usable afterwards.
+    let c: Shape = clone(&s);
+    area(&s) + area(&c)
+}

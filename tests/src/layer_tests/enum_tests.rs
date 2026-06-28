@@ -7,8 +7,7 @@ use lang::interpreter::mir::MirValue;
 
 use crate::common::*;
 
-// ── declaration and construction ─────────────────────────────────────────────
-
+// --- declaration and construction ---
 /// A simple enum declaration compiles without error.
 #[test]
 fn enum_declaration_compiles() {
@@ -134,8 +133,7 @@ fn bare_tag_resolved_in_if_else() {
     }
 }
 
-// ── equality ─────────────────────────────────────────────────────────────────
-
+// --- equality ---
 /// Two equal enum constructors compare as equal.
 #[test]
 fn same_variant_is_equal() {
@@ -211,9 +209,7 @@ fn bare_tag_inequality_with_qualified_left() {
     );
 }
 
-// ── nominal typing
-// ────────────────────────────────────────────────────────────
-
+// --- nominal typing// --- ---
 /// Two enums with the same variant names are distinct types.
 #[test]
 fn two_enums_same_variants_are_distinct_types() {
@@ -224,9 +220,7 @@ fn two_enums_same_variants_are_distinct_types() {
     );
 }
 
-// ── error cases
-// ───────────────────────────────────────────────────────────────
-
+// --- error cases// --- ---
 /// Using an unknown variant on a known enum is a compile error.
 #[test]
 fn unknown_variant_is_error() {
@@ -262,8 +256,7 @@ fn undefined_enum_type_in_annotation_is_error() {
     typecheck_fails("def main(): Nonexistent := 0");
 }
 
-// ── ad-hoc tag union types ───────────────────────────────────────────────────
-
+// --- ad-hoc tag union types ---
 /// A function may declare an ad-hoc return type `#gt | #lt | #eq`.
 #[test]
 fn adhoc_tag_union_return_type_compiles() {
@@ -428,9 +421,7 @@ fn adhoc_tag_wrong_variant_is_error() {
     typecheck_fails("def main(): #ok | #err := #bogus");
 }
 
-// ── cross-module enum types
-// ───────────────────────────────────────────────────
-
+// --- cross-module enum types// --- ---
 /// A type declared in one module section is accessible from another via
 /// `mod::TypeName` in a return type annotation.
 #[test]
@@ -583,10 +574,9 @@ fn unknown_type_in_external_constructor_is_error() {
     );
 }
 
-// ── Multi-payload constructors: `C(a, b)` is sugar for a single tuple payload
-// `C((a, b))`, in declarations, constructor expressions, and patterns.
-// ─────────
-
+// --- Multi-payload constructors ---
+// `C(a, b)` is sugar for a single tuple payload `C((a, b))`, in declarations,
+// constructor expressions, and patterns.
 #[test]
 fn multi_payload_constructor_and_pattern() {
     let val = run_mir(

@@ -20,13 +20,14 @@
 
 pub mod env;
 pub mod errors;
+pub mod liveness;
 
-use env::BorrowState;
 use env::OwnershipEnv;
 use env::OwnershipState;
 use errors::OwnershipCheckError;
 use errors::OwnershipError;
 use im::HashSet;
+use liveness::Liveness;
 use rayon::prelude::*;
 
 use crate::compiler::context::CompileCtx;
@@ -51,6 +52,7 @@ pub fn check<'tcx>(
                 ctx,
                 module: func.src_module,
                 type_constraints: func.type_constraints.clone(),
+                liveness: Liveness::analyze(&func.body),
             };
 
             let mut env = OwnershipEnv::new();
@@ -118,6 +120,8 @@ struct OwnershipChecker<'a, 'tcx> {
     /// the current function's `where T : C` constraints: a `where T : Copy`
     /// makes a parameter of type `T` implicitly copyable.
     type_constraints: Vec<crate::compiler::structure::TypeConstraint>,
+    /// per-function last-use information, driving non-lexical loan release.
+    liveness: Liveness<'tcx>,
 }
 
 impl<'tcx> OwnershipChecker<'_, 'tcx> {
@@ -149,6 +153,13 @@ impl<'tcx> OwnershipChecker<'_, 'tcx> {
             } => {
                 // check RHS first (it may move other variables)
                 let val = self.check_expr(val, env)?;
+                // If the RHS is a direct borrow of a variable, this binding is
+                // the loan's holder: its last use bounds the loan's life (NLL).
+                if let Expression::Borrow(inner, _) = &val.expr
+                    && let Expression::Var(v) = &inner.expr
+                {
+                    env.attach_holder(v, *name);
+                }
                 // the new variable starts as Owned
                 env.declare(*name, *ty);
                 Ok(Statement::Declaration {
@@ -251,18 +262,22 @@ impl<'tcx> OwnershipChecker<'_, 'tcx> {
             // it just checks the sub-expression that produces it.
             Expression::Borrow(inner, mutable) => match &inner.expr {
                 Expression::Var(v) => {
-                    if let Some(existing) = env.borrow_state(v) {
-                        let conflict = *mutable || existing == BorrowState::Mut;
-                        if conflict {
-                            return Err(self.err(OwnershipError::ConflictingBorrow {
-                                name: self.ctx.uniq_variable_name(v),
-                                mutable: *mutable,
-                                existing_mutable: existing == BorrowState::Mut,
-                                range: expr.range,
-                            }));
-                        }
+                    // Non-lexical release: drop loans whose holder is already
+                    // dead at this point before checking exclusivity, so a borrow
+                    // that follows an unused/finished earlier borrow is admitted.
+                    let point = self.liveness.point_of(expr.range);
+                    env.prune_dead_loans(v, &self.liveness, point);
+                    if let Some(existing_mutable) = env.borrow_conflict(v, *mutable) {
+                        return Err(self.err(OwnershipError::ConflictingBorrow {
+                            name: self.ctx.uniq_variable_name(v),
+                            mutable: *mutable,
+                            existing_mutable,
+                            range: expr.range,
+                        }));
                     }
-                    env.add_borrow(*v, *mutable);
+                    // Holder is `None` here; a `let h = &v` binding attaches `h`
+                    // afterwards (see `check_statement`'s `Declaration` arm).
+                    env.add_borrow(*v, *mutable, None);
                     expr.expr.clone()
                 }
                 _ => Expression::Borrow(Box::new(self.check_expr(inner, env)?), *mutable),
@@ -376,10 +391,12 @@ impl<'tcx> OwnershipChecker<'_, 'tcx> {
                     match env.get(v) {
                         Some(OwnershipState::Owned) => {
                             // A value may not be moved while a borrow of it is
-                            // live: once references are real pointers,
-                            // `let r = &x; move(x); *r` is a
-                            // use-after-free no scope boundary catches.
-                            if env.borrow_state(v).is_some() {
+                            // *still live*: `let r = &x; move(x); *r` is a
+                            // use-after-free. Prune loans dead at this point
+                            // first, so a move after a finished borrow is allowed.
+                            let point = self.liveness.point_of(expr.range);
+                            env.prune_dead_loans(v, &self.liveness, point);
+                            if env.has_live_borrow(v) {
                                 return Err(self.err(OwnershipError::MoveWhileBorrowed {
                                     name: self.ctx.uniq_variable_name(v),
                                     used_at: expr.range,

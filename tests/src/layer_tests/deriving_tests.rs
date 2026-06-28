@@ -60,7 +60,7 @@ fn mutually_recursive_types_with_deriving_are_accepted() {
     std::mem::forget(ctx);
 }
 
-// ── the `Unique<T>` strategy functions (core-lib, over `Ptr`) ───────────────
+// --- the `Unique<T>` strategy functions (core-lib, over `Ptr`) ---
 //
 // `unique_alloc` moves a value onto the heap and `unique_release` drops it,
 // using only the `Ptr`/FFI substrate (real `malloc`/`free` under codegen;
@@ -111,7 +111,7 @@ fn unique_handles_are_independent() {
     );
 }
 
-// ── heap lowering: recursive `deriving Heaped` enums end to end ──────────────
+// --- heap lowering: recursive `deriving Heaped` enums end to end ---
 //
 // After lowering, a recursive enum is a `Unique<Node>` handle: construction
 // allocates, a consuming `match` takes the node and frees the husk, and a value

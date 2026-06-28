@@ -12,9 +12,7 @@ use lang::lang::types::RegionConstraint;
 use crate::common::typecheck;
 use crate::common::typecheck_fails;
 
-// ── the escape check fires on borrows of locals
-// ───────────────────────────────
-
+// --- the escape check fires on borrows of locals// --- ---
 #[test]
 fn returning_a_borrow_of_a_local_is_rejected() {
     // `y` lives only for the block; `&y` would dangle once the block ends.
@@ -34,9 +32,10 @@ fn returning_a_borrow_from_a_nested_block_is_rejected() {
     typecheck_fails("def f(): &Int := { let y = 5; { &y } } \n def main(): Int := 0");
 }
 
-// ── return-escape: a borrow of a by-value parameter or a local is rejected at
-//    the frame boundary; a borrow tied to a *lifetime parameter* (`&'a`) is
-//    returnable (see `region_inference_tests::id_ref` / `longest`) ────────────
+// --- return-escape ---
+// a borrow of a by-value parameter or a local is rejected at the frame
+// boundary; a borrow tied to a *lifetime parameter* (`&'a`) is returnable
+// (see `region_inference_tests::id_ref` / `longest`)
 
 #[test]
 fn returning_a_borrow_of_a_by_value_parameter_is_rejected() {
@@ -61,8 +60,7 @@ fn borrowing_a_local_without_yielding_it_is_accepted() {
     typecheck("def f(): Int := { let y = 5; let r = &y; 0 } \n def main(): Int := 0");
 }
 
-// ── escape through a branch join (if / match)
-// ─────────────────────────────────
+// --- escape through a branch join (if / match)// --- ---
 //
 // A branch join takes the *meet* of its branches' regions, so a borrow of a
 // local escaping through *any* branch (not just the first/chosen one) surfaces
@@ -128,9 +126,7 @@ fn a_distinct_lifetime_branch_return_without_a_where_is_rejected() {
     );
 }
 
-// ── escape via data: a returned aggregate holding a local borrow
-// ──────────────
-
+// --- escape via data: a returned aggregate holding a local borrow// --- ---
 #[test]
 fn returning_a_tuple_holding_a_local_borrow_is_rejected() {
     // the tuple carries `&y`, a borrow of a local; returning it would dangle. The
@@ -147,8 +143,7 @@ fn returning_a_tuple_of_a_parameter_borrow_is_accepted() {
     );
 }
 
-// ── the outlives solver: `'r ≥ 's` (Calculus: Regions)
-// ────────────────────────────
+// --- the outlives solver: `'r ≥ 's` (Calculus: Regions)// --- ---
 //
 // These exercise `outlives` directly. Regions are allocated *through* the
 // context (`enter_region_scope`) rather than fabricated, so their identities
@@ -233,8 +228,7 @@ fn satisfies_outlives_checks_a_constraint_set() {
     assert!(!ctx.satisfies_outlives(&required, &[]));
 }
 
-// ── assignment reseat-escape (item 11) ───────────────────────────────────────
-
+// --- assignment reseat-escape (item 11) ---
 #[test]
 fn reseating_an_outer_reference_to_an_inner_borrow_is_rejected() {
     // re-pointing an outer reference at a borrow from an inner block would dangle

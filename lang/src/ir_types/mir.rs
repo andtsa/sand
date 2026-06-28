@@ -102,7 +102,11 @@ pub enum Terminator {
 /// empty for a plain local (`x`); `[Deref]` denotes going *through* the
 /// reference held in `local` (`*r`), the inverse of [`RValue::Ref`]. Reading a
 /// `[Deref]` place is a load through the pointer; writing one is a store
-/// through it.
+/// through it. A `[Field(i)]` step addresses the `i`-th field of the aggregate
+/// reached so far (enum payload is index 1, tuple element `i` is index `i`),
+/// without loading it, so `RValue::Ref(Place{ local, [Deref, Field(1)] })`
+/// yields `&(*local).payload`. Field projections are produced only by a
+/// borrowing `match` (destructuring through a shared reference).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Place {
     pub local: LocalId,
@@ -125,6 +129,16 @@ impl Place {
             projection: vec![ProjElem::Deref],
         }
     }
+
+    /// This place with one more projection step appended.
+    pub fn project(&self, elem: ProjElem) -> Self {
+        let mut projection = self.projection.clone();
+        projection.push(elem);
+        Place {
+            local: self.local,
+            projection,
+        }
+    }
 }
 
 /// A single step in a [`Place`] projection path.
@@ -132,6 +146,11 @@ impl Place {
 pub enum ProjElem {
     /// Dereference the reference held by the place so far (`*r`).
     Deref,
+    /// Address the `i`-th field of the aggregate reached so far without loading
+    /// it (enum payload is index 1, tuple element `i` is index `i`). The
+    /// inverse (by value) of [`RValue::Field`]. Used to take an interior
+    /// borrow of a field when destructuring through a shared reference.
+    Field(usize),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

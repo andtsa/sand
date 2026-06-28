@@ -88,7 +88,7 @@ pub fn definition_at_position<'tcx>(
             }
 
             // A polymorphic typeclass-method call (one whose receiver is still a
-            // type parameter) — jump to the method's declaration in its
+            // type parameter): jump to the method's declaration in its
             // typeclass. A method call on a *concrete* receiver was already
             // rewritten to a direct `Call` of the impl method (handled above), so
             // that jumps to the impl instead.

@@ -504,6 +504,46 @@ impl<'tcx> CompileCtx<'tcx> {
         self.intern_ty(TyKind::RefMut(region, inner))
     }
 
+    /// Pre-intern `&'static T` for every currently-interned `T`.
+    ///
+    /// MIR lowering's interior-borrow temporaries (`explicate_control`'s
+    /// `borrow_ref_ty`) need these reference types, but that pass runs in
+    /// parallel over functions holding a shared `&CompileCtx` and **must not**
+    /// mutate the arena (`Arenas: Sync` is justified only by being read-only
+    /// after compilation). Interning them here (once, single-threaded, at the
+    /// end of monomorphisation) lets lowering look them up read-only via
+    /// [`lookup_static_ref`](Self::lookup_static_ref).
+    ///
+    /// This is a superset of what lowering needs: every `borrow_ref_ty` input
+    /// is already an interned program type, so the corresponding `&'static
+    /// T` is guaranteed present and the lookup is total.
+    pub fn intern_static_refs(&mut self) {
+        // The type interner is split across several caches (scalars/refs,
+        // tuples, generic apps, …); collect every interned `Ty` from all of
+        // them, then intern `&'static T` for each.
+        let all: Vec<Ty<'tcx>> = self
+            .ty_interner
+            .values()
+            .copied()
+            .chain(self.tuple_interner.values().copied())
+            .chain(self.app_interner.values().copied())
+            .chain(self.region_ty_interner.values().copied())
+            .chain(self.param_app_interner.values().copied())
+            .collect();
+        all.into_iter().for_each(|t| {
+            self.ref_ty(Region::Static, t);
+        });
+    }
+
+    /// The interned `&'static inner`, if present (pre-interned by
+    /// [`intern_static_refs`](Self::intern_static_refs)). `&self`, so it is
+    /// callable from the parallel MIR-lowering pass without mutating the arena.
+    pub fn lookup_static_ref(&self, inner: Ty<'tcx>) -> Option<Ty<'tcx>> {
+        self.ty_interner
+            .get(&TyKind::Ref(Region::Static, inner))
+            .copied()
+    }
+
     /// Intern a raw pointer type `Ptr<inner>`. Unlike a
     /// reference, it carries no region and survives monomorphisation.
     pub fn ptr_ty(&mut self, inner: Ty<'tcx>) -> Ty<'tcx> {
@@ -1221,7 +1261,7 @@ impl<'tcx> CompileCtx<'tcx> {
 
     /// Fallible [`Self::fun_sig`]: `None` when no signature is registered for
     /// `fun` (e.g. a typeclass default/impl method a method call was rewritten
-    /// to — the type checker builds that `Call` directly and never looks its
+    /// to; the type checker builds that `Call` directly and never looks its
     /// signature up). Used by best-effort consumers like LSP hover that must
     /// not panic on such a `FunRef`.
     pub fn try_fun_sig(&self, fun: &FunRef<'tcx>) -> Option<FunSig<'tcx>> {
@@ -1672,37 +1712,80 @@ impl<'tcx> CompileCtx<'tcx> {
             .find(|f| self.original_fun_name(*f) == name)
     }
 
-    /// Whether `ty` has a registered `class` implementation.
-    pub fn is_class(&self, ty: Ty<'tcx>, class: TypeclassRef) -> bool {
+    /// **The single source of truth** for "does `ty` satisfy typeclass
+    /// `class`?", used by *both* the trait checker (`where T : C` resolution)
+    /// and the affine/move checker (`Copy`/`Clone`). It unifies three sources
+    /// that previously disagreed (causing e.g. `&T` to be `Copy` to the move
+    /// checker but not to a `where T : Copy` bound):
+    ///
+    ///   1. a **type parameter** licensed by an in-scope assumption (`where T :
+    ///      C'` where `C'` is `C` or a subclass);
+    ///   2. the **builtin structural** instances of the `Copy`/`Clone`
+    ///      lang-items (shared references, raw pointers, and, structurally,
+    ///      tuples), which have no surface `impl`;
+    ///   3. a **registered `impl`** (its superclasses are registered too, per
+    ///      `requires`, so an exact lookup suffices).
+    pub fn satisfies(
+        &self,
+        class: TypeclassRef,
+        ty: Ty<'tcx>,
+        assumptions: &[crate::compiler::structure::TypeConstraint],
+    ) -> bool {
+        // 1. a type parameter is satisfied only by an in-scope bound.
+        if let TyKind::Param(pid) = ty.kind() {
+            return assumptions
+                .iter()
+                .any(|tc| tc.param == *pid && self.class_satisfies(tc.class, class));
+        }
+        // 2. builtin structural instances of the `Copy`/`Clone` lang-items.
+        if self.is_structural_copy_class(class)
+            && self.structurally_copyable(class, ty, assumptions)
+        {
+            return true;
+        }
+        // 3. a registered instance.
         self.type_head(ty)
             .is_some_and(|head| self.lookup_instance(class, head).is_some())
     }
 
-    /// Whether `ty` can be cloned (explicitly via `clone()`).
-    /// checks if `ty` has a registered `Clone` implementation.
-    pub fn is_clone(&self, ty: Ty<'tcx>) -> bool {
-        self.clone_class.is_some_and(|c| self.is_class(ty, c))
+    /// Whether `class` is the `Copy` or `Clone` lang-item, which carry builtin
+    /// structural instances (references, pointers, tuples) beyond any surface
+    /// `impl`.
+    fn is_structural_copy_class(&self, class: TypeclassRef) -> bool {
+        self.copy_class == Some(class) || self.clone_class == Some(class)
     }
 
-    /// Whether `ty` is implicitly copied on use: a primitive or
-    /// reference (builtin), or a type whose head has a registered `Copy`
-    /// instance. `where T : Copy` on a type parameter is handled by the caller
-    /// (the ownership pass) via [`is_copy_under`].
-    pub fn is_copy(&self, ty: Ty<'tcx>) -> bool {
+    /// The builtin structural `Copy`/`Clone` instances: a shared `&T` and a raw
+    /// `Ptr<T>` are copyable (a `&mut T` is **not**: it is move-only), a
+    /// region-annotated type follows its inner type, and a tuple is copyable
+    /// iff every element is. Primitives are included so the predicate
+    /// stands even independently of `core.sand`'s `impl Copy for Int`.
+    fn structurally_copyable(
+        &self,
+        class: TypeclassRef,
+        ty: Ty<'tcx>,
+        assumptions: &[crate::compiler::structure::TypeConstraint],
+    ) -> bool {
         match ty.kind() {
             TyKind::Int | TyKind::Bool | TyKind::Unit => true,
-            TyKind::Ref(..) => true,
-            // raw pointers are `Copy` and outside the affine discipline (A).
-            TyKind::Ptr(_) => true,
-            TyKind::Region(t, _) => self.is_copy(*t),
-            // a tuple is Copy iff every element is (structural Copy).
-            TyKind::Tuple(elems) => elems.iter().all(|e| self.is_copy(*e)),
-            TyKind::Enum(_) | TyKind::App(..) => self
-                .copy_class
-                .zip(self.type_head(ty))
-                .is_some_and(|(c, head)| self.lookup_instance(c, head).is_some()),
+            TyKind::Ref(..) | TyKind::Ptr(_) => true,
+            TyKind::Region(t, _) => self.satisfies(class, *t, assumptions),
+            TyKind::Tuple(elems) => elems.iter().all(|e| self.satisfies(class, *e, assumptions)),
             _ => false,
         }
+    }
+
+    /// Whether `ty` can be cloned. Thin wrapper over
+    /// [`satisfies`](Self::satisfies).
+    pub fn is_clone(&self, ty: Ty<'tcx>) -> bool {
+        self.clone_class.is_some_and(|c| self.satisfies(c, ty, &[]))
+    }
+
+    /// Whether `ty` is implicitly copied on use. Thin wrapper over
+    /// [`satisfies`](Self::satisfies); `where T : Copy` on a type parameter is
+    /// handled by [`is_copy_under`](Self::is_copy_under).
+    pub fn is_copy(&self, ty: Ty<'tcx>) -> bool {
+        self.copy_class.is_some_and(|c| self.satisfies(c, ty, &[]))
     }
 
     /// Like [`is_copy`](Self::is_copy), but a type parameter additionally
@@ -1714,14 +1797,8 @@ impl<'tcx> CompileCtx<'tcx> {
         ty: Ty<'tcx>,
         constraints: &[crate::compiler::structure::TypeConstraint],
     ) -> bool {
-        if let TyKind::Param(pid) = ty.kind() {
-            return self.copy_class.is_some_and(|copy| {
-                constraints
-                    .iter()
-                    .any(|tc| tc.param == *pid && self.class_satisfies(tc.class, copy))
-            });
-        }
-        self.is_copy(ty)
+        self.copy_class
+            .is_some_and(|c| self.satisfies(c, ty, constraints))
     }
 
     pub fn get_typeclass(&self, tref: TypeclassRef) -> &TypeclassDef<'tcx> {

@@ -23,9 +23,7 @@ fn run_both(src: &str) -> Expression<'static> {
     hir
 }
 
-// ── parsing / structure
-// ───────────────────────────────────────────────────────
-
+// --- parsing / structure// --- ---
 #[test]
 fn region_ascription_parses_as_region_type() {
     let pm = parse("def f<'r>(x: Int @ 'r): Int := 0");
@@ -45,9 +43,7 @@ fn static_region_parses_as_static() {
     assert!(matches!(pty.kind(), TyKind::Region(_, Region::Static)));
 }
 
-// ── type checking
-// ─────────────────────────────────────────────────────────────
-
+// --- type checking// --- ---
 #[test]
 fn region_signature_type_checks() {
     // `x : Int @ 'r` is returned as `Int @ 'r`: same region, so it checks.
@@ -71,8 +67,7 @@ fn region_ascribed_type_is_distinct_from_bare_type() {
     typecheck_fails("def f<'r>(x: Int @ 'r): Int := x \n def main(): Int := 0");
 }
 
-// ── codegen: regions are erased, so region-typed functions compile and run
-
+// codegen: regions are erased, so region-typed functions compile and run
 #[test]
 fn region_typed_function_compiles_and_program_runs() {
     // `helper` carries region ascriptions; monomorphisation erases them to

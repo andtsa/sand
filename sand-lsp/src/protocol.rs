@@ -25,7 +25,7 @@ impl LanguageServer for Backend {
         // Keep `initialize` fast: just record the root and return capabilities.
         // The heavy discovery + initial type-check is deferred to `initialized`,
         // because tower-lsp suppresses progress notifications until the server is
-        // initialized — so progress can only be reported from `initialized` on.
+        // initialized, so progress can only be reported from `initialized` on.
         debug!("initialising sand-lsp");
         match params.root_uri.as_ref().and_then(|u| u.to_file_path().ok()) {
             Some(root_path) => {
@@ -106,7 +106,7 @@ impl LanguageServer for Backend {
                 continue;
             };
             // Formatting *rewrites* the document, so it must reflect the current
-            // text — never a stale AST. Only format when the current check
+            // text, never a stale AST. Only format when the current check
             // succeeded (no pending failure); `last_good` then matches the file.
             if slot.last_result.is_some() {
                 return Ok(None);
@@ -183,7 +183,7 @@ impl Backend {
     }
 
     /// Discover and load every project / loose file under the workspace root,
-    /// then run the initial check — reporting `$/progress` for each phase so
+    /// then run the initial check, reporting `$/progress` for each phase so
     /// the editor shows a loading indicator. Runs from `initialized`
     /// (progress notifications are dropped before the server is
     /// initialized).

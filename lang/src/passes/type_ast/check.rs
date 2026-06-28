@@ -100,8 +100,36 @@ pub(super) fn type_check_match_arms<'tcx>(
     forced_expected: Option<Ty<'tcx>>,
     range: Range,
 ) -> Result<Vec<typed_hir::TypedMatchArm<'tcx>>, AstTypeError<'tcx>> {
-    // classify the scrutinee type up front, copying out of the borrow before
-    // taking `&mut ctx` again
+    // A `match` on a *reference* destructures through the borrow: it matches the
+    // pointee's shape and binds each payload field as a `&'r` (shared) or `&'r
+    // mut` (exclusive) borrow (see `type_check_match_arms_inner`). We classify on
+    // the **pointee** type and thread the reference's region + capability so
+    // binding leaves can be wrapped. The shared form is what makes `Clone`
+    // implementable for non-`Copy` aggregates; the mutable form enables in-place
+    // field mutation.
+    let (effective_ty, borrow) = match scrutinee_ty.kind() {
+        TyKind::Ref(r, inner) | TyKind::RefMut(r, inner) => {
+            let mutable = matches!(scrutinee_ty.kind(), TyKind::RefMut(..));
+            // Heaped values are `Unique<Node>` handles; reading their fields
+            // through a borrow needs a `unique_borrow` indirection that the heap
+            // lowering does not yet provide, so reject for now (would miscompile).
+            if let TyKind::Enum(er) | TyKind::App(er, _, _) = inner.kind()
+                && ctx.get_enum(*er).heaped_strategy().is_some()
+            {
+                return Err(AstTypeError::BorrowMatchUnsupported {
+                    ty: scrutinee_ty,
+                    reason: "destructuring a heaped (`deriving Heaped`) type through a \
+                             reference is not yet supported",
+                    range,
+                });
+            }
+            (*inner, Some((*r, mutable)))
+        }
+        _ => (scrutinee_ty, None),
+    };
+
+    // classify the (pointee) scrutinee type up front, copying out of the borrow
+    // before taking `&mut ctx` again
     enum ScrutKind<'tcx> {
         Enum(AdtRef<'tcx>),
         Tuple,
@@ -109,7 +137,7 @@ pub(super) fn type_check_match_arms<'tcx>(
         Bool,
         Other,
     }
-    let kind = match scrutinee_ty.kind() {
+    let kind = match effective_ty.kind() {
         TyKind::Enum(er) => ScrutKind::Enum(*er),
         // a generic enum instantiation matches just like its base enum.
         TyKind::App(er, _, _) => ScrutKind::Enum(*er),
@@ -124,14 +152,24 @@ pub(super) fn type_check_match_arms<'tcx>(
             ctx,
             env,
             arms,
-            scrutinee_ty,
+            effective_ty,
             Some(enum_ref),
+            borrow,
             forced_expected,
             range,
         ),
-        ScrutKind::Tuple | ScrutKind::Int | ScrutKind::Bool => {
-            type_check_match_arms_inner(ctx, env, arms, scrutinee_ty, None, forced_expected, range)
-        }
+        ScrutKind::Tuple | ScrutKind::Int | ScrutKind::Bool => type_check_match_arms_inner(
+            ctx,
+            env,
+            arms,
+            effective_ty,
+            None,
+            borrow,
+            forced_expected,
+            range,
+        ),
+        // `Other` here means the scrutinee (or, for a borrowing match, its
+        // pointee) is not a matchable aggregate. Report against the original type.
         ScrutKind::Other => Err(AstTypeError::MatchNonAggregateScrutinee {
             ty: scrutinee_ty,
             range,
@@ -145,12 +183,17 @@ pub(super) fn type_check_match_arms<'tcx>(
 /// exhaustiveness + `Variant`/`Tag` patterns) and `None` for tuple scrutinees
 /// (where only irrefutable patterns are legal at all, so exhaustiveness is
 /// trivial).
+#[allow(clippy::too_many_arguments)]
 fn type_check_match_arms_inner<'tcx>(
     ctx: &mut CompileCtx<'tcx>,
     env: &TypeEnv<'tcx>,
     arms: &[qhir::QMatchArm<'tcx>],
     scrutinee_ty: Ty<'tcx>,
     enum_ref: Option<AdtRef<'tcx>>,
+    // `Some(('r, mutable))` for a borrowing match (scrutinee was `&'r T` or `&'r
+    // mut T`): each pattern binding is then a `&'r`/`&'r mut` borrow of its field
+    // rather than an owned move. `scrutinee_ty` is already the pointee `T`.
+    borrow: Option<(Region, bool)>,
     forced_expected: Option<Ty<'tcx>>,
     range: Range,
 ) -> Result<Vec<typed_hir::TypedMatchArm<'tcx>>, AstTypeError<'tcx>> {
@@ -172,7 +215,7 @@ fn type_check_match_arms_inner<'tcx>(
 
         // validate & translate the pattern (always at "top level": the
         // pattern is being matched directly against the scrutinee)
-        let match_pattern = match &arm.pattern {
+        let mut match_pattern = match &arm.pattern {
             qhir::QPattern::Variant {
                 enum_ref: pat_er,
                 variant_idx,
@@ -292,6 +335,18 @@ fn type_check_match_arms_inner<'tcx>(
                 "unreachable match arm (appears after a wildcard or exhaustive pattern)",
             );
         }
+        // Borrowing match: rewrite every binding leaf from an owned `T` to a
+        // `&'r T` / `&'r mut T` borrow of the field (the field's region is the
+        // scrutinee reference's region `'r`, its capability the scrutinee's).
+        // Structural pattern node types stay unwrapped (pointee), so the decision
+        // tree and codegen index the real layout.
+        if let Some((r, mutable)) = borrow {
+            for binding in bindings.iter_mut() {
+                binding.1 = wrap_borrow(ctx, r, mutable, binding.1);
+            }
+            wrap_pattern_binding_tys(ctx, &mut match_pattern, r, mutable);
+        }
+
         prior_patterns.push(match_pattern.clone());
 
         // extend the env with this arm's pattern bindings (immutable).
@@ -299,7 +354,14 @@ fn type_check_match_arms_inner<'tcx>(
         let mut arm_env = env.clone();
         let home = ctx.current_scope_region();
         for (var, ty, _range) in &bindings {
-            arm_env.insert(*var, (*ty, Kind::Owned, false, home));
+            // A reference-typed binding (from a borrowing match) carries the
+            // borrow capability; everything else is an owned value.
+            let kind = match ty.kind() {
+                TyKind::Ref(..) => Kind::Borrowed,
+                TyKind::RefMut(..) => Kind::BorrowedMut,
+                _ => Kind::Owned,
+            };
+            arm_env.insert(*var, (*ty, kind, false, home));
         }
 
         // typecheck the arm body
@@ -341,7 +403,7 @@ fn type_check_match_arms_inner<'tcx>(
     Ok(typed_arms)
 }
 
-// ── Pattern usefulness (Maranget, ML'08) ─────────────────────────────────────
+// --- Pattern usefulness (Maranget, ML'08) ---
 //
 // A single algorithm drives both reachability and exhaustiveness, over the same
 // pattern matrix the decision-tree lowering uses. `useful(P, q)` answers: does
@@ -667,6 +729,51 @@ fn check_variant_payload_pattern<'tcx>(
                 range: arm_range,
             })
         }
+    }
+}
+
+/// Wrap a field type as a `&'r` (shared) or `&'r mut` (exclusive) borrow.
+fn wrap_borrow<'tcx>(
+    ctx: &mut CompileCtx<'tcx>,
+    region: Region,
+    mutable: bool,
+    ty: Ty<'tcx>,
+) -> Ty<'tcx> {
+    if mutable {
+        ctx.ref_mut_ty(region, ty)
+    } else {
+        ctx.ref_ty(region, ty)
+    }
+}
+
+/// Rewrite every `Binding` leaf's type in a pattern to a `&'r`/`&'r mut` borrow
+/// of it (used for a borrowing match, destructuring through a reference). Only
+/// the binding leaves change; structural node types (`Variant.ty`, `Tuple.ty`,
+/// payload types) stay the bare pointee types so the decision tree / codegen
+/// index the real layout.
+fn wrap_pattern_binding_tys<'tcx>(
+    ctx: &mut CompileCtx<'tcx>,
+    pattern: &mut typed_hir::MatchPattern<'tcx>,
+    region: Region,
+    mutable: bool,
+) {
+    match pattern {
+        typed_hir::MatchPattern::Binding { ty, .. } => {
+            *ty = wrap_borrow(ctx, region, mutable, *ty);
+        }
+        typed_hir::MatchPattern::Tuple { elems, .. } => {
+            for e in elems.iter_mut() {
+                wrap_pattern_binding_tys(ctx, e, region, mutable);
+            }
+        }
+        typed_hir::MatchPattern::Variant { payload, .. } => {
+            if let Some((_, sub)) = payload {
+                wrap_pattern_binding_tys(ctx, sub, region, mutable);
+            }
+        }
+        typed_hir::MatchPattern::Wildcard
+        | typed_hir::MatchPattern::IntLit(_)
+        | typed_hir::MatchPattern::BoolLit(_) => {}
     }
 }
 
@@ -1215,8 +1322,7 @@ pub(super) fn check<'tcx>(
     }
 }
 
-// ── let-pattern ────────────────────────────────────────────────────────
-
+// --- let-pattern ---
 /// Validate and translate a `let E#V(payload) = expr` LHS pattern.
 ///
 /// Returns the typed `MatchPattern` and the list of bindings it introduces

@@ -15,9 +15,7 @@ use crate::common::parse;
 use crate::common::parse_fails;
 use crate::common::typecheck;
 
-// ── region parameters are declared and resolve in scope
-// ───────────────────────
-
+// --- region parameters are declared and resolve in scope// --- ---
 #[test]
 fn declared_region_parameter_resolves_on_a_reference() {
     let pm = parse("def f<'r>(x: &'r Int): Int := 0");
@@ -55,9 +53,7 @@ fn region_parametric_function_definition_type_checks() {
     typecheck("def id<'r>(x: &'r Int): Int := 0 \n def main(): Int := 0");
 }
 
-// ── undeclared lifetimes are rejected
-// ─────────────────────────────────────────
-
+// --- undeclared lifetimes are rejected// --- ---
 #[test]
 fn undeclared_lifetime_on_reference_is_rejected() {
     parse_fails("def f(x: &'r Int): Int := 0");
@@ -73,9 +69,7 @@ fn undeclared_lifetime_in_where_clause_is_rejected() {
     parse_fails("def f<'r>(x: &'r Int): Int where 'r >= 's := 0");
 }
 
-// ── `where 'r >= 's` outlives constraints parse and are stored
-// ────────────────
-
+// --- `where 'r >= 's` outlives constraints parse and are stored// --- ---
 #[test]
 fn where_clause_parses_and_is_stored() {
     let pm = parse(
@@ -113,9 +107,7 @@ fn static_outlives_a_declared_region_in_where_clause() {
     typecheck("def f<'r>(x: &'r Int): Int where 'static >= 'r := 0 \n def main(): Int := 0");
 }
 
-// ── enums may carry region parameters
-// ─────────────────────────────────────────
-
+// --- enums may carry region parameters// --- ---
 #[test]
 fn enum_region_parameter_resolves_in_payloads() {
     let pm = parse("type Ref<'r, a> = Mk(&'r a) \n def main(): Int := 0");

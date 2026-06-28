@@ -9,9 +9,7 @@ use lang::interpreter::mir::MirValue;
 use crate::common::run_mir;
 use crate::common::typecheck_fails;
 
-// ── no global fallback
-// ────────────────────────────────────────────────────────
-
+// --- no global fallback// --- ---
 #[test]
 fn unqualified_cross_module_function_is_rejected() {
     typecheck_fails(
@@ -45,9 +43,7 @@ fn unqualified_cross_module_type_is_rejected() {
     );
 }
 
-// ── prelude (core) is auto-imported
-// ───────────────────────────────────────────
-
+// --- prelude (core) is auto-imported// --- ---
 #[test]
 fn core_functions_are_callable_unqualified() {
     // `abs` lives in the `core` module; the prelude makes it reachable with no
@@ -55,9 +51,7 @@ fn core_functions_are_callable_unqualified() {
     assert_eq!(run_mir("def main(): Int := abs(0 - 5)"), MirValue::Int(5));
 }
 
-// ── `use module::name` (explicit)
-// ─────────────────────────────────────────────
-
+// --- `use module::name` (explicit)// --- ---
 #[test]
 fn use_imports_a_function() {
     assert_eq!(
@@ -100,9 +94,7 @@ fn use_of_one_name_does_not_import_others() {
     );
 }
 
-// ── `use module::*` (glob)
-// ────────────────────────────────────────────────────
-
+// --- `use module::*` (glob)// --- ---
 #[test]
 fn glob_use_imports_all_functions() {
     assert_eq!(
@@ -134,9 +126,7 @@ fn own_module_shadows_an_import() {
     );
 }
 
-// ── malformed `use`
-// ───────────────────────────────────────────────────────────
-
+// --- malformed `use`// --- ---
 #[test]
 fn use_of_unknown_module_is_rejected_on_reference() {
     // an unresolvable `use` errors when the imported name is referenced

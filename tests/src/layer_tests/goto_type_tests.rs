@@ -30,7 +30,7 @@ fn goto_resolves_type_use_in_signature() {
     let file = proj.create_virtual_file(SRC.to_string(), "m");
     let (ctx, _ast) = proj.check().result_leaked().expect("compile");
 
-    // `Box<Int>` in `def f(b: Box<Int>)` — the *use*, not the declaration.
+    // `Box<Int>` in `def f(b: Box<Int>)`: the *use*, not the declaration.
     let target = ctx
         .type_ref_at(file, pos_of(SRC, "Box<Int>"))
         .expect("type ref at Box use");
@@ -69,7 +69,7 @@ fn goto_at_a_primitive_or_plain_position_is_none() {
     let mut proj = Project::empty();
     let file = proj.create_virtual_file(SRC.to_string(), "m");
     let (ctx, _ast) = proj.check().result_leaked().expect("compile");
-    // `Int` is a primitive — no user definition, so not recorded.
+    // `Int` is a primitive: no user definition, so not recorded.
     assert!(ctx.type_ref_at(file, pos_of(SRC, "Int>")).is_none());
     std::mem::forget(ctx);
 }

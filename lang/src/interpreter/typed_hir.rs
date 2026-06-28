@@ -29,6 +29,7 @@ use crate::compiler::structure::Map;
 use crate::compiler::structure::TypeHead;
 use crate::compiler::structure::TypeclassRef;
 use crate::compiler::structure::UniqVar;
+use crate::internal_bug;
 use crate::ir_types::typed_hir::*;
 use crate::lang::intrinsics::Intrinsic;
 use crate::lang::ops::*;
@@ -168,9 +169,12 @@ enum Value<'tcx> {
         payload: Option<Box<Value<'tcx>>>,
     },
     Tuple(Vec<Value<'tcx>>),
-    /// A reference: a shared handle to the cell it points at. Produced by a
-    /// borrow expression, consumed by `*r` reads and `*r = e` writes.
-    Ref(Cell<'tcx>),
+    /// A reference: a shared handle to a storage location (a root cell plus a
+    /// path of field indices into the value it holds; empty for a whole-cell
+    /// borrow like `&x`; non-empty for an interior field borrow produced by a
+    /// borrowing `match`). Reads (`*r`) and writes (`*r = e`) navigate the path
+    /// into the *live* value, so a `&mut` field borrow mutates the original.
+    Ref(Cell<'tcx>, Vec<usize>),
     /// A function value / closure: the lifted top-level function and a
     /// pointer to its captured environment (a `Ref` to a cell holding the env
     /// value: `Unit`, the single capture, or a tuple). Calling it runs `func`
@@ -184,8 +188,57 @@ enum Value<'tcx> {
 /// Bindings map a variable to the cell that holds its value.
 type Env<'tcx> = Map<UniqVar<'tcx>, Cell<'tcx>>;
 
+/// A storage location: a root cell plus a path of field indices into the value
+/// it holds (see [`Value::Ref`]).
+type Loc<'tcx> = (Cell<'tcx>, Vec<usize>);
+
 fn cell<'tcx>(v: Value<'tcx>) -> Cell<'tcx> {
     Rc::new(RefCell::new(v))
+}
+
+/// Navigate `path` (field indices) into `v`: tuple element `i`, or a
+/// constructor's payload at index 1.
+fn nav<'a, 'tcx>(v: &'a Value<'tcx>, path: &[usize]) -> &'a Value<'tcx> {
+    let mut cur = v;
+    for &i in path {
+        cur = match cur {
+            Value::Tuple(elems) => &elems[i],
+            Value::Constructor {
+                payload: Some(p), ..
+            } if i == 1 => p,
+            _ => internal_bug!("field {i} projection on a non-aggregate value"),
+        };
+    }
+    cur
+}
+
+/// Mutable counterpart of [`nav`].
+fn nav_mut<'a, 'tcx>(v: &'a mut Value<'tcx>, path: &[usize]) -> &'a mut Value<'tcx> {
+    let mut cur = v;
+    for &i in path {
+        cur = match cur {
+            Value::Tuple(elems) => &mut elems[i],
+            Value::Constructor {
+                payload: Some(p), ..
+            } if i == 1 => p.as_mut(),
+            _ => internal_bug!("field {i} projection on a non-aggregate value"),
+        };
+    }
+    cur
+}
+
+/// Read the value at a location (cloned).
+fn read_ref<'tcx>(loc: &Loc<'tcx>) -> Value<'tcx> {
+    nav(&loc.0.borrow(), &loc.1).clone()
+}
+
+/// Write `val` to a location, mutating the live aggregate in place.
+fn write_ref<'tcx>(loc: &Loc<'tcx>, val: Value<'tcx>) {
+    if loc.1.is_empty() {
+        *loc.0.borrow_mut() = val;
+    } else {
+        *nav_mut(&mut loc.0.borrow_mut(), &loc.1) = val;
+    }
 }
 
 /// The typeclass-instance head of a runtime value, for dynamic method dispatch.
@@ -195,7 +248,7 @@ fn value_head<'tcx>(v: &Value<'tcx>) -> Option<TypeHead<'tcx>> {
         Value::Bool(_) => Some(TypeHead::Bool),
         Value::Unit => Some(TypeHead::Unit),
         Value::Constructor { enum_ref, .. } => Some(TypeHead::Enum(*enum_ref)),
-        Value::Tuple(_) | Value::Ref(_) | Value::Closure { .. } => None,
+        Value::Tuple(_) | Value::Ref(..) | Value::Closure { .. } => None,
     }
 }
 
@@ -226,7 +279,7 @@ impl<'tcx> TypedProgram<'tcx> {
     /// evaluation becomes an `Err` rather than unwinding into the caller.
     ///
     /// The run executes on a dedicated [`BOUNDED_INTERP_STACK`]-byte thread so
-    /// the depth/step budget — not the caller's (possibly small) stack — is the
+    /// the depth/step budget, not the caller's (possibly small) stack, is the
     /// bound; a native stack overflow is uncatchable, so this keeps an infinite
     /// recursion from aborting the whole process. The borrows stay valid
     /// because `std::thread::scope` joins the thread before returning.
@@ -267,15 +320,13 @@ impl<'tcx> TypedProgram<'tcx> {
             // `&e` / `&mut e`: evaluate the operand as a *place* and take a shared
             // handle to its cell. A borrow of a variable shares that variable's
             // cell, so a later `*r = e` writes back to it.
-            Expression::Borrow(inner, _) => Ok(Value::Ref(self.eval_place(
-                &inner.expr,
-                env,
-                ctx,
-                output,
-            )?)),
-            // `*r`: load through the reference.
+            Expression::Borrow(inner, _) => {
+                let (c, p) = self.eval_place(&inner.expr, env, ctx, output)?;
+                Ok(Value::Ref(c, p))
+            }
+            // `*r`: load through the reference (navigating its field path).
             Expression::Deref(inner) => match self.eval_expr(&inner.expr, env, ctx, output)? {
-                Value::Ref(c) => Ok(c.borrow().clone()),
+                Value::Ref(c, p) => Ok(read_ref(&(c, p))),
                 v => Ok(v),
             },
 
@@ -434,7 +485,7 @@ impl<'tcx> TypedProgram<'tcx> {
                 };
                 Ok(Value::Closure {
                     func: *func,
-                    env: Box::new(Value::Ref(cell(env_value))),
+                    env: Box::new(Value::Ref(cell(env_value), Vec::new())),
                 })
             }
 
@@ -465,6 +516,16 @@ impl<'tcx> TypedProgram<'tcx> {
 
             Expression::Match { scrutinee, arms } => {
                 let scrut_val = self.eval_expr(&scrutinee.expr, env, ctx, output)?;
+                // A borrowing `match` (scrutinee `&T`/`&mut T`) destructures
+                // through the reference: match the pointee's shape and bind each
+                // field as a reference *aliasing the live referent* (root cell +
+                // field path), so a `&mut` field binding writes back to the
+                // original, never a snapshot.
+                let borrowed = matches!(scrutinee.ty.kind(), TyKind::Ref(..) | TyKind::RefMut(..));
+                let referent: Option<Loc> = match (&scrut_val, borrowed) {
+                    (Value::Ref(c, p), true) => Some((c.clone(), p.clone())),
+                    _ => None,
+                };
                 for arm in arms {
                     // try-and-fall-back: clone `env`, attempt to match *and*
                     // bind in one recursive pass; only `Variant` sub-checks
@@ -472,7 +533,13 @@ impl<'tcx> TypedProgram<'tcx> {
                     // failed attempt simply discards its (partially-bound)
                     // env clone and moves on to the next arm.
                     let mut arm_env = env.clone();
-                    if bind_pattern(&arm.pattern, &scrut_val, &mut arm_env) {
+                    let matched = match &referent {
+                        Some((root, path)) => {
+                            bind_pattern_borrowed(&arm.pattern, root, path.clone(), &mut arm_env)
+                        }
+                        None => bind_pattern(&arm.pattern, &scrut_val, &mut arm_env),
+                    };
+                    if matched {
                         return self.eval_expr(&arm.body.expr, &mut arm_env, ctx, output);
                     }
                 }
@@ -546,17 +613,20 @@ impl<'tcx> TypedProgram<'tcx> {
         env: &mut Env<'tcx>,
         ctx: &CompileCtx<'tcx>,
         output: &mut dyn std::io::Write,
-    ) -> Result<Cell<'tcx>, InterpError> {
+    ) -> Result<Loc<'tcx>, InterpError> {
         match expr {
             Expression::Var(name) => env
                 .get(name)
                 .cloned()
+                .map(|c| (c, Vec::new()))
                 .ok_or(InterpError::UndefinedVariable(ctx.uniq_variable_name(name))),
+            // Reborrow `&(*r)` / `&mut (*r)`: the place is the location `r` already
+            // names (root cell + path), so a reborrow aliases the same storage.
             Expression::Deref(inner) => match self.eval_expr(&inner.expr, env, ctx, output)? {
-                Value::Ref(c) => Ok(c),
-                v => Ok(cell(v)),
+                Value::Ref(c, p) => Ok((c, p)),
+                v => Ok((cell(v), Vec::new())),
             },
-            _ => Ok(cell(self.eval_expr(expr, env, ctx, output)?)),
+            _ => Ok((cell(self.eval_expr(expr, env, ctx, output)?), Vec::new())),
         }
     }
 }
@@ -619,6 +689,69 @@ fn bind_pattern<'tcx>(
     }
 }
 
+/// As [`bind_pattern`], but for a **borrowing** match (destructuring through a
+/// reference): the sub-value under test lives at location `(root, path)` in the
+/// live referent. Each `Binding` leaf is bound to a reference *aliasing* that
+/// location (not a snapshot), so the body sees `&Field`/`&mut Field` and a
+/// write-through mutates the original. Refutable arms read the location to test
+/// the variant/literal.
+fn bind_pattern_borrowed<'tcx>(
+    pattern: &MatchPattern<'tcx>,
+    root: &Cell<'tcx>,
+    path: Vec<usize>,
+    env: &mut Env<'tcx>,
+) -> bool {
+    match pattern {
+        MatchPattern::Wildcard => true,
+        MatchPattern::Binding { var, .. } => {
+            env.insert(*var, cell(Value::Ref(root.clone(), path)));
+            true
+        }
+        MatchPattern::Variant {
+            enum_ref,
+            variant_idx,
+            payload,
+            ..
+        } => {
+            let matches_ctor = match read_ref(&(root.clone(), path.clone())) {
+                Value::Constructor {
+                    enum_ref: er,
+                    variant_idx: vi,
+                    ..
+                } => er == *enum_ref && vi == *variant_idx,
+                _ => false,
+            };
+            if !matches_ctor {
+                return false;
+            }
+            match payload {
+                None => true,
+                // the payload sits at field index 1 of the constructor (matching
+                // the MIR `{ disc, payload }` field numbering used by `nav`).
+                Some((_, sub_pat)) => {
+                    let mut sub_path = path;
+                    sub_path.push(1);
+                    bind_pattern_borrowed(sub_pat, root, sub_path, env)
+                }
+            }
+        }
+        MatchPattern::IntLit(n) => {
+            matches!(read_ref(&(root.clone(), path)), Value::Int(v) if v == *n)
+        }
+        MatchPattern::BoolLit(b) => {
+            matches!(read_ref(&(root.clone(), path)), Value::Bool(v) if v == *b)
+        }
+        MatchPattern::Tuple {
+            elems: sub_patterns,
+            ..
+        } => sub_patterns.iter().enumerate().all(|(i, p)| {
+            let mut sub_path = path.clone();
+            sub_path.push(i);
+            bind_pattern_borrowed(p, root, sub_path, env)
+        }),
+    }
+}
+
 fn eval_stmt<'tcx>(
     prog: &TypedProgram<'tcx>,
     stmt: &Statement<'tcx>,
@@ -650,8 +783,8 @@ fn eval_stmt<'tcx>(
         } => {
             let v = prog.eval_expr(&value.expr, env, ctx, output)?;
             match prog.eval_expr(&reference.expr, env, ctx, output)? {
-                Value::Ref(c) => {
-                    *c.borrow_mut() = v;
+                Value::Ref(c, p) => {
+                    write_ref(&(c, p), v);
                 }
                 other => unreachable!(
                     "ill-typed write-through: `*r = e` where r is not a reference ({other:?}) \
@@ -855,7 +988,7 @@ fn eval_intrinsic<'tcx>(
         Intrinsic::PtrRead => {
             debug_assert_eq!(vals.len(), 1, "__ptr_read expects 1 arg");
             match &vals[0] {
-                Value::Ref(c) => Ok(c.borrow().clone()),
+                Value::Ref(c, p) => Ok(read_ref(&(c.clone(), p.clone()))),
                 v => Err(InterpError::Runtime(format!(
                     "__ptr_read: expected a pointer, got {}",
                     fmt(v)
@@ -865,8 +998,8 @@ fn eval_intrinsic<'tcx>(
         Intrinsic::PtrWrite => {
             debug_assert_eq!(vals.len(), 2, "__ptr_write expects 2 args");
             match &vals[0] {
-                Value::Ref(c) => {
-                    *c.borrow_mut() = vals[1].clone();
+                Value::Ref(c, p) => {
+                    write_ref(&(c.clone(), p.clone()), vals[1].clone());
                     Ok(Value::Unit)
                 }
                 v => Err(InterpError::Runtime(format!(
@@ -893,7 +1026,7 @@ fn eval_intrinsic<'tcx>(
 /// at `Unit` (the HIR cell has no uninitialised state).
 fn eval_extern<'tcx>(symbol: &str, _vals: Vec<Value<'tcx>>) -> Result<Value<'tcx>, InterpError> {
     match symbol {
-        "malloc" | "calloc" => Ok(Value::Ref(cell(Value::Unit))),
+        "malloc" | "calloc" => Ok(Value::Ref(cell(Value::Unit), Vec::new())),
         "free" => Ok(Value::Unit),
         other => Err(InterpError::Runtime(format!(
             "extern function '{other}' is not supported by the interpreter"
@@ -933,7 +1066,7 @@ fn fmt_value<'tcx>(v: &Value<'tcx>, ctx: &CompileCtx<'tcx>) -> String {
                 .join(", ");
             format!("({inner})")
         }
-        Value::Ref(c) => format!("&{}", fmt_value(&c.borrow(), ctx)),
+        Value::Ref(c, p) => format!("&{}", fmt_value(&read_ref(&(c.clone(), p.clone())), ctx)),
         Value::Closure { .. } => "<closure>".to_string(),
     }
 }
@@ -970,7 +1103,7 @@ fn value_to_expr<'tcx>(v: Value<'tcx>, ctx: &CompileCtx<'tcx>) -> Expression<'tc
         ),
         // A program's top-level result is never a bare reference: the escape
         // check forbids returning references to locals, and `main : Int`.
-        Value::Ref(_) => unreachable!("a program result cannot be a bare reference"),
+        Value::Ref(..) => unreachable!("a program result cannot be a bare reference"),
         // `main : Int`, so a closure never escapes as a program result.
         Value::Closure { .. } => unreachable!("a program result cannot be a closure"),
     }

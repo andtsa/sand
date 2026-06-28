@@ -27,7 +27,7 @@ fn lower_function<'tcx>(
     func: &th::TypedFunction<'tcx>,
     ctx: &CompileCtx<'tcx>,
 ) -> MirFunction<'tcx> {
-    let mut cx = FnCx::new(func.name, func.range, func.ret_type, ctx.types);
+    let mut cx = FnCx::new(func.name, func.range, func.ret_type, ctx);
 
     let params = func
         .parameters
@@ -84,7 +84,7 @@ fn fix_terminator_ids(term: &mut Terminator, n: usize) {
     }
 }
 
-fn collect_locals<'tcx>(cx: &mut FnCx<'tcx>, expr: &th::Expr<'tcx>) {
+fn collect_locals<'tcx>(cx: &mut FnCx<'_, 'tcx>, expr: &th::Expr<'tcx>) {
     match &expr.expr {
         th::Expression::Block {
             statements, expr, ..
@@ -189,7 +189,7 @@ fn collect_locals<'tcx>(cx: &mut FnCx<'tcx>, expr: &th::Expr<'tcx>) {
 }
 
 /// Recursively declare MIR locals for every variable bound in a `LetPattern`.
-fn declare_pattern_locals<'tcx>(cx: &mut FnCx<'tcx>, pattern: &th::MatchPattern<'tcx>) {
+fn declare_pattern_locals<'tcx>(cx: &mut FnCx<'_, 'tcx>, pattern: &th::MatchPattern<'tcx>) {
     match pattern {
         th::MatchPattern::Binding {
             var,
