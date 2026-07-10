@@ -1,0 +1,47 @@
+//@TEST: run
+// exit: 5
+// stdout: [10, 5]
+
+// phase 0 extending the language:
+//   mutable variables, blocks & scoping, if / while statements, and richer
+//   functions (statement bodies, 0..n parameters, mutable parameters).
+
+def double(x: Int): Int := {
+    let y = x * 2;
+    y
+}
+
+def answer(): Int := 42
+
+def plus3(a: Int, b: Int, c: Int): Int := a + b + c
+
+def double_in_place(mut x: Int): Int := {
+    x = x * 2;
+    x
+}
+
+def main(): Int := {
+    let mut x = 0;
+
+    while x < 10 do {
+        x = x + 1;
+    };
+    println(x);                   // 10
+
+    // a block has its own scope: `y` is invisible afterwards, but the mutation
+    // of the outer `mut total` survives the block.
+    let mut total = 0;
+    {
+        let y = double(x);        // 20
+        total = y / 4;            // 5
+    };
+
+    if total < 1 then {
+        total = answer();
+    } else {
+        total = total + plus3(0, 0, 0) + double_in_place(0);
+    };
+
+    println(total);               // 5
+    total                         // exit code 5
+}

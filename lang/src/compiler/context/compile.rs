@@ -175,6 +175,11 @@ pub struct CompileCtx<'tcx> {
     /// when `core.sand` registers them), used to drive implicit-copy.
     copy_class: Option<TypeclassRef>,
     clone_class: Option<TypeclassRef>,
+    /// Lang-item handles for the `Send` / `Sync` thread-safety marker classes
+    /// (resolved by name from `core.sand`), so the compiler can reason about
+    /// them structurally (like `Copy`) when checking `where T : Send` bounds.
+    send_class: Option<TypeclassRef>,
+    sync_class: Option<TypeclassRef>,
     /// The `Heaped` lang-item class (a registration hook). The class itself is
     /// declared in `core.sand`; this slot stays `None` until then, but the
     /// by-name registration is reserved here so the compiler can emit
@@ -345,6 +350,8 @@ impl<'tcx> CompileCtx<'tcx> {
             instances: Default::default(),
             copy_class: None,
             clone_class: None,
+            send_class: None,
+            sync_class: None,
             heaped_class: None,
             unique_instances: Default::default(),
             cur_build_module: None,
@@ -550,9 +557,24 @@ impl<'tcx> CompileCtx<'tcx> {
         self.intern_ty(TyKind::Ptr(inner))
     }
 
-    /// Intern a function type `arg -> ret` with the given calling mode.
+    /// Intern a function type `arg -> ret` with the given calling mode and a
+    /// capture-free (`Unit`) environment. Used for top-level functions and for
+    /// signature/abstract arrow positions.
     pub fn fn_ty(&mut self, arg: Ty<'tcx>, ret: Ty<'tcx>, mode: FnMode) -> Ty<'tcx> {
-        self.intern_ty(TyKind::Fn(arg, ret, mode))
+        let env = self.types.unit;
+        self.intern_ty(TyKind::Fn(arg, ret, mode, env))
+    }
+
+    /// Intern a closure type `arg -> ret` carrying an explicit environment type
+    /// (the structural tuple of its captures). See [`TyKind::Fn`].
+    pub fn closure_ty(
+        &mut self,
+        arg: Ty<'tcx>,
+        ret: Ty<'tcx>,
+        mode: FnMode,
+        env: Ty<'tcx>,
+    ) -> Ty<'tcx> {
+        self.intern_ty(TyKind::Fn(arg, ret, mode, env))
     }
 
     /// Intern a higher-kinded parameter application `F<args>`.
@@ -1623,6 +1645,10 @@ impl<'tcx> CompileCtx<'tcx> {
         match def.name.as_str() {
             "Copy" => self.copy_class = Some(tref),
             "Clone" => self.clone_class = Some(tref),
+            // Thread-safety markers; the compiler reasons about them
+            // structurally (see `structurally_marked`).
+            "Send" => self.send_class = Some(tref),
+            "Sync" => self.sync_class = Some(tref),
             // Reserved; harmless until `core.sand` declares `Heaped`.
             "Heaped" => self.heaped_class = Some(tref),
             _ => {}
@@ -1743,6 +1769,10 @@ impl<'tcx> CompileCtx<'tcx> {
         {
             return true;
         }
+        // 2b. builtin structural instances of the `Send`/`Sync` marker lang-items.
+        if self.is_marker_class(class) && self.structurally_marked(class, ty, assumptions) {
+            return true;
+        }
         // 3. a registered instance.
         self.type_head(ty)
             .is_some_and(|head| self.lookup_instance(class, head).is_some())
@@ -1753,6 +1783,38 @@ impl<'tcx> CompileCtx<'tcx> {
     /// `impl`.
     fn is_structural_copy_class(&self, class: TypeclassRef) -> bool {
         self.copy_class == Some(class) || self.clone_class == Some(class)
+    }
+
+    /// Whether `class` is the `Send` or `Sync` thread-safety marker.
+    fn is_marker_class(&self, class: TypeclassRef) -> bool {
+        self.send_class == Some(class) || self.sync_class == Some(class)
+    }
+
+    /// The builtin structural `Send`/`Sync` instances. Primitives are
+    /// `Send + Sync`; a shared `&T` is `Send`/`Sync` iff `T : Sync` (a shared
+    /// borrow may cross or be shared only when the referent is
+    /// thread-shareable); a `&mut T` follows `T` for the *same* marker; a
+    /// region-annotated type and a tuple are structural; a raw `Ptr<T>` is
+    /// neither (it escapes the ownership discipline). Anything else defers
+    /// to a registered `impl`.
+    fn structurally_marked(
+        &self,
+        class: TypeclassRef,
+        ty: Ty<'tcx>,
+        assumptions: &[crate::compiler::structure::TypeConstraint],
+    ) -> bool {
+        match ty.kind() {
+            TyKind::Int | TyKind::Bool | TyKind::Unit => true,
+            // `&T : Send` and `&T : Sync` both require `T : Sync`.
+            TyKind::Ref(_, t) => self
+                .sync_class
+                .is_some_and(|sync| self.satisfies(sync, *t, assumptions)),
+            // `&mut T : Send` ⟺ `T : Send`; `&mut T : Sync` ⟺ `T : Sync`.
+            TyKind::RefMut(_, t) => self.satisfies(class, *t, assumptions),
+            TyKind::Region(t, _) => self.satisfies(class, *t, assumptions),
+            TyKind::Tuple(elems) => elems.iter().all(|e| self.satisfies(class, *e, assumptions)),
+            _ => false,
+        }
     }
 
     /// The builtin structural `Copy`/`Clone` instances: a shared `&T` and a raw

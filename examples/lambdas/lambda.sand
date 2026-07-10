@@ -1,0 +1,30 @@
+//@TEST: run
+// exit: 0
+// stdout: [42, 42, 55, 111]
+// lambda values and first-class functions.
+
+def apply(f: Int -> Int, x: Int): Int := f(x)
+
+// Return a function value that *captures* this function's parameter `n`. The
+// returned closure outlives `make_adder`'s frame, so its environment (holding
+// `n`) is heap-allocated.
+def make_adder(n: Int): Int -> Int := fn (x: Int) -> x + n
+
+def main(): Int := {
+    // bind a lambda, then call it
+    let double = fn (x: Int) -> x * 2;
+    println(double(21));               // 42
+
+    // pass a lambda to a higher-order function
+    println(apply(fn (m: Int) -> m + 5, 37));   // 42
+
+    // capture a local, then apply
+    let bonus: Int = 13;
+    let with_bonus = fn (x: Int) -> x + bonus;
+    println(with_bonus(42));          // 55
+
+    // a returned closure capturing a parameter
+    println(apply(make_adder(100), 11));   // 111
+
+    0
+}

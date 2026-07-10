@@ -196,7 +196,9 @@ boolean ::= "true" | "false"
   _pattern_, where a leading `-` is part of the literal (§7.1).
 - **Boolean literals** are `true` and `false`, of type `Bool`.
 - There is no character or string literal in the surface language at this time.
-- The unit value is written `()` (the empty parenthesisation), of type `Unit`.
+- There is **no `()` literal**. A value of type `Unit` (§3.1) is produced by an
+  empty block `{ }`, or by an `if` with no `else` (§4.5). The word `Unit` is only
+  the *type*, not a value expression.
 
 ### 2.8 Regions (lifetimes)
 
@@ -244,7 +246,7 @@ The three built-in primitives are spelled with reserved words:
 |--------|-------------------------|------------------------------------|
 | `Int`  | integer literals (§2.7) | machine integer; arithmetic in §4  |
 | `Bool` | `true`, `false`         | result of comparisons, logic       |
-| `Unit` | `()`                    | the single-valued type; the value of a statement-only block |
+| `Unit` | `{ }` (empty block)     | the single-valued type; the value of a statement-only block; no `()` literal (§2.7) |
 
 All three are **`Copy`** (§8.2): using a value of a `Copy` type does not move it.
 They are the only primitive types; there is no floating-point, character, or
@@ -387,10 +389,11 @@ arrow_kind ::= "Owned" | "BorrowedMut" | "Borrowed"
   | `-[BorrowedMut]>`| `ReusableMut` | `FnMut`   | may mutate its environment               |
   | `-[Owned]>`      | `Consuming`   | `FnOnce`  | may consume its environment; callable once |
 
-  The bare `->` is the default and the only mode produced from current surface
-  syntax; the others are reserved for when closures with captured environments
-  land. A more-permissive function value may stand in where a less-permissive
-  arrow is expected (`Fn ⊆ FnMut ⊆ FnOnce`) *[Calculus: Types]*.
+  The bare `->` is the default. The annotated arrows are also accepted in
+  surface syntax; in particular `-[Owned]>` produces a single-use (`FnOnce`)
+  function, and using such a value twice is a static error. A more-permissive
+  function value may stand in where a less-permissive arrow is expected
+  (`Fn ⊆ FnMut ⊆ FnOnce`) *[Calculus: Types]*.
 
 ```sand
 def apply(f: Int -> Int, x: Int): Int := f(x)
@@ -523,9 +526,9 @@ whileloop   ::= "while" expression "do" expression
 
 - **`if`**: the condition must be `Bool`. With both branches, the two branch
   types must agree (modulo region meet) and the result kind is the join of the
-  branch kinds *[Calculus: Bidirectional Typing]*. An `if` **without** `else` is sugar for
-  `if c then e else ()` (§11), which requires the `then` branch to have type
-  `Unit`.
+  branch kinds *[Calculus: Bidirectional Typing]*. An `if` **without** `else` is
+  sugar for `if c then e else {}` (§11), where the `else` is the unit value;
+  this requires the `then` branch to have type `Unit`.
 - **`while`**: the condition must be `Bool`; the loop's value is always `Unit`.
   There is no `break`/`continue`. As a special case, `while true do …` can never
   exit, so it has kind `Never` (it diverges) rather than `Owned`.
@@ -584,7 +587,8 @@ tuple_expr ::= "(" expression ( "," expression )+ ")"
 ```
 
 A parenthesised list of two or more expressions builds a tuple (§3.4). `(e)` is
-grouping, not a 1-tuple; the unit value is `()`.
+grouping, not a 1-tuple. There is no `()` literal; the unit value is an empty
+block `{ }` (§2.7, §3.1).
 
 ### 4.9 Lambdas
 
@@ -603,10 +607,12 @@ fmap(Option#Some(21), fn (n: Int) -> n * 2)
 let g: Int -> Int = fn (n: Int) -> n + 1;
 ```
 
-> Lambdas currently take a single parameter and produce a `Reusable` (`->`)
-> arrow. Multi-argument functions are expressed by tupling or currying. Closures
-> that capture and the borrowing/consuming arrow modes are a planned extension
-> *[Calculus: Terms]*.
+> A lambda takes a single parameter; multi-argument functions are expressed by
+> tupling or currying. A lambda may **capture** locals from the enclosing scope
+> (e.g. `fn (x: Int) -> x + bonus`); when the resulting closure outlives the
+> frame it captured from, its environment is heap-allocated. The default arrow is
+> `Reusable` (`->`); annotating it `-[Owned]>` makes the closure single-use
+> (§3.8) *[Calculus: Terms]*.
 
 ---
 
@@ -621,8 +627,8 @@ block ::= "{" ( monadic_bind | statement )* expression? "}"
 ```
 
 Statements execute in order (§12.1). The block's value is its trailing
-expression; if the trailing expression is omitted, the block's value is `()` of
-type `Unit`. A block introduces a new scope: bindings made inside it are not
+expression; if the trailing expression is omitted, the block's value is the unit
+value, of type `Unit`. A block introduces a new scope: bindings made inside it are not
 visible outside, owned locals are dropped at block exit in reverse declaration
 order (§8.5), and the block's result may not name a region introduced inside it
 (the escape check, §8.4).
@@ -775,7 +781,7 @@ a multi-type payload is sugar for a single tuple payload (§11). Type and region
 parameters may be declared (§9.1), with optional variance and kind annotations.
 
 ```sand
-type Ordering := Lt | Eq | Gt
+type Ordering = Lt | Eq | Gt
 type Option<+a> = #none | #some(a)
 type Expr = Lit(Int) | Add(Expr, Expr) | Neg(Expr) deriving Heaped
 ```
@@ -972,9 +978,10 @@ that is just a dereference.
 
 `&e` / `&mut e` borrow without consuming (§4.4). The ownership pass enforces
 **`&mut` exclusivity**: while a mutable borrow of a place is live, no other
-borrow of that place may exist. Borrows are released lexically at the end of the
-block in which they are taken; at an `if`/`match` merge, the surviving borrows of
-the branches are unioned.
+borrow of that place may exist. Borrows are released non-lexically: a loan is
+pruned once the holder's last use has passed, with a lexical block-exit restore
+kept as a backstop for temporaries and untracked loans. At an `if`/`match`
+merge, the surviving borrows of the branches are unioned.
 
 ```sand
 def incr(r: &mut Int): Unit := *r = *r + 1
@@ -1009,6 +1016,36 @@ branch where it survived, so the value is uniformly consumed at the merge with n
 runtime drop flags and no leak. Drops recurse structurally and, for heaped values
 (§13), free the backing allocation. The drop of a value runs the structural
 destructor for its type.
+
+### 8.6 Thread-safety markers and `spawn`
+
+Two **marker typeclasses** (declared in the core library, with no methods, like
+`Copy`) classify thread safety:
+
+- **`Send<T>`**: a value of `T` may be moved to another thread.
+- **`Sync<T>`**: `&T` may be shared with another thread (equivalently, `&T :
+  Send`).
+
+The compiler satisfies them **structurally**: primitives (`Int`, `Bool`, `Unit`)
+are `Send + Sync`; a shared `&T` is `Send`/`Sync` iff `T : Sync`; a `&mut T` is
+`Send` iff `T : Send` and `Sync` iff `T : Sync`; a tuple iff every element is; a
+raw `Ptr<T>` is **neither** (it escapes the ownership discipline). An aggregate
+type opts in with an empty `impl Send for E { }` (and `impl Sync`).
+
+The core library exposes a minimal threading interface whose safety rests on
+these bounds:
+
+```sand
+def spawn<T, R>(f: T -> R, arg: T): Thread<R> where T : Send, R : Send
+def join<R>(t: Thread<R>): R
+```
+
+`spawn` moves `arg` (which must be `Send`) into the computation `f` and yields a
+`Thread<R>` handle; `join` waits for it and takes the `Send` result. There is no
+shared mutable state in this interface, so a program using it is data-race free
+by construction. *(The current implementation runs `spawn` synchronously; real
+OS threads are a forthcoming change that preserves this interface and these
+bounds.)*
 
 ---
 
@@ -1138,9 +1175,10 @@ sources = [
 ]
 ```
 
-`sources` lists files and/or directories; directories are searched for `.sand`
-files. The compiler merges all listed sources into one program before type
-checking. A single file can also be compiled directly without a project.
+Both fields are optional. `sources` lists files and/or directories; directories
+are searched **recursively** for `.sand` files. The compiler merges all listed
+sources into one program before type checking. A single file can also be
+compiled directly without a project.
 
 ### 10.5 The core library
 
@@ -1159,7 +1197,7 @@ applied.
 
 | Surface form | Desugars to |
 |--------------|-------------|
-| `if c then e` (no `else`) | `if c then e else ()` (requires `e : Unit`) |
+| `if c then e` (no `else`) | `if c then e else {}` (empty-block unit value; requires `e : Unit`) |
 | `let &x = e` / `let &mut x = e` | a borrow-typed `let` binding `x` to `&e` / `&mut e` |
 | Comma payload `Cons(a, b)` | single tuple payload `Cons((a, b))` (in expressions, patterns, and `enum_variant` declarations) |
 | Multi-type variant `V(A, B)` | single tuple-payload variant `V((A, B))` |
@@ -1205,7 +1243,7 @@ Evaluation is **eager** and **left-to-right**:
 
 - `if c then a else b` evaluates `c`, then exactly one branch.
 - `while c do body` re-evaluates `c` before each iteration and runs `body` while
-  `c` is `true`; its value is `()`. There is no `break`/`continue`, so a loop
+  `c` is `true`; its value has type `Unit`. There is no `break`/`continue`, so a loop
   whose condition is statically `true` diverges (§12.5).
 - `match` evaluates the scrutinee once and runs the first matching arm,
   consuming the scrutinee (§7.2).

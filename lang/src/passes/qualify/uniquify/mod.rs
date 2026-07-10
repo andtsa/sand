@@ -151,19 +151,23 @@ where
     })
 }
 
-/// If `name` is *not* a known function but *is* a bound local, return that
-/// local (an indirect call: applying a function value). Otherwise `None`.
+/// If `name` is a bound local, return it (an indirect call: applying a
+/// function-typed value). Otherwise `None` (an ordinary global-function call).
 fn indirect_callee<'a, 'u, 'tcx>(name: String) -> Uniq<'a, 'u, 'tcx, Option<UniqVar<'tcx>>>
 where
     'u: 'a,
     'tcx: 'a,
 {
     state(move |u: UniqCtx<'u, 'tcx>| {
-        let r = if u.compile_ctx.lookup_function_by_name(&name).is_none() {
-            u.lookup_var_opt(&HirVar::Unqualified(name))
-        } else {
-            None
-        };
+        // Lexical scoping, as in Rust: a local binding `name` in scope *shadows*
+        // a global function of the same name in call position, so `name(arg)`
+        // applies the local (whether it is callable is the type checker's job).
+        // Only when no local `name` is in scope is the call resolved against the
+        // global functions. This is what lets a higher-order *parameter* called
+        // as `f(v)` reach the parameter rather than being misrouted to some
+        // unrelated global `f` (possibly in another module, e.g. the user's),
+        // which is essential for the higher-order functions in the core library.
+        let r = u.lookup_var_opt(&HirVar::Unqualified(name));
         (r, u)
     })
 }
@@ -311,9 +315,9 @@ where
             }
         }
 
-        // a single-argument call to a bare `Local` name *may* be an indirect
-        // call (applying a function value) if the name is a bound local and
-        // not a known function; otherwise it is an ordinary call.
+        // a single-argument call to a bare `Local` name is an indirect call
+        // (applying a function value) when the name is a bound local that
+        // shadows any global of the same name; otherwise it is an ordinary call.
         Expression::Call {
             fn_name: HirFnCall::Local(name),
             args,

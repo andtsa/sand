@@ -122,39 +122,40 @@ fn constructor_arity_mismatch_is_rejected() {
 }
 
 // --- the `Functor`/`Applicative`/`Monad` hierarchy (from `core.sand`) ---
-// instantiated for `Option`, exercising HKT instances whose methods take and
-// return lambdas. The codegen path is covered by `examples/monad.sand`; these
-// assert HIR/MIR interpreter agreement.
+// instantiated for `Opt`, exercising HKT instances whose methods take and
+// return lambdas. The codegen path is covered by
+// `examples/typeclasses/monad.sand`; these assert HIR/MIR interpreter
+// agreement.
 
-/// An `Option` with `Functor`/`Applicative`/`Monad` instances, plus an
+/// An `Opt` with `Functor`/`Applicative`/`Monad` instances, plus an
 /// `or_else` to project the result back to an `Int` for assertions.
 const MONAD: &str = "\
-    type Option<a> = None | Some(a) \n \
-    impl Functor for Option { \n \
-        def fmap<A, B>(x: Option<A>, f: A -> B): Option<B> := match x { \n \
-            Option#None => Option#None, \n \
-            Option#Some(v) => Option#Some(f(v)), \n \
+    type Opt<a> = None | Some(a) \n \
+    impl Functor for Opt { \n \
+        def fmap<A, B>(x: Opt<A>, f: A -> B): Opt<B> := match x { \n \
+            Opt#None => Opt#None, \n \
+            Opt#Some(v) => Opt#Some(f(v)), \n \
         } \n \
     } \n \
-    impl Applicative for Option { \n \
-        def pure<A>(x: A): Option<A> := Option#Some(x) \n \
-        def ap<A, B>(f: Option<A -> B>, x: Option<A>): Option<B> := match f { \n \
-            Option#None => Option#None, \n \
-            Option#Some(g) => match x { \n \
-                Option#None => Option#None, \n \
-                Option#Some(v) => Option#Some(g(v)), \n \
+    impl Applicative for Opt { \n \
+        def pure<A>(x: A): Opt<A> := Opt#Some(x) \n \
+        def ap<A, B>(f: Opt<A -> B>, x: Opt<A>): Opt<B> := match f { \n \
+            Opt#None => Opt#None, \n \
+            Opt#Some(g) => match x { \n \
+                Opt#None => Opt#None, \n \
+                Opt#Some(v) => Opt#Some(g(v)), \n \
             }, \n \
         } \n \
     } \n \
-    impl Monad for Option { \n \
-        def bind<A, B>(x: Option<A>, f: A -> Option<B>): Option<B> := match x { \n \
-            Option#None => Option#None, \n \
-            Option#Some(v) => f(v), \n \
+    impl Monad for Opt { \n \
+        def bind<A, B>(x: Opt<A>, f: A -> Opt<B>): Opt<B> := match x { \n \
+            Opt#None => Opt#None, \n \
+            Opt#Some(v) => f(v), \n \
         } \n \
     } \n \
-    def or_else(x: Option<Int>, d: Int): Int := match x { \n \
-        Option#None => d, \n \
-        Option#Some(v) => v, \n \
+    def or_else(x: Opt<Int>, d: Int): Int := match x { \n \
+        Opt#None => d, \n \
+        Opt#Some(v) => v, \n \
     } \n";
 
 #[test]
@@ -162,7 +163,7 @@ fn functor_fmap_over_present_value() {
     assert_eq!(
         run_both(&format!(
             "{MONAD} def main(): Int := \n \
-             or_else(fmap(Option#Some(21), fn (n: Int) -> n * 2), 0)"
+             or_else(fmap(Opt#Some(21), fn (n: Int) -> n * 2), 0)"
         )),
         Expression::Int(42)
     );
@@ -173,7 +174,7 @@ fn functor_fmap_over_absent_short_circuits() {
     assert_eq!(
         run_both(&format!(
             "{MONAD} def main(): Int := \n \
-             {{ let none: Option<Int> = Option#None; \n \
+             {{ let none: Opt<Int> = Opt#None; \n \
                 or_else(fmap(none, fn (n: Int) -> n * 2), 7) }}"
         )),
         Expression::Int(7)
@@ -183,11 +184,11 @@ fn functor_fmap_over_absent_short_circuits() {
 #[test]
 fn applicative_pure_dispatches_from_expected_type() {
     // `pure` has no `F<_>` argument; its instance is recovered from the annotated
-    // expected type (`Option<Int>`).
+    // expected type (`Opt<Int>`).
     assert_eq!(
         run_both(&format!(
             "{MONAD} def main(): Int := \n \
-             {{ let lifted: Option<Int> = pure(42); or_else(lifted, 0) }}"
+             {{ let lifted: Opt<Int> = pure(42); or_else(lifted, 0) }}"
         )),
         Expression::Int(42)
     );
@@ -198,8 +199,8 @@ fn applicative_ap_applies_wrapped_function() {
     assert_eq!(
         run_both(&format!(
             "{MONAD} def main(): Int := \n \
-             {{ let wf: Option<Int -> Int> = Option#Some(fn (n: Int) -> n + 1); \n \
-                or_else(ap(wf, Option#Some(21)), 0) }}"
+             {{ let wf: Opt<Int -> Int> = Opt#Some(fn (n: Int) -> n + 1); \n \
+                or_else(ap(wf, Opt#Some(21)), 0) }}"
         )),
         Expression::Int(22)
     );
@@ -210,7 +211,7 @@ fn monad_bind_chains_computations() {
     assert_eq!(
         run_both(&format!(
             "{MONAD} def main(): Int := \n \
-             or_else(bind(Option#Some(21), fn (n: Int) -> Option#Some(n + 22)), 0)"
+             or_else(bind(Opt#Some(21), fn (n: Int) -> Opt#Some(n + 22)), 0)"
         )),
         Expression::Int(43)
     );
@@ -221,11 +222,11 @@ fn monad_instance_requires_superclasses() {
     // `Monad requires Applicative requires Functor`; an `impl Monad` without the
     // superclass instances is rejected.
     typecheck_fails(
-        "type Option<a> = None | Some(a) \n \
-         impl Monad for Option { \n \
-             def bind<A, B>(x: Option<A>, f: A -> Option<B>): Option<B> := match x { \n \
-                 Option#None => Option#None, \n \
-                 Option#Some(v) => f(v), \n \
+        "type Opt<a> = None | Some(a) \n \
+         impl Monad for Opt { \n \
+             def bind<A, B>(x: Opt<A>, f: A -> Opt<B>): Opt<B> := match x { \n \
+                 Opt#None => Opt#None, \n \
+                 Opt#Some(v) => f(v), \n \
              } \n \
          } \n def main(): Int := 0",
     );
@@ -233,7 +234,7 @@ fn monad_instance_requires_superclasses() {
 
 // --- do-notation ---
 // any block containing a top-level `<-` desugars to nested `bind` calls.
-// Reuses the `MONAD` Option instance above.
+// Reuses the `MONAD` Opt instance above.
 
 #[test]
 fn do_notation_single_bind() {
@@ -241,7 +242,7 @@ fn do_notation_single_bind() {
     assert_eq!(
         run_both(&format!(
             "{MONAD} def main(): Int := \n \
-             or_else({{ x: Int <- Option#Some(20); Option#Some(x + 1) }}, 0)"
+             or_else({{ x: Int <- Opt#Some(20); Opt#Some(x + 1) }}, 0)"
         )),
         Expression::Int(21)
     );
@@ -253,10 +254,10 @@ fn do_notation_chains_and_keeps_pure_lets() {
     assert_eq!(
         run_both(&format!(
             "{MONAD} def main(): Int := or_else({{ \n \
-                 x: Int <- Option#Some(20); \n \
+                 x: Int <- Opt#Some(20); \n \
                  let doubled = x * 2; \n \
-                 y: Int <- Option#Some(doubled + 2); \n \
-                 Option#Some(x + y) \n \
+                 y: Int <- Opt#Some(doubled + 2); \n \
+                 Opt#Some(x + y) \n \
              }}, 0)"
         )),
         // x=20, doubled=40, y=42, 20+42 = 62
@@ -267,13 +268,13 @@ fn do_notation_chains_and_keeps_pure_lets() {
 #[test]
 fn do_notation_short_circuits_on_none() {
     // A `None` bound by `<-` short-circuits the whole block (Monad bind for
-    // Option).
+    // Opt).
     assert_eq!(
         run_both(&format!(
             "{MONAD} def main(): Int := or_else({{ \n \
-                 let none: Option<Int> = Option#None; \n \
+                 let none: Opt<Int> = Opt#None; \n \
                  x: Int <- none; \n \
-                 Option#Some(x + 1) \n \
+                 Opt#Some(x + 1) \n \
              }}, -1)"
         )),
         Expression::Int(-1)
@@ -285,7 +286,7 @@ fn do_notation_block_without_trailing_expr_is_rejected() {
     // A block using `<-` must end in a trailing expression (its monadic result).
     typecheck_fails(&format!(
         "{MONAD} def main(): Int := \n \
-         or_else({{ x: Int <- Option#Some(1); }}, 0)"
+         or_else({{ x: Int <- Opt#Some(1); }}, 0)"
     ));
 }
 
@@ -315,7 +316,7 @@ fn method_call_rejects_wrong_arg_type() {
 fn method_call_rejects_non_function_where_function_expected() {
     // Passing `5` where `fmap` expects `A -> B`.
     typecheck_fails(&format!(
-        "{MONAD} def main(): Int := or_else(fmap(Option#Some(1), 5), 0)"
+        "{MONAD} def main(): Int := or_else(fmap(Opt#Some(1), 5), 0)"
     ));
 }
 

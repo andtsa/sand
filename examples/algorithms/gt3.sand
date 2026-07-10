@@ -1,0 +1,27 @@
+//@TEST: run
+// exit: 5
+
+    def is_greater_than_three(n: Int): Bool :=
+    {
+        if n > 3 then {
+            true
+        } else {
+            false
+        }
+    }
+
+
+    def main(): Int :=
+    {
+        let mut i: Int = 1;
+        let mut cond: Bool = false;
+        while !cond do {
+            cond = is_greater_than_three(i);
+            i = i + 1;
+        };
+
+        i
+    }
+
+
+

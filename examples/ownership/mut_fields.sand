@@ -1,0 +1,21 @@
+//@TEST: run
+// exit: 50
+
+// Destructuring through a `&mut` reference: each field binds as `&mut`, so the
+// arm can mutate the borrowed value's fields in place. The disjoint field
+// borrows (`a`, `b`) coexist because they name distinct fields, and the single
+// exclusive `&mut p` borrow keeps anything else from touching `p` meanwhile.
+
+type Pair = P(Int, Int)
+
+def scale(p: &mut Pair, k: Int): Unit := match p {
+    Pair#P(a, b) => { *a = *a * k; *b = *b * k; }   // a, b : &mut Int
+}
+
+def main(): Int := {
+    let mut p = Pair#P(3, 7);
+    // The mutation persists to `p`: scoped so the exclusive borrow is released
+    // before the owned read below.
+    { scale(&mut p, 5); };          // p = (15, 35)
+    match p { Pair#P(a, b) => a + b }   // 50
+}

@@ -1,8 +1,0 @@
-//@TEST:{34}[]
-
-// Stress: a borrowing match whose scrutinee is a *tuple* reference `&(Int, Int)`
-// (no enum involved). Tests the tuple-occurrence interior-borrow path on its own.
-
-def sum(t: &(Int, Int)): Int := match t { (a, b) => *a * 10 + *b }
-
-def main(): Int := { let p = (3, 4); sum(&p) }

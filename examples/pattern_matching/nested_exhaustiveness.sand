@@ -1,0 +1,21 @@
+//@TEST: run
+// exit: 0
+// stdout: [1, 2, 1, 0]
+
+type Inner = X | Y
+type Outer = A(Inner) | B
+
+def classify(o: Outer): Int :=
+    match o {
+        Outer#A(Inner#X) => 1,
+        Outer#A(Inner#Y) => 2,
+        Outer#B          => 0,
+    }
+
+def main(): Int := {
+    println(classify(Outer#A(Inner#X)));  // 1
+    println(classify(Outer#A(Inner#Y)));  // 2
+    println(classify(Outer#A(Inner#X)));  // 1
+    println(classify(Outer#B));           // 0
+    0
+}

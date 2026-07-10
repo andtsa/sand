@@ -1,0 +1,26 @@
+//@TEST: run
+// exit: 0
+// stdout: [40, -1]
+
+// `do`-notation desugars to the core `Option` monad's `bind` (each `<-` is a
+// `bind` that short-circuits on `None`). The instances live in the core library.
+
+def safe_div(a: Int, b: Int): Option<Int> := if b == 0 then Option#None else Option#Some(a / b)
+def or_else(x: Option<Int>, fallback: Int): Int := match x {
+    Option#Some(v) => v,
+    Option#None => fallback,
+}
+
+// A monadic block: any `<-` short-circuits on `None` without explicit matching.
+def compute(divisor: Int): Option<Int> := {
+    x: Int <- safe_div(100, 5);     // 20
+    let doubled = x * 2;            // ordinary pure let, stays a let
+    y: Int <- safe_div(doubled, divisor);
+    Option#Some(x + y)
+}
+
+def main(): Int := {
+    println(or_else(compute(2), -1));    // 20 + (40/2)=20 -> 40
+    println(or_else(compute(0), -1));    // divide-by-zero short-circuits -> -1
+    0
+}

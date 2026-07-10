@@ -1,0 +1,14 @@
+//@TEST: run
+// exit: 13
+// the core `Option<T>` is constructed, returned from a generic function, and
+// consumed by `match`. all should be monomorphised before codegen
+
+def wrap<T>(x: T): Option<T> := Option#Some(x)
+
+def unwrap(o: Option<Int>): Int :=
+    match o {
+        Option#Some(x) => x,
+        Option#None => 0,
+    }
+
+def main(): Int := unwrap(wrap(13))

@@ -232,6 +232,32 @@ pub fn open_example_from_file(name: &str) -> String {
     std::fs::read_to_string(path).expect("failed to read example file")
 }
 
+/// A compilation that was expected to fail: the
+/// [stage](lang::SandLangErrorSource::stage_name) it failed at and the rendered
+/// error message. Used by the `//@TEST: fail` harness (`stage:` / `message:`
+/// assertions).
+pub struct CompileFailure {
+    pub stage: String,
+    pub message: String,
+}
+
+/// Compile an example through the full pipeline and return its first
+/// (fatal) error as a [`CompileFailure`]. Panics if it compiled successfully:
+/// a `//@TEST: fail` example that no longer fails is itself a test failure.
+pub fn compile_failure(name: &str) -> CompileFailure {
+    let src = open_example_from_file(name);
+    let mut proj = Project::empty();
+    proj.create_virtual_file(src, name);
+    let c = proj.check_to(lang::Stage::Monomorphised);
+    let err = c.first_error.unwrap_or_else(|| {
+        panic!("example `{name}` was annotated `//@TEST: fail` but compiled successfully")
+    });
+    CompileFailure {
+        stage: err.kind.stage_name().to_string(),
+        message: err.to_string(),
+    }
+}
+
 /// Load, compile, and interpret an example program in the HIR interpreter
 pub fn interpret_example(name: &str) -> anyhow::Result<Expression<'static>> {
     let src = open_example_from_file(name);

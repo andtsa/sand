@@ -1,0 +1,14 @@
+//@TEST: run
+// exit: 42
+
+extern def malloc(size: Int): Ptr<Unit>;
+extern def free(p: Ptr<Unit>): Unit;
+
+def main(): Int := {
+    let raw: Ptr<Unit> = malloc(8);
+    let p: Ptr<Int> = __ptr_cast(raw);
+    __ptr_write(p, 42);
+    let x: Int = __ptr_read(p);
+    free(raw);
+    x
+}

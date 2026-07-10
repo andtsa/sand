@@ -1,0 +1,12 @@
+//@TEST: run
+// exit: 42
+
+def max<'a>(x: &'a Int, y: &'a Int): Int := if *x > *y then *x else *y
+
+def double(r: &Int): Int := *r + *r
+
+def main(): Int := {
+    let a = 21;
+    let b = 7;
+    max(&a, &b) + double(&b) + b
+}

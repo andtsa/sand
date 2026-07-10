@@ -1,0 +1,14 @@
+//@TEST: fail
+// stage: typecheck
+// message: includes "would escape its scope"
+
+// Failing case: a borrowing match binds `a : &'r Int` where `'r` is the
+// scrutinee's region. Here the scrutinee borrows a *local* `p`, so returning the
+// field borrow `a` would dangle once `f` returns — the escape check must reject
+// it (the field borrow inherits the local block's region).
+
+type Pair = P(Int, Int)
+
+def f(): &Int := { let p = Pair#P(1, 2); match &p { Pair#P(a, b) => a } }
+
+def main(): Int := 0

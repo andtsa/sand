@@ -55,6 +55,21 @@ pub enum SandLangErrorSource<'tcx> {
     InternalError(String),
 }
 
+impl<'tcx> SandLangErrorSource<'tcx> {
+    /// The compilation stage this error comes from, as a stable lowercase name
+    /// (`parse` / `qualify` / `typecheck` / `ownership` / `internal`). Used by
+    /// the example-test harness's `stage:` assertions.
+    pub fn stage_name(&self) -> &'static str {
+        match self {
+            SandLangErrorSource::AstParseError(_) => "parse",
+            SandLangErrorSource::QualifyError(_) => "qualify",
+            SandLangErrorSource::TypeError(_) => "typecheck",
+            SandLangErrorSource::OwnershipError(_) => "ownership",
+            SandLangErrorSource::InternalError(_) => "internal",
+        }
+    }
+}
+
 impl<'tcx> From<passes::type_ast::AstTypeError<'tcx>> for SandLangErrorSource<'tcx> {
     fn from(e: passes::type_ast::AstTypeError<'tcx>) -> Self {
         SandLangErrorSource::TypeError(e)

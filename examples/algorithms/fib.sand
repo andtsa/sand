@@ -1,0 +1,24 @@
+//@TEST: run
+// exit: 55
+// stdout: [55]
+
+def fib(x: Int): Int := {
+    1 + 2;
+    if x ≤ 1 then 
+        x 
+    else 
+        fib(x - 1) 
+        + fib(x - 2)
+}
+
+def main(): Int := {
+    let a: Int = 10;
+
+    // lexical scoping (as in Rust): a local binding shadows a function of the
+    // same name in call position, so the result is kept under a *distinct* name
+    // to leave `fib` referring to the function.
+    let result: Int = fib(a);
+    println(fib(a));
+    1 + 2;
+    result
+}

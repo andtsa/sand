@@ -1,0 +1,5 @@
+//@TEST: run
+// exit: 6
+
+def incr(r: &mut Int): Unit := { *r = *r + 1; }
+def main(): Int := { let mut x = 5; incr(&mut x); x }

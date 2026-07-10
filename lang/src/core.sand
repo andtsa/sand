@@ -45,6 +45,47 @@ impl Clone for Unit { def clone(x: &Unit): Unit := *x }
 impl Copy for Unit { }
 
 
+// ============= Concurrency ==================
+
+// Marker typeclasses for thread safety 
+//
+// `Send<T>`: a value of `T` may be moved to another thread.
+// `Sync<T>`: `&T` may be shared with another thread (i.e. `&T : Send`).
+//
+// The builtin structural rules are: primitives are `Send + Sync`; a shared
+// `&T` is `Send`/`Sync` iff `T : Sync`; a `&mut T` is `Send` iff `T : Send` and
+// `Sync` iff `T : Sync`; a tuple iff every element is; raw `Ptr<T>` is neither.
+// Aggregate types opt in with an empty `impl Send for E { }` (and `Sync`).
+typeclass Send<T> { }
+typeclass Sync<T> { }
+
+// A handle to a computation running (conceptually) on another thread, yielding
+// an `R` when joined.
+//
+// NOTE: the current implementation runs `spawn`'s work *synchronously*: `spawn(f, x)`
+// evaluates `f(x)` eagerly and stores the result, and `join` returns it. The
+// `Send` bounds are the enforced safety obligation; swapping in OS threads
+// (a `__spawn` intrinsic + a pthread runtime) is a backwards-compatible follow-up
+// that only changes `spawn`/`join`'s bodies and `Thread`'s representation.
+type Thread<R> = Th(R)
+
+// Run `task(arg)` on another thread. Both the moved-in argument and the
+// produced result must be `Send`.
+//
+// NOTE: `spawn` *calls* its higher-order parameter `task`, and call syntax
+// prefers a global function of the same name, so a
+// program that defines a top-level `def task` shadows this and fails to compile.
+// This is inherent to the current call-resolution design (it affects any
+// higher-order function, e.g. `apply`); the planned `__spawn` intrinsic removes
+// it for `spawn` specifically.
+def spawn<T, R>(task: T -> R, arg: T): Thread<R> where T : Send, R : Send :=
+    Thread#Th(task(arg))
+
+// Wait for a spawned computation and take its result.
+def join<R>(t: Thread<R>): R := match t {
+    Thread#Th(r) => r
+}
+
 
 // ================ Monad heirarchy ==================
 
@@ -70,18 +111,107 @@ typeclass Monad<F : Owned -> Owned> requires Applicative {
 
 // ============= Useful builtins ================
 
-// type Result<T, E> = Ok(T) | Err(E);
-// 
-// type Option<T> = None | Some(T);
-// 
-// impl Functor for Result<T, E> {
-//     def fmap<T, U>(x: Result<T, E>, f: T -> U) -> Result<U, E> {
-//         match x {
-//             Ok(t) => Ok(f(t)),
-//             Err(e) => Err(e),
-//         }
-//     }
-// }
+// `Option<T>`: a value that may be absent — `Some(x)` or `None`. The canonical
+// alternative to a sentinel value for "might not be there".
+type Option<T> = None | Some(T)
+
+// `Option` is a lawful `Functor`/`Applicative`/`Monad`: it has exactly one type
+// argument, so it matches the `Owned -> Owned` kind those classes require.
+impl Functor for Option {
+    def fmap<A, B>(x: Option<A>, f: A -> B): Option<B> := match x {
+        Option#None => Option#None,
+        Option#Some(v) => Option#Some(f(v)),
+    }
+}
+
+impl Applicative for Option {
+    def pure<A>(x: A): Option<A> := Option#Some(x)
+    def ap<A, B>(f: Option<A -> B>, x: Option<A>): Option<B> := match f {
+        Option#None => Option#None,
+        Option#Some(g) => match x {
+            Option#None => Option#None,
+            Option#Some(v) => Option#Some(g(v)),
+        },
+    }
+}
+
+impl Monad for Option {
+    def bind<A, B>(x: Option<A>, f: A -> Option<B>): Option<B> := match x {
+        Option#None => Option#None,
+        Option#Some(v) => f(v),
+    }
+}
+
+// Inspect presence without consuming (borrows the option).
+def is_some<T>(o: &Option<T>): Bool := match o {
+    Option#Some(_) => true,
+    Option#None => false,
+}
+
+def is_none<T>(o: &Option<T>): Bool := match o {
+    Option#None => true,
+    Option#Some(_) => false,
+}
+
+// Take the contained value, falling back to `default` when absent. Consumes the
+// option (and drops `default` when it is unused).
+def get_or<T>(o: Option<T>, default: T): T := match o {
+    Option#Some(v) => v,
+    Option#None => default,
+}
+
+// Collapse one layer of nesting: `Some(Some(x)) -> Some(x)`, else `None`.
+def flatten<T>(o: Option<Option<T>>): Option<T> := match o {
+    Option#Some(inner) => inner,
+    Option#None => Option#None,
+}
+
+
+// `Result<T, E>`: a computation that either succeeds with `Ok(T)` or fails with
+// `Err(E)`. Threads an error value through code instead of diverging.
+//
+// NOTE: unlike `Option`, `Result` is *binary*, so it cannot join the
+// `Functor`/`Applicative`/`Monad` hierarchy: those classes are kinded
+// `Owned -> Owned` (one argument), and the language has no partial
+// type-constructor application to turn `Result<_, E>` into a unary constructor.
+// The helpers below stand in for the missing instances — `map_ok` is the `fmap`
+// over the success channel and `and_then` is its `bind`.
+type Result<T, E> = Ok(T) | Err(E)
+
+def is_ok<T, E>(r: &Result<T, E>): Bool := match r {
+    Result#Ok(_) => true,
+    Result#Err(_) => false,
+}
+
+def is_err<T, E>(r: &Result<T, E>): Bool := match r {
+    Result#Err(_) => true,
+    Result#Ok(_) => false,
+}
+
+// Map the success value, leaving an error untouched.
+def map_ok<T, U, E>(r: Result<T, E>, f: T -> U): Result<U, E> := match r {
+    Result#Ok(v) => Result#Ok(f(v)),
+    Result#Err(e) => Result#Err(e),
+}
+
+// Map the error value, leaving a success untouched.
+def map_err<T, E, F>(r: Result<T, E>, f: E -> F): Result<T, F> := match r {
+    Result#Ok(v) => Result#Ok(v),
+    Result#Err(e) => Result#Err(f(e)),
+}
+
+// Chain a fallible step onto a success (the `bind` of the success channel).
+def and_then<T, U, E>(r: Result<T, E>, f: T -> Result<U, E>): Result<U, E> := match r {
+    Result#Ok(v) => f(v),
+    Result#Err(e) => Result#Err(e),
+}
+
+// Forget the error, projecting into `Option`. Compose with `get_or` to recover a
+// value-or-fallback: `get_or(ok(r), fallback)`.
+def ok<T, E>(r: Result<T, E>): Option<T> := match r {
+    Result#Ok(v) => Option#Some(v),
+    Result#Err(_) => Option#None,
+}
 
 
 
