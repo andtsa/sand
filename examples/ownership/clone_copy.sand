@@ -1,0 +1,9 @@
+//@TEST: run
+// exit: 10
+
+typeclass ToInt<T> { def to_int(x: T): Int }
+impl ToInt for Int { def to_int(x: Int): Int := x }
+
+def doubled<T>(x: T): Int where T : ToInt, T : Copy := to_int(x) + to_int(x)
+
+def main(): Int := doubled(5)

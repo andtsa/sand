@@ -1,0 +1,58 @@
+//@TEST: run
+// exit: 42
+
+// phase 3 borrowing & lifetimes.
+
+type Light = Red | Yellow | Green
+
+def rank(l: &Light): Int := match l {
+    Light#Red => 1,
+    Light#Yellow => 2,
+    Light#Green => 3,
+}
+
+def set_red(l: &mut Light): Unit := { *l = Light#Red; }
+
+def main(): Int := {
+    let a = Light#Yellow;
+
+    // (3A) two immutable borrows of `a` coexist. They are passed to `rank`,
+    // which the borrow checker treats as *possibly escaping* (a call could stash
+    // the reference), so their loans live to the end of their scope, and a
+    // value may not be moved while borrowed. The enclosing block ends those
+    // lifetimes, so `a` can be consumed afterwards.
+    let shared = {
+        let b = &a;
+        let c = &a;
+        rank(b) + rank(c)                    // 2 + 2 = 4
+    };
+
+    let owned = match a {
+        Light#Red => 1,
+        Light#Yellow => 2,
+        Light#Green => 3,
+    };                                       // 2
+
+    let mut light = Light#Green;
+    {
+        set_red(&mut light);
+    };
+    let recolored = match light {            // `light` is owned again here
+        Light#Red => 100,
+        Light#Yellow => 0,
+        Light#Green => 0,
+    };                                       // 100
+
+    // (3C) non-lexical lifetimes: when a borrow's holder is used *only* through
+    // dereference (never passed to a function), its loan ends at that last
+    // dereference rather than at end of scope. 
+
+    // Here `r`'s loan is released after
+    // `*r = ...`, so a new borrow of `n` is allowed immediately
+    let mut n = 19;
+    let r = &mut n;
+    *r = *r + *r + 4;                        // 42, also r's last use
+    let after = &n;                          // OK: `r`'s loan was already pruned
+
+    *after
+}

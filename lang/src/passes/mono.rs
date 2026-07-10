@@ -263,10 +263,11 @@ impl<'tcx> Mono<'tcx> {
             }
             // Function types survive monomorphisation (they are real runtime
             // values, a fat pointer); substitute domain + codomain.
-            TyKind::Fn(a, r, m) => {
+            TyKind::Fn(a, r, m, env) => {
                 let a = self.mono_ty(ctx, *a, mapping);
                 let r = self.mono_ty(ctx, *r, mapping);
-                ctx.fn_ty(a, r, *m)
+                let env = self.mono_ty(ctx, *env, mapping);
+                ctx.closure_ty(a, r, *m, env)
             }
             // A higher-kinded application `F<A>`: `F` is bound to a
             // concrete constructor (bare `Enum(er)`); apply it to the
@@ -799,7 +800,7 @@ fn mangle_ty<'tcx>(ctx: &CompileCtx<'tcx>, ty: Ty<'tcx>) -> String {
             format!("Tup{}_{}", elems.len(), inner.join("_"))
         }
         // function types survive monomorphisation.
-        TyKind::Fn(a, r, _) => format!("Fn_{}_{}", mangle_ty(ctx, *a), mangle_ty(ctx, *r)),
+        TyKind::Fn(a, r, _, _) => format!("Fn_{}_{}", mangle_ty(ctx, *a), mangle_ty(ctx, *r)),
         // References are real pointers and may appear as type arguments.
         TyKind::Ref(_, inner) => format!("Ref_{}", mangle_ty(ctx, *inner)),
         TyKind::RefMut(_, inner) => format!("RefMut_{}", mangle_ty(ctx, *inner)),

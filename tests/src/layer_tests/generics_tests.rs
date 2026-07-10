@@ -202,7 +202,7 @@ fn call_generic_tuple_argument_inner_mismatch_fails() {
 // --- generic enum declarations// --- ---
 #[test]
 fn generic_enum_declaration_compiles() {
-    typecheck("type Option<T> = None | Some(T) \n def main(): Int := 0");
+    typecheck("type Opt<T> = None | Some(T) \n def main(): Int := 0");
 }
 
 #[test]
@@ -218,28 +218,28 @@ fn generic_enum_recursive_payload_compiles() {
 
 // --- generic enum uses: instantiation via annotations and constructors// ---
 // ---
-const OPTION: &str = "type Option<T> = None | Some(T) \n";
+const OPTION: &str = "type Opt<T> = None | Some(T) \n";
 
 #[test]
 fn construct_generic_enum_payload_infers_args() {
-    // `Option#Some(5)` infers `T = Int` from the payload.
+    // `Opt#Some(5)` infers `T = Int` from the payload.
     typecheck(&format!(
-        "{OPTION} def main(): Int := {{ let x: Option<Int> = Option#Some(5); 0 }}"
+        "{OPTION} def main(): Int := {{ let x: Opt<Int> = Opt#Some(5); 0 }}"
     ));
 }
 
 #[test]
 fn construct_generic_enum_nullary_with_annotation() {
-    // `Option#None` is ambiguous alone, but the annotation solves `T = Int`.
+    // `Opt#None` is ambiguous alone, but the annotation solves `T = Int`.
     typecheck(&format!(
-        "{OPTION} def main(): Int := {{ let x: Option<Int> = Option#None; 0 }}"
+        "{OPTION} def main(): Int := {{ let x: Opt<Int> = Opt#None; 0 }}"
     ));
 }
 
 #[test]
 fn construct_generic_enum_nullary_without_annotation_fails() {
     typecheck_fails(&format!(
-        "{OPTION} def main(): Int := {{ let x = Option#None; 0 }}"
+        "{OPTION} def main(): Int := {{ let x = Opt#None; 0 }}"
     ));
 }
 
@@ -247,17 +247,17 @@ fn construct_generic_enum_nullary_without_annotation_fails() {
 fn construct_generic_enum_payload_against_wrong_instantiation_fails() {
     // annotation forces `T = Bool`, but the payload is an `Int`.
     typecheck_fails(&format!(
-        "{OPTION} def main(): Int := {{ let x: Option<Bool> = Option#Some(5); 0 }}"
+        "{OPTION} def main(): Int := {{ let x: Opt<Bool> = Opt#Some(5); 0 }}"
     ));
 }
 
 #[test]
 fn generic_enum_instantiations_are_distinct_types() {
-    // an `Option<Int>` value cannot initialise an `Option<Bool>` binding.
+    // an `Opt<Int>` value cannot initialise an `Opt<Bool>` binding.
     typecheck_fails(&format!(
         "{OPTION} def main(): Int := {{ \
-           let a: Option<Int> = Option#Some(5); \
-           let b: Option<Bool> = a; \
+           let a: Opt<Int> = Opt#Some(5); \
+           let b: Opt<Bool> = a; \
            0 }}"
     ));
 }
@@ -265,36 +265,36 @@ fn generic_enum_instantiations_are_distinct_types() {
 #[test]
 fn function_returning_generic_enum_type_checks() {
     typecheck(&format!(
-        "{OPTION} def wrap<T>(x: T): Option<T> := Option#Some(x) \n def main(): Int := 0"
+        "{OPTION} def wrap<T>(x: T): Opt<T> := Opt#Some(x) \n def main(): Int := 0"
     ));
 }
 
 #[test]
 fn calling_function_returning_generic_enum_instantiates_result() {
     // `wrap(5)` substitutes `T = Int` into the return type, yielding
-    // `Option<Int>`, which then initialises an `Option<Int>` binding.
+    // `Opt<Int>`, which then initialises an `Opt<Int>` binding.
     typecheck(&format!(
         "{OPTION} \
-         def wrap<T>(x: T): Option<T> := Option#Some(x) \n \
-         def main(): Int := {{ let o: Option<Int> = wrap(5); 0 }}"
+         def wrap<T>(x: T): Opt<T> := Opt#Some(x) \n \
+         def main(): Int := {{ let o: Opt<Int> = wrap(5); 0 }}"
     ));
 }
 
 #[test]
 fn calling_function_returning_generic_enum_wrong_arg_fails() {
-    // `wrap(true) : Option<Bool>` cannot initialise an `Option<Int>` binding.
+    // `wrap(true) : Opt<Bool>` cannot initialise an `Opt<Int>` binding.
     typecheck_fails(&format!(
         "{OPTION} \
-         def wrap<T>(x: T): Option<T> := Option#Some(x) \n \
-         def main(): Int := {{ let o: Option<Int> = wrap(true); 0 }}"
+         def wrap<T>(x: T): Opt<T> := Opt#Some(x) \n \
+         def main(): Int := {{ let o: Opt<Int> = wrap(true); 0 }}"
     ));
 }
 
 #[test]
 fn type_arg_arity_mismatch_fails() {
-    // `Option` takes one type argument, not two.
+    // `Opt` takes one type argument, not two.
     typecheck_fails(&format!(
-        "{OPTION} def f(x: Option<Int, Bool>): Int := 0 \n def main(): Int := 0"
+        "{OPTION} def f(x: Opt<Int, Bool>): Int := 0 \n def main(): Int := 0"
     ));
 }
 
@@ -308,12 +308,12 @@ fn instantiating_non_generic_enum_fails() {
 // --- matching on generic enums substitutes the binding types// --- ---
 #[test]
 fn match_generic_enum_binds_concrete_payload() {
-    // `Option#Some(x)` against an `Option<Int>` scrutinee binds `x : Int`, so
+    // `Opt#Some(x)` against an `Opt<Int>` scrutinee binds `x : Int`, so
     // returning `x` where `Int` is expected type-checks.
     typecheck(&format!(
         "{OPTION} \
-         def unwrap(o: Option<Int>): Int := match o {{ Option#Some(x) => x, Option#None => 0 }} \n \
-         def main(): Int := unwrap(Option#Some(5))"
+         def unwrap(o: Opt<Int>): Int := match o {{ Opt#Some(x) => x, Opt#None => 0 }} \n \
+         def main(): Int := unwrap(Opt#Some(5))"
     ));
 }
 
@@ -322,7 +322,7 @@ fn match_generic_enum_uses_the_right_argument() {
     // the same enum at `Bool` binds `x : Bool`.
     typecheck(&format!(
         "{OPTION} \
-         def f(o: Option<Bool>): Bool := match o {{ Option#Some(x) => x, Option#None => false }} \n \
+         def f(o: Opt<Bool>): Bool := match o {{ Opt#Some(x) => x, Opt#None => false }} \n \
          def main(): Int := 0"
     ));
 }
@@ -332,7 +332,7 @@ fn match_generic_enum_binding_wrong_type_fails() {
     // `x : Int` cannot be returned where `Bool` is expected.
     typecheck_fails(&format!(
         "{OPTION} \
-         def f(o: Option<Int>): Bool := match o {{ Option#Some(x) => x, Option#None => false }} \n \
+         def f(o: Opt<Int>): Bool := match o {{ Opt#Some(x) => x, Opt#None => false }} \n \
          def main(): Int := 0"
     ));
 }
@@ -342,7 +342,7 @@ fn let_pattern_on_generic_enum_binds_concrete_payload() {
     // the `else` fallback is a value of the same instantiation; `x : Int`.
     typecheck(&format!(
         "{OPTION} \
-         def f(o: Option<Int>): Int := {{ let Option#Some(x) = o else Option#Some(0); x }} \n \
+         def f(o: Opt<Int>): Int := {{ let Opt#Some(x) = o else Opt#Some(0); x }} \n \
          def main(): Int := 0"
     ));
 }
@@ -399,26 +399,26 @@ fn run_generic_nested_calls() {
 
 #[test]
 fn run_generic_enum_construct_and_match() {
-    // build an `Option<Int>` and consume it via `match`
-    let src = "type Option<T> = None | Some(T) \n \
-        def unwrap(o: Option<Int>): Int := match o { Option#Some(x) => x, Option#None => 0 } \n \
-        def main(): Int := unwrap(Option#Some(7))";
+    // build an `Opt<Int>` and consume it via `match`
+    let src = "type Opt<T> = None | Some(T) \n \
+        def unwrap(o: Opt<Int>): Int := match o { Opt#Some(x) => x, Opt#None => 0 } \n \
+        def main(): Int := unwrap(Opt#Some(7))";
     assert_eq!(run_both(src), Expression::Int(7));
 }
 
 #[test]
 fn run_generic_enum_none_branch() {
-    let src = "type Option<T> = None | Some(T) \n \
-        def unwrap(o: Option<Int>): Int := match o { Option#Some(x) => x, Option#None => 99 } \n \
-        def main(): Int := unwrap(Option#None)";
+    let src = "type Opt<T> = None | Some(T) \n \
+        def unwrap(o: Opt<Int>): Int := match o { Opt#Some(x) => x, Opt#None => 99 } \n \
+        def main(): Int := unwrap(Opt#None)";
     assert_eq!(run_both(src), Expression::Int(99));
 }
 
 #[test]
 fn run_generic_function_returning_generic_enum() {
-    let src = "type Option<T> = None | Some(T) \n \
-        def wrap<T>(x: T): Option<T> := Option#Some(x) \n \
-        def unwrap(o: Option<Int>): Int := match o { Option#Some(x) => x, Option#None => 0 } \n \
+    let src = "type Opt<T> = None | Some(T) \n \
+        def wrap<T>(x: T): Opt<T> := Opt#Some(x) \n \
+        def unwrap(o: Opt<Int>): Int := match o { Opt#Some(x) => x, Opt#None => 0 } \n \
         def main(): Int := unwrap(wrap(13))";
     assert_eq!(run_both(src), Expression::Int(13));
 }
@@ -445,7 +445,7 @@ fn parse_variance_and_kind_annotations() {
 
 #[test]
 fn covariant_annotation_on_producer_is_accepted() {
-    typecheck("type Option<+a : Owned> = None | Some(a) \n def main(): Int := 0");
+    typecheck("type Opt<+a : Owned> = None | Some(a) \n def main(): Int := 0");
 }
 
 #[test]
@@ -613,7 +613,7 @@ fn monomorphises_generic_borrow_function() {
 
 // --- bare (under-applied) generic type names ---
 // an arity error, not a cryptic downstream failure
-// (regression: examples/lists2.sand)
+// (regression: examples/data_structures/lists2.sand)
 #[test]
 fn bare_generic_enum_name_in_a_payload_is_an_arity_error() {
     // `List` (generic) used without its type argument in its own recursive

@@ -7,41 +7,41 @@ use crate::common::*;
 
 #[test]
 fn fact() -> anyhow::Result<()> {
-    let out = interpret_example("fact")?;
+    let out = interpret_example("algorithms/fact")?;
     assert_eq!(out, lang::ir_types::typed_hir::Expression::Int(362880));
     Ok(())
 }
 
 #[test]
 fn fib() -> anyhow::Result<()> {
-    let out = interpret_example("fib")?;
+    let out = interpret_example("algorithms/fib")?;
     assert_eq!(out, lang::ir_types::typed_hir::Expression::Int(55));
     Ok(())
 }
 
 #[test]
 fn test_layers_rsa() {
-    test_layers("RSA");
+    test_layers("algorithms/RSA");
 }
 
 #[test]
 fn test_layers_prime() {
-    test_layers("prime");
+    test_layers("algorithms/prime");
 }
 
 #[test]
 fn test_layers_fib() {
-    test_layers("fib");
+    test_layers("algorithms/fib");
 }
 
 #[test]
 fn test_layers_fact() {
-    test_layers("fact");
+    test_layers("algorithms/fact");
 }
 
 #[test]
 fn test_layers_gcd() {
-    test_layers("gcd");
+    test_layers("algorithms/gcd");
 }
 
 // Helper for layer tests

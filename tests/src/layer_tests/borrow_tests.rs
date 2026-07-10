@@ -167,7 +167,8 @@ fn let_borrow_binding_runs() {
 //
 // `match` on a `&T` matches the pointee and binds each payload field as a `&`
 // borrow (so the field is read, not moved). This is what makes `Clone`
-// implementable for non-`Copy` aggregates (see `examples/clone_impl.sand`).
+// implementable for non-`Copy` aggregates (see
+// `examples/ownership/clone_impl.sand`).
 
 const PAIR: &str = "type Pair = P(Int, Int)\n";
 

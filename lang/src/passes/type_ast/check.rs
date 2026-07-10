@@ -1250,9 +1250,9 @@ pub(super) fn check<'tcx>(
         // type pins it. The param keeps its annotation, which must match the
         // expected domain.
         qhir::Expression::Lambda { param, body, mode }
-            if matches!(expected.kind(), TyKind::Fn(_, _, _)) =>
+            if matches!(expected.kind(), TyKind::Fn(_, _, _, _)) =>
         {
-            let TyKind::Fn(arg_ty, ret_ty, exp_mode) = expected.kind() else {
+            let TyKind::Fn(arg_ty, ret_ty, exp_mode, _) = expected.kind() else {
                 unreachable!("guarded by the match arm condition")
             };
             if !param.ty.eq_modulo_regions(*arg_ty) {
@@ -1263,14 +1263,6 @@ pub(super) fn check<'tcx>(
                     ),
                     expected: *arg_ty,
                     found: param.ty,
-                    range: expr.range,
-                });
-            }
-            if !mode.usable_as(*exp_mode) {
-                return Err(AstTypeError::TypeError {
-                    message: format!("a {expected} closure is required here"),
-                    expected,
-                    found: ctx.fn_ty(param.ty, *ret_ty, *mode),
                     range: expr.range,
                 });
             }
@@ -1288,7 +1280,36 @@ pub(super) fn check<'tcx>(
                 .collect();
             captures.sort_by_key(|(v, _)| *v);
 
-            let fn_ty = ctx.fn_ty(param.ty, body_typed.ty, *mode);
+            // Infer the calling mode from capture usage (see the infer path).
+            let assumptions = ctx.type_assumptions().to_vec();
+            let inferred_mode =
+                crate::analysis::annotate::closure_mode_from_body(&body_typed, &captures, &|t| {
+                    ctx.is_copy_under(t, &assumptions)
+                });
+            let mode = (*mode).max(inferred_mode);
+
+            // The (inferred) mode must be usable where the expected arrow mode is
+            // required — e.g. a closure that consumes a capture (`FnOnce`) cannot
+            // be supplied where a reusable (`Fn`) closure is expected.
+            if !mode.usable_as(*exp_mode) {
+                return Err(AstTypeError::TypeError {
+                    message: format!("a {expected} closure is required here"),
+                    expected,
+                    found: ctx.fn_ty(param.ty, body_typed.ty, mode),
+                    range: expr.range,
+                });
+            }
+
+            // Carry the closure's concrete environment type (matching the infer
+            // path), so a checked lambda retains its captures even against an
+            // abstract expected arrow — this is what lets the function-return
+            // escape check see a captured local borrow's region.
+            let env_ty = match captures.as_slice() {
+                [] => ctx.types.unit,
+                [(_, t)] => *t,
+                many => ctx.intern_tuple(many.iter().map(|(_, t)| *t).collect()),
+            };
+            let fn_ty = ctx.closure_ty(param.ty, body_typed.ty, mode, env_ty);
             Ok(typed_hir::Expr {
                 expr: typed_hir::Expression::Lambda {
                     param: param.clone(),

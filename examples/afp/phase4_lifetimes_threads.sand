@@ -1,0 +1,37 @@
+//@TEST: run
+// exit: 23
+
+// phase 4 explicit lifetimes (4A) and multithreading (4B).
+
+type Light = Red | Yellow | Green
+
+// a `Light` value may cross a thread boundary
+impl Send for Light { }
+
+def rank(l: Light): Int := match l {
+    Light#Red => 1,
+    Light#Yellow => 2,
+    Light#Green => 3,
+}
+
+// (4A) explicit lifetime annotations: the result borrows from `left` (region
+// `'a`), *not* from `right` (region `'b`), so `right`'s value is independent of
+// how long the result lives. The annotations let a borrow be returned safely.
+def first<'a, 'b>(left: &'a Int, right: &'b Int): &'a Int := left
+
+def main(): Int := {
+    // (4A) `r` borrows `x`; `y` is unrelated to `r`'s lifetime.
+    let x = 10;
+    let y = 99;
+    let r = first(&x, &y);
+    let from_x = *r;                                  // 10
+
+    // (4B) `spawn` moves a `Send` argument onto a thread and returns a handle;
+    // `join` waits for it and takes the `Send` result. Both `Int` and (via its
+    // `impl Send`) `Light` are allowed to cross the boundary. The `Send` bounds
+    // are enforced: spawning a non-`Send` value is a type error.
+    let t1 = spawn(fn (n: Int) -> n * 2, from_x);     // 20
+    let t2 = spawn(fn (l: Light) -> rank(l), Light#Green);  // 3
+
+    join(t1) + join(t2)                               // 20 + 3 = 23
+}

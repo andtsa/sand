@@ -806,7 +806,7 @@ pub(super) fn infer_method_call<'tcx>(
     // them blind).
     let mut mapping: Subst<'tcx> = Map::new();
     let mut typed: Vec<Option<typed_hir::Expr<'tcx>>> = (0..args.len()).map(|_| None).collect();
-    let is_fn_param = |i: usize| matches!(mdef.param_tys[i].kind(), TyKind::Fn(_, _, _));
+    let is_fn_param = |i: usize| matches!(mdef.param_tys[i].kind(), TyKind::Fn(_, _, _, _));
 
     // Pass 1: infer the non-function arguments and solve from them.
     for (i, a) in args.iter().enumerate() {
@@ -1264,7 +1264,29 @@ pub(super) fn infer<'tcx>(
                 .collect();
             captures.sort_by_key(|(v, _)| *v);
 
-            let fn_ty = ctx.fn_ty(param.ty, body_typed.ty, *mode);
+            // Infer the calling mode from how the body uses its captures
+            // (consume → `FnOnce`, mutate → `FnMut`, else `Fn`), taking the more
+            // restrictive of that and the syntactic arrow. This is what makes a
+            // closure that consumes a capture single-use rather than (unsoundly)
+            // reusable.
+            let assumptions = ctx.type_assumptions().to_vec();
+            let inferred_mode =
+                crate::analysis::annotate::closure_mode_from_body(&body_typed, &captures, &|t| {
+                    ctx.is_copy_under(t, &assumptions)
+                });
+            let mode = (*mode).max(inferred_mode);
+
+            // The closure's environment type: the structural shape of what it
+            // captures (matching the runtime env packing in mono — no captures
+            // is `Unit`, one capture is that type, many is a tuple). Carrying it
+            // on the `Fn` type is what lets the closure's escape/drop/`Copy`/
+            // `Send`/`Sync` properties be decided structurally over the env.
+            let env_ty = match captures.as_slice() {
+                [] => ctx.types.unit,
+                [(_, t)] => *t,
+                many => ctx.intern_tuple(many.iter().map(|(_, t)| *t).collect()),
+            };
+            let fn_ty = ctx.closure_ty(param.ty, body_typed.ty, mode, env_ty);
             Ok(typed_hir::Expr {
                 expr: typed_hir::Expression::Lambda {
                     param: param.clone(),
@@ -1281,7 +1303,7 @@ pub(super) fn infer<'tcx>(
         qhir::Expression::Apply { func, arg } => {
             let func_typed = infer(ctx, env, func)?;
             let (param_ty, ret_ty) = match func_typed.ty.kind() {
-                TyKind::Fn(a, r, _) => (*a, *r),
+                TyKind::Fn(a, r, _, _) => (*a, *r),
                 _ => {
                     return Err(AstTypeError::NotCallable {
                         ty: func_typed.ty,

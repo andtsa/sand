@@ -1,0 +1,13 @@
+//@TEST: run
+// exit: 42
+
+// `'r` ascription flows in and back out unchanged.
+def at<'r>(x: Int @ 'r): Int @ 'r := x
+
+// two lifetimes related by an outlives constraint; returns the longer-lived one.
+def longest<'a, 'b>(x: &'a Int, y: &'b Int): &'a Int where 'a >= 'b := x
+
+// returning a reference parameter is sound: the borrow's region is the caller's.
+def keep<'r>(r: &'r Int): &'r Int := r
+
+def main(): Int := 42

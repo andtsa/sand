@@ -48,10 +48,11 @@ pub fn subst<'tcx>(ctx: &mut CompileCtx<'tcx>, ty: Ty<'tcx>, mapping: &Subst<'tc
             ctx.ptr_ty(inner)
         }
         // function types substitute their domain + codomain.
-        TyKind::Fn(a, r, m) => {
+        TyKind::Fn(a, r, m, env) => {
             let a = subst(ctx, *a, mapping);
             let r = subst(ctx, *r, mapping);
-            ctx.fn_ty(a, r, *m)
+            let env = subst(ctx, *env, mapping);
+            ctx.closure_ty(a, r, *m, env)
         }
         // `F<A>`: substitute the arguments, then apply the constructor
         // `F` is bound to. A binding to the bare `Enum(er)` reconstructs the
@@ -155,7 +156,9 @@ pub fn unify<'tcx>(
         (TyKind::Ptr(di), TyKind::Ptr(ai)) => unify(ctx, *di, *ai, mapping),
         // `declared` is the expected type, `actual` the supplied one; the actual
         // arrow may be more permissive (arrow subsumption).
-        (TyKind::Fn(da, dr, dm), TyKind::Fn(aa, ar, am)) if am.usable_as(*dm) => {
+        // The env is not unified (it does not participate in arrow
+        // compatibility yet); only domain + codomain + mode.
+        (TyKind::Fn(da, dr, dm, _), TyKind::Fn(aa, ar, am, _)) if am.usable_as(*dm) => {
             unify(ctx, *da, *aa, mapping)?;
             unify(ctx, *dr, *ar, mapping)
         }

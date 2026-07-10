@@ -12,6 +12,7 @@
 
 pub mod borrow_tests;
 pub mod clone_copy_tests;
+pub mod concurrency_tests;
 pub mod deref_tests;
 pub mod deriving_tests;
 pub mod drop_tests;

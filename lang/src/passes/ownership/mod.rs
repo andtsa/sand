@@ -368,7 +368,7 @@ impl<'tcx> OwnershipChecker<'_, 'tcx> {
             Expression::Apply { func, arg } => {
                 let consuming = matches!(
                     func.ty.kind(),
-                    crate::lang::types::TyKind::Fn(_, _, crate::lang::types::FnMode::Consuming)
+                    crate::lang::types::TyKind::Fn(_, _, crate::lang::types::FnMode::Consuming, _)
                 );
                 let func_checked = if consuming || !matches!(func.expr, Expression::Var(_)) {
                     self.check_expr(func, env)?

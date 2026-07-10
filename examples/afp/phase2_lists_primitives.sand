@@ -1,0 +1,43 @@
+//@TEST: run
+// exit: 1
+// stdout: [3, 60, 1]
+
+// phase 2 lists, copyable primitives, Result, pairs, pattern matching.
+
+// (2A) A list of Ints, heap-allocated so it can be recursive. Lists are affine:
+// these functional operations *consume* a list and return the updated one
+// (in-place `list.push(x)` / `list[i] = x` would need a `&mut`, phase 3).
+type List = Nil | Cons(Int, List) deriving Heaped
+
+def push(x: Int, list: List): List := match list {
+    List#Nil => List#Cons(x, List#Nil),
+    List#Cons(h, t) => List#Cons(h, push(x, t)),
+}
+
+def sum(list: List): Int := match list {
+    List#Nil => 0,
+    List#Cons(h, t) => h + sum(t),
+}
+
+def safe_div(a: Int, b: Int): Result<Int, Int> :=
+    if b == 0 then Result#Err(0 - 1) else Result#Ok(a / b)
+
+def main(): Int := {
+    let n = 3;
+    println(n);                  // 3   
+    let m = n;                   // a copy, not a move
+    let _again = n + m;          // n is still usable here
+
+    let xs = push(30, push(20, push(10, List#Nil)));
+    println(sum(xs));            // 60
+
+    let p = (4, 5);
+    let q = match p { (a, b) => a + b };          // 9
+
+    let r = match safe_div(q, 9) {
+        Result#Ok(v) => v,                        // 1
+        Result#Err(e) => e,
+    };
+    println(r);                  // 1
+    r                            // exit code 1
+}

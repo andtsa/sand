@@ -1,0 +1,26 @@
+//@TEST: run
+// exit: 0
+// stdout: [8, 24, 56, 96, 16, 32, 8, 56, 24]
+
+type TwoInts = TwoInts((Int, Int));
+
+type FourInts = FourInts((TwoInts, TwoInts));
+
+type SixSeven = Six((FourInts, TwoInts)) | Seven((FourInts, TwoInts, Int));
+
+type FullHouse<A, B> = FullHouse((A, A, B, B, B));
+
+def main(): Int := {
+    println(size_of::<Int>());
+    println(size_of::<TwoInts>());
+    println(size_of::<FourInts>());
+    println(size_of::<SixSeven>());
+    println(size_of::<FullHouse<Bool, Bool>>());
+    println(size_of::<FullHouse<Int, Bool>>());
+    println(size_of::<FullHouse<Unit, Unit>>());
+    println(size_of::<FullHouse<TwoInts, Unit>>());
+
+    println(size_of::<(Int, Int, Bool, Unit)>());
+
+    0
+}

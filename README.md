@@ -60,6 +60,10 @@ vim.lsp.enable("sand")
 ```
 </details>
 
+### examples
+
+see [examples/afp](./examples/afp/) for sample files for each of the tasks in the project.
+
 ## the language
 
 Sand is expression-oriented and statically typed. Every construct is an expression with a type.
@@ -81,7 +85,7 @@ its grammar is defined in [`grammar.pest`](grammar.pest), and the parser is auto
 the type system, kinds, regions & borrows, ownership, generics, typeclasses, and the memory model, is specified formally in [`Calculus.md`](Calculus.md)
 
 ### types
-`Int`, `Bool`, `Unit`, user-defined enums/adts (`type Ordering := Lt | Eq | Gt`), [OCaml-style polymorphic variants](https://ocaml.org/manual/5.4/polyvariant.html) (without subtyping):
+`Int`, `Bool`, `Unit`, tuples (`(Int, Bool)`), user-defined enums/adts (`type Ordering = Lt | Eq | Gt`), [OCaml-style polymorphic variants](https://ocaml.org/manual/5.4/polyvariant.html) (without subtyping):
 ```sand
 def check(x: Int): #one | #two | #other :=
     if x < 0 then #one else if x > 0 then #two else #other
@@ -93,10 +97,11 @@ statements are executed in order,
 the final expression is the block's value; omitting it gives `Unit`.
 ```
 Statement ::=
-  | Declaration ("let" "mut"? identifier (":" type)? "=" expr ";")
-  | Assignment (identifier "=" expr ";")
+  | Declaration ("let" "mut"? pattern (":" type)? "=" expr ("else" expr)? ";")
+  | Assignment ((identifier | "*" expr) "=" expr ";")
   | Expression (expr ";")
 ```
+a declaration may bind a single name or destructure a tuple/constructor pattern; `*r = e` writes through a `&mut`.
 
 ### binding
 `let mut? name(: Type)? = value`
@@ -109,8 +114,18 @@ let mut z = x;
 z = z + y;
 ```
 
+### lambdas
+anonymous functions are written `fn (x: T) -> e`. they are first-class values of function type `T -> U`, so they can be passed to higher-order functions like `fmap`. a lambda may capture locals from the enclosing scope; a closure that outlives the frame it captured from has its environment heap-allocated.
+```sand
+let bonus = 13;
+let with_bonus = fn (x: Int) -> x + bonus;
+fmap(Option#Some(21), fn (n: Int) -> n * 2)
+```
+
 ### pattern matching
-`match expr { variant => expr; variant => expr; _ => expr }`
+`match expr { variant => expr, variant => expr, _ => expr }`
+
+matches must be exhaustive. a `match` on an owned value consumes it; a `match` on a reference (`&T` / `&mut T`) destructures *through* the borrow, binding each field as a `&` / `&mut` borrow instead of moving it (which is how `clone` is written for non-`Copy` aggregates).
 
 ### indentation / spacing
 does not matter.
@@ -150,6 +165,16 @@ typeclass ToInt<T> {
 impl ToInt for Bool { def to_int(x: Bool): Int := if x then 1 else 0 }
 
 def use_it<T>(x: T): Int where T : ToInt := to_int(x)
+```
+
+### do-notation
+any block with a top-level `<-` bind is a do-block over a `Monad`, desugared to nested `bind` calls. ordinary `let`s between binds stay pure; the trailing expression is the block's monadic result. the short-circuiting (e.g. on `Option#None`) comes from the instance's `bind`, not from the language.
+```sand
+def compute(d: Int): Option<Int> := {
+    x: Int <- safe_div(100, 5);
+    y: Int <- safe_div(x * 2, d);
+    Option#Some(x + y)
+}
 ```
 
 ### memory
@@ -220,7 +245,7 @@ One [`ProgramModule`](lang/src/ir_types/hhir.rs#L16) corresponds to one source f
 the typed ast and final HIR.
 
 - **`Expr` carries `ty: Ty` and `kind: Kind`**, every node in the expression tree is annotated with its type and ownership kind (`Owned`/`Borrowed`/`BorrowedMut`/`Never`).
-- the `else` branch becomes mandatory, `if` without `else` is desugared to `if ... then ... else ()`, requiring the return type of `if` to be `Unit`.
+- the `else` branch becomes mandatory: an `if` without `else` has its `else` filled in with the unit value, requiring the type of the `if` to be `Unit`.
 - declaration types are resolved since type annotations are no longer optional in the tree.
 - bare `Tag` expressions are eliminated, `#gt` in a context expecting `Ordering` becomes `Constructor { enum_ref, variant_idx: 2 }`.
 - this is also the layer the three `TypedProgram -> TypedProgram` transforms operate on (heap lowering, ownership/drop insertion, monomorphisation) before it is lowered to MIR, so generics, kinds, and `deriving Heaped` types are all gone by the time MIR is produced.
@@ -233,19 +258,23 @@ a CFG-based, register-machine IR, that somewhat mirrors LLVM IR.
 the expression tree is gone, each function becomes:
 ```rust
 MirFunction {
-  locals: Vec<LocalDecl>,  // all variables declared upfront
-  blocks: Vec<BasicBlock>, // linear sequence of basic blocks
-  entry:  BlockId,
+  name:     FunRef,
+  params:   Vec<MirParam>,
+  ret_type: Ty,
+  locals:   Vec<LocalDecl>,  // all variables declared upfront
+  blocks:   Vec<BasicBlock>, // linear sequence of basic blocks
+  entry:    BlockId,
 }
 
 BasicBlock {
+  id:          BlockId,
   statements:  Vec<Statement>,
   terminator:  Terminator,     // Goto | Branch | Return | Unreachable
 }
 ```
 
-`Statement` is always `dst := rvalue`. 
-`RValue` is a flat `BinaryOp`, `Call`, `Use(Operand)` with no nesting (ANF).
+a `Statement` is an `Assign { dst, rvalue }`, an `Eval` (an rvalue run for its side effects), or a `Drop`. 
+`RValue` is flat, with no nesting (ANF): `Use`, `BinaryOp`, `UnaryOp`, `Call`, `IntrinsicCall`, `CallIndirect`, `Ref` (address-of), `Field`, `Aggregate`, `Closure`, `SizeOf`. 
 control flow is explicit via `Terminator::Branch { cond, then_bb, else_bb }`
 
 ---
@@ -258,7 +287,7 @@ generated from MIR via [`inkwell`](https://github.com/TheDan64/inkwell)
 
 ## passes (as functional programs)
 
-### parsing & building the AST ([`passes/parse.rs`](lang/src/passes/parse.rs), [`passes/build_ast.rs`](lang/src/passes/build_ast.rs))
+### parsing & building the AST ([`passes/parse.rs`](lang/src/passes/parse.rs), [`passes/build_ast/`](lang/src/passes/build_ast))
 
 two steps treated as one, `pest` produces a parse tree, then `build_ast` folds it into HHIR. 
 the fold is a structural recursion over the grammar's rule tree, mapping each grammar rule to its corresponding HHIR node.
@@ -303,7 +332,7 @@ each statement extends the environment, threading it into the next
 the "mutable" `TypeEnv` is local to each function body, cloned at each branch point to preserve the scoping invariant.
 it wraps an `im::HashMap`[^2] (a persistent immutable hash map) and is cheaply cloneable. "mutable" serves just as a rust annotation, not as actual runtime mutable state.
 
-match exhaustiveness is checked by collecting covered variant indices into a `Set` and comparing against the total variant count.
+match exhaustiveness is checked by a usefulness algorithm: the match is exhaustive iff an all-wildcard row is *not* useful against its arms, i.e. no uncovered witness value exists. the same machinery flags unreachable arms (an arm that is useless against the ones before it). this handles literal and nested patterns, not just flat variant coverage.
 
 this pass also resolves generic instantiations (unifying parameters against argument types), checks kinds, and enforces region safety: borrows carry a lexical region, and the escape check rejects any block result or function return whose type's free regions mention a region that does not outlive the boundary (`'r ∉ freeRegions(T)`). it does **not** check affinity; that is the ownership pass below.
 
@@ -325,9 +354,10 @@ rewrites every `deriving Heaped` enum into a `Unique<Node>` handle over the core
 
 `TypedProgram -> Result<TypedProgram, OwnershipError>`
 
-a move/borrow dataflow analysis over the typed program. it is a *transformer*, not just a checker: it inserts drops. `OwnershipEnv` (an `im::OrdMap` keyed by `UniqVar`, so key order is declaration order) tracks each variable as `Owned`/`Moved` plus its live borrows. it enforces:
+a move/borrow dataflow analysis over the typed program. following the same RAII principles as rust,
+it inserts drops. `OwnershipEnv` (an `im::OrdMap` keyed by `UniqVar`, so key order is declaration order) tracks each variable as `Owned`/`Moved` plus its live borrows. it enforces:
 - **affinity**: using a non-`Copy` owned variable marks it `Moved`; a second use is an error (hinting `clone(&x)` when the type is `Clone`)
-- **`&mut` exclusivity**: a mutable borrow conflicts with any other live borrow of the same place; borrows are released lexically at block exit, and `if`/`match` merges union them
+- **`&mut` exclusivity**: a mutable borrow conflicts with any other live borrow of the same place; borrows are released non-lexically, pruned once the holder's last use has passed (with a lexical block-exit restore as a backstop), and `if`/`match` merges union them
 - **drop placement**: at scope exit, every owned non-`Copy` local is dropped in reverse declaration order; at a branch merge, a value owned on one branch but moved on another gets a completing drop. these are recorded in `Block { drops }` and lowered to a first-class MIR `Statement::Drop`.
 
 this is where the affine discipline lives: the type checker's context is structural (it never removes a variable on use), so ownership is a separate analysis over the already-typed tree.
@@ -368,7 +398,7 @@ history from within each branch without any additional overhead.
 #[derive(Debug, Clone, Default)]
 pub struct OwnershipEnv<'tcx> {
     states: Map<UniqVar<'tcx>, OwnershipState>,
-    borrows: Map<UniqVar<'tcx>, BorrowState>,
+    borrows: Map<UniqVar<'tcx>, Vec<Loan<'tcx>>>,
     types: Map<UniqVar<'tcx>, Ty<'tcx>>,
 }
 
@@ -429,6 +459,7 @@ pub fn check<'tcx>(
                 ctx,
                 module: func.src_module,
                 type_constraints: func.type_constraints.clone(),
+                liveness: Liveness::analyze(&func.body),
             };
             let mut env = OwnershipEnv::new();
             func.parameters.iter().for_each(|param| {
@@ -485,18 +516,24 @@ pub fn from_typed_program(prog: &th::TypedProgram<'tcx>, ctx: &CompileCtx<'tcx>)
 │       ├── castles/      // project discovery & initialization, for multi-file compilation
 │       ├── compiler
 │       │   ├── context
+│       │   │   ├── arenas.rs   // interning arenas for types, kinds, symbols
 │       │   │   ├── compile.rs  // CompileCtx, the main state during compilation
+│       │   │   ├── doc.rs      // doc-comment storage (for the LSP)
 │       │   │   ├── mod.rs
 │       │   │   └── project.rs  // ProjectCtx, the state for a single project
 │       │   ├── diagnostics/    // diagnostics & error formatting
 │       │   ├── mod.rs
+│       │   ├── optics.rs       // prisms/traversals over the IRs
 │       │   ├── structure
-│       │   │   ├── debug.rs      // source code `Pos` and `Range`
-│       │   │   ├── enums.rs      // `AdtDef`
-│       │   │   ├── functions.rs  // `FunRef` etc
+│       │   │   ├── adts.rs        // `AdtDef` (enums & their variants)
+│       │   │   ├── debug.rs       // source code `Pos` and `Range`
+│       │   │   ├── functions.rs   // `FunRef` etc
 │       │   │   ├── mod.rs
-│       │   │   ├── projects.rs   // `CodeModule`, `CodeFile`, `ModuleRef`
-│       │   │   └── variables.rs  // `UniqVar` etc
+│       │   │   ├── mtl.rs         // `mtl`-style transformer helpers (compiler-internal)
+│       │   │   ├── projects.rs    // `CodeModule`, `CodeFile`, `ModuleRef`
+│       │   │   ├── type_params.rs // generic parameter declarations
+│       │   │   ├── typeclasses.rs // typeclass & instance tables
+│       │   │   └── variables.rs   // `UniqVar` etc
 │       │   └── tests/
 │       ├── core.sand             // core library, included in every compilation
 │       ├── interpreter
@@ -517,10 +554,12 @@ pub fn from_typed_program(prog: &th::TypedProgram<'tcx>, ctx: &CompileCtx<'tcx>)
 │       │   └── types.rs   // the `Ty` enum
 │       ├── lib.rs  // `SandLangError` and `compile_hir`
 │       ├── passes
-│       │   ├── build_ast.rs        // build the AST from pest's output
-│       │   ├── explicate_control/ 
+│       │   ├── build_ast/          // build the AST (HHIR) from pest's output
+│       │   ├── explicate_control/  // lower typed HIR to MIR
+│       │   ├── heap_lower.rs       // rewrite `deriving Heaped` types into `Unique` handles
 │       │   ├── llvm_codegen.rs
 │       │   ├── mod.rs
+│       │   ├── mono.rs             // monomorphise generics
 │       │   ├── ownership           // fn check(ctx, TypedProgram) -> Result<TypedProgram, OwnershipCheckError>
 │       │   ├── parse.rs
 │       │   ├── qualify

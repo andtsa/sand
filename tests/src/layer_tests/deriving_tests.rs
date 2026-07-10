@@ -172,8 +172,8 @@ fn heaped_value_dropped_unconsumed() {
 fn match_bound_subtree_dropped_in_branch() {
     // A subtree moved out of a consuming match is dropped on the branch that
     // does not consume it (a completing drop, then release). The result is
-    // unaffected, and both interpreters agree (see `examples/expr.sand` for the
-    // full, compiled, leak-checked version).
+    // unaffected, and both interpreters agree (see `examples/algorithms/expr.sand`
+    // for the full, compiled, leak-checked version).
     assert_eq!(
         run_both(
             "type E = Lit(Int) | Cond((E, E, E)) deriving Heaped \n \

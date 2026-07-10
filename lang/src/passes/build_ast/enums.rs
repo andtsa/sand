@@ -234,7 +234,7 @@ pub(crate) fn collect_referenced_enums<'tcx>(ty: Ty<'tcx>, out: &mut Vec<AdtRef<
         TyKind::Region(t, _) | TyKind::Ref(_, t) | TyKind::RefMut(_, t) | TyKind::Ptr(t) => {
             collect_referenced_enums(*t, out);
         }
-        TyKind::Fn(a, r, _) => {
+        TyKind::Fn(a, r, _, _) => {
             collect_referenced_enums(*a, out);
             collect_referenced_enums(*r, out);
         }
@@ -421,7 +421,7 @@ pub(crate) fn param_polarity<'run>(
         | TyKind::RefMut(_, inner)
         | TyKind::Ptr(inner) => param_polarity(ctx, *inner, id, sign, occ),
         // A function is contravariant in its argument, covariant in its result.
-        TyKind::Fn(a, r, _) => {
+        TyKind::Fn(a, r, _, _) => {
             param_polarity(ctx, *a, id, sign.flip(), occ);
             param_polarity(ctx, *r, id, sign, occ);
         }

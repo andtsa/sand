@@ -213,10 +213,16 @@ pub enum TyKind<'tcx> {
     /// call uses the closure's captured environment: sand's single
     /// kind-annotated arrow (Calculus: Types, the function arrow) standing
     /// in for Rust's three closure traits (`Fn`/`FnMut`/`FnOnce`).
-    /// Arena-backed, so `TyKind` stays `Copy`. The borrowing arrow's region
-    /// (`→[Borrowed 'r]`) will arrive with closure escape-checking; until
-    /// then only the mode is carried.
-    Fn(Ty<'tcx>, Ty<'tcx>, FnMode),
+    /// Arena-backed, so `TyKind` stays `Copy`.
+    ///
+    /// The fourth component is the **environment type**: the (structural tuple)
+    /// type of the values the closure captures, or `Unit` for a capture-free
+    /// function. Carrying it on the type is what lets the closure's soundness
+    /// properties be decided structurally — escape (`freeRegions(env)`), drop,
+    /// `Copy`, and the `Send`/`Sync` markers all read it. The env does **not**
+    /// yet participate in type equality/subsumption (it is informational until
+    /// env-polymorphism lands), so `A -> B` still abstracts over captures.
+    Fn(Ty<'tcx>, Ty<'tcx>, FnMode, Ty<'tcx>),
     /// A generic enum applied to concrete (or still-parametric) type arguments,
     /// e.g. `Option<Int>`. The `EnumRef` is the generic base enum; the slice is
     /// its type arguments, one per declared parameter. Distinct argument lists
@@ -273,7 +279,7 @@ impl<'tcx> Ty<'tcx> {
             TyKind::Param(_) => true,
             // `F<A>` has a parameter head, so it is always non-concrete.
             TyKind::ParamApp(_, _) => true,
-            TyKind::Fn(a, r, _) => a.has_param() || r.has_param(),
+            TyKind::Fn(a, r, _, env) => a.has_param() || r.has_param() || env.has_param(),
             TyKind::Tuple(elems) => elems.iter().any(|t| t.has_param()),
             TyKind::App(_, args, _) => args.iter().any(|t| t.has_param()),
             TyKind::Region(t, _) => t.has_param(),
@@ -299,9 +305,10 @@ impl<'tcx> Ty<'tcx> {
                     a.collect_params(out);
                 }
             }
-            TyKind::Fn(a, r, _) => {
+            TyKind::Fn(a, r, _, env) => {
                 a.collect_params(out);
                 r.collect_params(out);
+                env.collect_params(out);
             }
             TyKind::Tuple(elems) => {
                 for e in elems.iter() {
@@ -366,7 +373,9 @@ impl<'tcx> Ty<'tcx> {
             }
             // `self` is the actual type, `other` the expected; a function value
             // may stand in for a more-permissive arrow (arrow subsumption).
-            (TyKind::Fn(a1, r1, m1), TyKind::Fn(a2, r2, m2)) if m1.usable_as(*m2) => {
+            // The env type is informational and does not participate in
+            // equality/subsumption (so `A -> B` abstracts over captures).
+            (TyKind::Fn(a1, r1, m1, _), TyKind::Fn(a2, r2, m2, _)) if m1.usable_as(*m2) => {
                 a1.eq_modulo_regions(*a2) && r1.eq_modulo_regions(*r2)
             }
             _ => false,
@@ -407,9 +416,13 @@ impl<'tcx> Ty<'tcx> {
                     a.free_regions(out);
                 }
             }
-            TyKind::Fn(a, r, _) => {
+            // A closure's captured environment may borrow from regions; exposing
+            // them lets the escape check reject a closure that captures a local
+            // borrow and escapes (`freeRegions(env)`).
+            TyKind::Fn(a, r, _, env) => {
                 a.free_regions(out);
                 r.free_regions(out);
+                env.free_regions(out);
             }
             _ => {}
         }
@@ -440,7 +453,7 @@ impl<'tcx> Ty<'tcx> {
             {
                 xs.iter().zip(*ys).all(|(x, y)| x.compatible(*y))
             }
-            (TyKind::Fn(a1, r1, m1), TyKind::Fn(a2, r2, m2)) if m1 == m2 => {
+            (TyKind::Fn(a1, r1, m1, _), TyKind::Fn(a2, r2, m2, _)) if m1 == m2 => {
                 a1.compatible(*a2) && r1.compatible(*r2)
             }
             _ => false,
@@ -507,7 +520,9 @@ impl fmt::Display for Ty<'_> {
             // The reusable arrow prints bare; the mutating/consuming arrows
             // surface their kind so two arrows that differ only in mode (e.g.
             // `Int -> Int` vs `Int -[Owned]> Int`) are distinguishable.
-            TyKind::Fn(a, r, mode) => match mode {
+            // The env type is not surfaced (it does not affect the surface
+            // arrow type the programmer wrote).
+            TyKind::Fn(a, r, mode, _) => match mode {
                 FnMode::Reusable => write!(f, "{a} -> {r}"),
                 FnMode::ReusableMut => write!(f, "{a} -[BorrowedMut]> {r}"),
                 FnMode::Consuming => write!(f, "{a} -[Owned]> {r}"),

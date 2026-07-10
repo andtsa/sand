@@ -1,0 +1,13 @@
+//@TEST: run
+// exit: 23
+
+// Stress: a borrowing match where some payload fields are wildcards. The
+// decision tree still produces a `&field` occurrence for the `_` element
+// (it indexes by the tuple's layout, not the pattern), so this exercises the
+// wildcard branch of interior-borrow projection.
+
+type Trip = T(Int, Int, Int)
+
+def first_plus_last(t: &Trip): Int := match t { Trip#T(a, _, c) => *a * 10 + *c }
+
+def main(): Int := first_plus_last(&Trip#T(2, 99, 3))

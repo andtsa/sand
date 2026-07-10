@@ -1,0 +1,14 @@
+//@TEST: run
+// exit: 30
+
+// Rudimentary concurrency. `spawn(f, arg)` runs `f(arg)` (synchronously, for
+// now) and returns a `Thread<R>` handle; `join` waits for it and takes the
+// result. Both the moved-in argument and the produced result must be `Send` —
+// a thread-safety marker the compiler checks structurally, enforced by the
+// bounds `where T : Send, R : Send` on `spawn`.
+
+def main(): Int := {
+    let a = spawn(fn (n: Int) -> n * 2, 5);    // a : Thread<Int>, holds 10
+    let b = spawn(fn (n: Int) -> n + 1, 19);   //                  holds 20
+    join(a) + join(b)                          // 30
+}

@@ -1,0 +1,31 @@
+//@TEST: run
+// exit: 0
+// stdout: [42, 7, 42, 22, 43]
+
+// Exercises the `Functor`/`Applicative`/`Monad` instances that the core library
+// provides for `Option` (`fmap`/`pure`/`ap`/`bind`). See `hkt.sand` for
+// user-defined HKT instances.
+
+def or_else(x: Option<Int>, fallback: Int): Int := match x {
+    Option#None => fallback,
+    Option#Some(v) => v,
+}
+
+def main(): Int := {
+    // fmap over a present value, and over an absent one (short-circuits).
+    println(or_else(fmap(Option#Some(21), fn (n: Int) -> n * 2), 0));   // 42
+    let none: Option<Int> = Option#None;
+    println(or_else(fmap(none, fn (n: Int) -> n * 2), 7));              // 7
+
+    // pure: the instance is recovered from the annotated expected type.
+    let lifted: Option<Int> = pure(42);
+    println(or_else(lifted, 0));                                        // 42
+
+    // ap: apply a wrapped function to a wrapped argument.
+    let wrapped: Option<Int -> Int> = Option#Some(fn (n: Int) -> n + 1);
+    println(or_else(ap(wrapped, Option#Some(21)), 0));                  // 22
+
+    // bind: chain a computation that itself returns an Option.
+    println(or_else(bind(Option#Some(21), fn (n: Int) -> Option#Some(n + 22)), 0)); // 43
+    0
+}

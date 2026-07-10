@@ -246,7 +246,7 @@ fn a_borrow_is_released_at_the_end_of_its_block() {
 #[test]
 fn write_through_a_mut_reference_type_checks() {
     // `*r = e` stores through a `&mut`. (Observable mutation is validated via LLVM
-    // in `examples/write_through.sand`.)
+    // in `examples/ownership/write_through.sand`.)
     typecheck(
         "def incr(r: &mut Int): Unit := { *r = *r + 1; } \n \
          def main(): Int := { let mut x = 5; incr(&mut x); x }",
@@ -268,8 +268,8 @@ fn write_through_a_shared_reference_is_rejected() {
 fn write_through_mutates_the_callers_variable() {
     // `incr` writes through a `&mut Int` it received; the mutation lands in the
     // caller's `x` (5 -> 6). This is the interpreter counterpart of
-    // `examples/write_through.sand`, which validates the same via LLVM. `run_both`
-    // asserts the HIR and MIR interpreters agree.
+    // `examples/ownership/write_through.sand`, which validates the same via LLVM.
+    // `run_both` asserts the HIR and MIR interpreters agree.
     assert_eq!(
         run_both(
             "def incr(r: &mut Int): Unit := { *r = *r + 1; } \n \
