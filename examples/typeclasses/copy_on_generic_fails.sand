@@ -1,0 +1,13 @@
+//@TEST: fail
+// stage: parse
+// message: includes "for a generic type"
+
+// `Copy` is a marker that must hold unconditionally, so it is not allowed on a
+// generic (conditionally-`Copy`) type.
+
+type Pair<A> = Mk(A)
+
+impl Clone for Pair<Int> { def clone(x: &Pair<Int>): Pair<Int> := *x }
+impl Copy for Pair<Int> { }
+
+def main(): Int := 0

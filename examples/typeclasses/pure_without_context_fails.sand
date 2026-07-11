@@ -1,0 +1,11 @@
+//@TEST: fail
+// stage: typecheck
+// message: includes "cannot determine the receiver type"
+
+// `pure`'s constructor `F` appears only in its result, so with no
+// expected type the instance cannot be determined.
+
+def main(): Int := {
+    let p = pure(5);
+    0
+}

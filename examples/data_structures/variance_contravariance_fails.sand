@@ -1,0 +1,10 @@
+//@TEST: fail
+// stage: parse
+// message: includes "contravariant"
+
+// Variance soundness: `a` is declared contravariant (`-a`) but appears in a
+// producer (covariant) position (the payload of `Mk`), which is unsound.
+
+type T<-a> = Mk(a)
+
+def main(): Int := 0

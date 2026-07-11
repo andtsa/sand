@@ -2,7 +2,7 @@
 // stage: parse
 // message: includes "class declares"
 
-// Method conformance (Calculus §12.1): the impl's `fmap` declares only one
+// Method conformance (Calculus: Typeclasses): the impl's `fmap` declares only one
 // generic (`<A>`, mapping `A -> A`), but `Functor` requires `fmap<A, B>` with
 // `A -> B` and an `F<B>` result. Rejected at the `impl`, not at a call site.
 

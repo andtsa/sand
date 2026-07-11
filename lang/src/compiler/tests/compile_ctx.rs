@@ -1,6 +1,6 @@
-//! Step 1 of the partial-application feature (Calculus §4.5): `TyKind::Hole`,
-//! under-saturated `Ty::App`, and `constructor_kind`. Pure kinding — no
-//! surface syntax is wired up yet.
+//! Partial-application kinding (Calculus: Partial application): `TyKind::Hole`,
+//! under-saturated `Ty::App`, and `constructor_kind`. Pure kinding, with no
+//! surface syntax wired up.
 use crate::compiler::context::CompileCtx;
 use crate::ir_types::hhir::ProgramModule;
 use crate::ir_types::qhir;
@@ -43,7 +43,7 @@ fn trailing_undersaturation_currys() {
 
 #[test]
 fn interior_hole_has_same_kind_as_trailing() {
-    // `Duo<_, Int>` : Owned -> Owned — one hole, like `Duo<Int>`.
+    // `Duo<_, Int>` : Owned -> Owned, one hole, like `Duo<Int>`.
     let (mut ctx, er) = ctx_with_duo();
     let int = ctx.types.int;
     let h0 = ctx.hole_ty(0);
@@ -81,7 +81,8 @@ fn a_hole_contributes_no_params_or_regions() {
     assert!(rs.is_empty());
 }
 
-// ---- Step 2: β-reduction of a partial application in `subst` (Calculus §4.5).
+// ---- β-reduction of a partial application in `subst` (Calculus: Partial
+// application).
 
 use crate::lang::types::TypeParamId;
 use crate::passes::type_ast::generics::Subst;
@@ -139,7 +140,7 @@ fn subst_beta_fills_two_holes_positionally() {
 #[test]
 fn subst_bare_constructor_shorthand_still_reduces() {
     // Regression: `F := Duo` (bare `Enum`, the all-holes shorthand) still turns
-    // `F<A, B>` into `Duo<A, B>` — the pre-existing unary path is unchanged.
+    // `F<A, B>` into `Duo<A, B>`, and the pre-existing unary path is unchanged.
     let (mut ctx, er) = ctx_with_duo();
     let int = ctx.types.int;
     let boolean = ctx.types.bool;

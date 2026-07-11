@@ -1,0 +1,9 @@
+//@TEST: fail
+// stage: typecheck
+// message: includes "found Bool"
+
+// The argument's type must match the parameter's: `f` expects `Int`, got `Bool`.
+
+def f(x: Int): Int := x
+
+def main(): Int := f(true)

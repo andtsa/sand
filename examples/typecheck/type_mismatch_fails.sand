@@ -1,0 +1,7 @@
+//@TEST: fail
+// stage: typecheck
+// message: includes "found Bool"
+
+// The declared return type is `Int`, but the body is a `Bool`.
+
+def main(): Int := true

@@ -1,0 +1,20 @@
+//@TEST: fail
+// stage: ownership
+// message: includes "moved inside a loop"
+
+// Adversarial: consuming a non-`Copy` value inside a loop body is unsound; it is
+// present on the first iteration but gone on the second, with no re-init.
+
+type Box = Mk(Int)
+
+def unwrap(b: Box): Int := match b { Box#Mk(n) => n }
+
+def main(): Int := {
+    let b = Box#Mk(1);
+    let mut i = 0;
+    while i < 3 do {
+        let n = unwrap(b);   // moves `b` every iteration
+        i = i + n;
+    };
+    i
+}

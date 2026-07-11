@@ -1,0 +1,10 @@
+//@TEST: fail
+// stage: parse
+// message: includes "is not a type constructor"
+
+// A value-kinded type parameter `T : Owned` cannot be applied like `T<Int>`;
+// only a higher-kinded constructor can.
+
+def f<T>(x: T<Int>): Int := 0
+
+def main(): Int := 0

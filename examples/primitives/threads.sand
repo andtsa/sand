@@ -3,7 +3,7 @@
 
 // Rudimentary concurrency. `spawn(f, arg)` runs `f(arg)` (synchronously, for
 // now) and returns a `Thread<R>` handle; `join` waits for it and takes the
-// result. Both the moved-in argument and the produced result must be `Send` —
+// result. Both the moved-in argument and the produced result must be `Send`,
 // a thread-safety marker the compiler checks structurally, enforced by the
 // bounds `where T : Send, R : Send` on `spawn`.
 

@@ -1,0 +1,9 @@
+//@TEST: fail
+// stage: typecheck
+// message: includes "but the scrutinee type has"
+
+// A tuple pattern must bind exactly as many elements as the scrutinee's arity.
+
+def main(): Int := match (1, 2) {
+    (a, b, c) => a,
+}

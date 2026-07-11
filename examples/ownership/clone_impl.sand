@@ -4,7 +4,7 @@
 // Implementing `Clone` for a non-`Copy` aggregate.
 //
 // `clone` receives a shared borrow `&T` and must return a fresh owned `T`. That
-// requires *reading the borrowed value's fields* — which a borrowing `match`
+// requires *reading the borrowed value's fields*, which a borrowing `match`
 // provides: matching through a `&T` binds each payload field as a `&` borrow
 // (here `a, b : &Int`, `p, q : &Pair`), so the impl recurses with `clone(field)`
 // without ever moving out of the borrow. No `Copy` instance is needed.

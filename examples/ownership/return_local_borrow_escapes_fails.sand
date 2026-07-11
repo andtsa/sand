@@ -1,0 +1,13 @@
+//@TEST: fail
+// stage: typecheck
+// message: includes "would escape its scope"
+
+// Region escape: returning `&x` where `x` is a local would leave a dangling
+// reference once the function frame is gone.
+
+def dangling(): &Int := {
+    let x = 5;
+    &x
+}
+
+def main(): Int := 0

@@ -1,0 +1,9 @@
+//@TEST: fail
+// stage: qualify
+// message: includes "duplicate parameter"
+
+// A function's parameters must have distinct names.
+
+def f(x: Int, x: Int): Int := x
+
+def main(): Int := 0

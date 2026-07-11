@@ -1,0 +1,10 @@
+//@TEST: fail
+// stage: parse
+// message: includes "deriving Heaped"
+
+// A (mutually) recursive type has infinite size unless it goes through the heap;
+// it must `deriving Heaped`.
+
+type List = Nil | Cons(Int, List)
+
+def main(): Int := 0

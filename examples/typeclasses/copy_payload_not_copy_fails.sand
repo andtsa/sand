@@ -1,0 +1,16 @@
+//@TEST: fail
+// stage: parse
+// message: includes "requires every field to be"
+
+// Adversarial: `Copy` is sound only if every field is itself `Copy`. `Holder`
+// wraps the non-`Copy` `NC`, so `impl Copy for Holder` is rejected.
+
+type NC = Mk(Int)
+type Holder = H(NC)
+
+impl Clone for Holder {
+    def clone(x: &Holder): Holder := match x { Holder#H(n) => Holder#H(NC#Mk(0)) }
+}
+impl Copy for Holder { }
+
+def main(): Int := 0

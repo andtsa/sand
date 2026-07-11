@@ -1,0 +1,13 @@
+//@TEST: fail
+// stage: parse
+// message: includes "else expression"
+
+// A `let E#V(x) = e` on a multi-variant enum is refutable, so it requires an
+// `else` fallback; omitting it is rejected.
+
+type P = One(Int) | Two(Int)
+
+def main(): Int := {
+    let P#One(x) = P#One(5);
+    x
+}

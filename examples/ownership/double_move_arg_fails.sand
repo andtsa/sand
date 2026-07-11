@@ -1,0 +1,15 @@
+//@TEST: fail
+// stage: ownership
+// message: includes "use of moved value"
+
+// Adversarial: a single call passes the same non-`Copy` value in two argument
+// positions: the second argument is already moved by the first.
+
+type Box = Mk(Int)
+
+def add(a: Box, b: Box): Int := match a { Box#Mk(n) => match b { Box#Mk(m) => n + m } }
+
+def main(): Int := {
+    let x = Box#Mk(1);
+    add(x, x)
+}

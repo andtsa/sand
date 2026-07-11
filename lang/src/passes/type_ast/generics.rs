@@ -57,7 +57,7 @@ pub fn subst<'tcx>(ctx: &mut CompileCtx<'tcx>, ty: Ty<'tcx>, mapping: &Subst<'tc
         // `F<A>`: substitute the arguments, then apply the constructor
         // `F` is bound to. A binding to the bare `Enum(er)` reconstructs the
         // concrete `App(er, ...)`; a binding to a *partial application* (a
-        // constructor abstraction, Calculus §4.5) β-reduces; a binding to another
+        // constructor abstraction, Calculus: Partial application) β-reduces; a binding to another
         // type-constructor parameter re-applies it; an absent binding leaves
         // `F<A>` parametric.
         TyKind::ParamApp(id, args) => {
@@ -69,8 +69,8 @@ pub fn subst<'tcx>(ctx: &mut CompileCtx<'tcx>, ty: Ty<'tcx>, mapping: &Subst<'tc
                     TyKind::Enum(er) => ctx.intern_app(*er, args, Vec::new()),
                     // `F` bound to a partial application `App(er, slots)` whose
                     // `slots` hold `Hole`s (and possibly fixed instance params):
-                    // β-reduce — fill `Hole(i)` from `args[i]` and substitute the
-                    // fixed slots through `mapping` (Calculus §4.5, the β rule).
+                    // β-reduce: fill `Hole(i)` from `args[i]` and substitute the
+                    // fixed slots through `mapping` (Calculus: Partial application, the β rule).
                     TyKind::App(er, slots, regions) => {
                         let er = *er;
                         let regions = regions.to_vec();
@@ -127,7 +127,7 @@ pub fn unify<'tcx>(
                 Ok(())
             }
         },
-        // A hole `_` in a declared head (Calculus §4.5) is the class-operated
+        // A hole `_` in a declared head (Calculus: Partial application) is the class-operated
         // slot: it matches anything and binds nothing. (Used when matching an
         // `impl` head abstraction against a concrete receiver in
         // `resolve_instance`.)

@@ -18,7 +18,7 @@ tuple_type = { "(" ~ type_ ~ ("," ~ type_)+ ~ ")" }
 // type arguments (the lifetimes-first convention; enforced in `build_type`).
 type_application = { identifier ~ "<" ~ type_app_arg ~ ("," ~ type_app_arg)* ~ ">" }
 // A `hole` (`_`) is only *meaningful* in an `impl` head (a partial application,
-// Calculus §4.5); `build_type` rejects it in ordinary type positions.
+// Calculus: Partial application); `build_type` rejects it in ordinary type positions.
 type_app_arg = { lifetime | hole | type_ }
 hole = { "_" }
 
@@ -99,7 +99,7 @@ le       = { "<=" | "≤" }
 
 // type parameters on a generic declaration: `<T>`, `<+a : Owned, -b>`.
 // each parameter carries an optional variance annotation
-// (`+`/`-`; absent = // default)
+// (`+`/`-`; absent = default)
 // and an optional kind annotation (absent = `Owned`).
 // a kind is a base kind (`Owned`/`Never`)
 // or a type-constructor arrow `Owned -> Owned`
@@ -123,8 +123,8 @@ where_clause     = { "where" ~ where_constraint ~ ("," ~ where_constraint)* }
 // Multiple comma-separated payload types are sugar for a single tuple payload:
 // `Cons(Int, List)` ≡ `Cons((Int, List))`.
 enum_variant = { identifier ~ ("(" ~ type_ ~ ("," ~ type_)* ~ ")")? }
-// `deriving C1, C2, ...` — request compiler-derived instances (Memory Step C).
-// A general mechanism; in Step C only `HeapedUnique` is a registered derivable.
+// `deriving C1, C2, ...`: request compiler-derived instances.
+// A general mechanism; currently only `HeapedUnique` is a registered derivable.
 deriving_clause = { "deriving" ~ identifier ~ ("," ~ identifier)* }
 type_alias   = { "type" ~ identifier ~ type_params? ~ "=" ~ enum_variant ~ ("|" ~ enum_variant)* ~ deriving_clause? ~ ";"? }
 
@@ -272,7 +272,7 @@ requires_clause  = { "requires" ~ identifier ~ ("," ~ identifier)* }
 typeclass_decl   = { "typeclass" ~ identifier ~ type_params ~ requires_clause? ~ "{" ~ typeclass_method* ~ "}" }
 
 // typeclass implementation: `impl Eq for Int { def eq(...) := ... }`.
-// `impl<E> Functor for Result<_, E> { … }` — the optional `type_params` are the
+// `impl<E> Functor for Result<_, E> { … }`: the optional `type_params` are the
 // instance's own parameters, in scope for the head's fixed slots and the methods.
 impl_decl = { "impl" ~ type_params? ~ identifier ~ "for" ~ type_ ~ "{" ~ function* ~ "}" }
 

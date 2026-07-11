@@ -1,0 +1,15 @@
+//@TEST: fail
+// stage: parse
+// message: includes "class declares"
+
+// Adversarial (partial application conformance): the instance abstracts over the
+// carried type `E`, but `fmap`'s return fixes the second slot to `Int` instead of
+// `E`, so the method does not conform to `Functor`'s declaration.
+
+type Duo<A, B> = Two(A, B)
+
+impl<E> Functor for Duo<_, E> {
+    def fmap<A, B>(x: Duo<A, E>, f: A -> B): Duo<B, Int> := match x { Duo#Two(a, e) => Duo#Two(f(a), 0) }
+}
+
+def main(): Int := 0

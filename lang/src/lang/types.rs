@@ -208,15 +208,15 @@ pub enum TyKind<'tcx> {
     /// constructor for `F` (its `Subst` entry is the bare `Enum(er)`), turning
     /// `F<A>` into `App(er, A)`. Like `Param`, it never survives mono.
     ParamApp(TypeParamId, &'tcx [Ty<'tcx>]),
-    /// A **hole** in a partial application (Calculus §4.5): the `_` in an
-    /// abstraction head such as `Result<_, E>` (`Ty::App(er, [Hole(0), E])`).
-    /// The `u32` is the hole's positional index (`0..m-1`, in left-to-right
-    /// order of the `_`s), matching the argument order of the higher-kinded
-    /// parameter it abstracts. A hole is *only* well-formed inside a
-    /// constructor-abstraction value — the binding of a higher-kinded parameter
-    /// and the head of an `impl` — and is removed by β-reduction (§4.5) before
-    /// a value's type is formed, so it never survives into
-    /// monomorphisation.
+    /// A **hole** in a partial application (Calculus: Partial application): the
+    /// `_` in an abstraction head such as `Result<_, E>` (`Ty::App(er,
+    /// [Hole(0), E])`). The `u32` is the hole's positional index (`0..m-1`,
+    /// in left-to-right order of the `_`s), matching the argument order of
+    /// the higher-kinded parameter it abstracts. A hole is *only*
+    /// well-formed inside a constructor-abstraction value (the binding of a
+    /// higher-kinded parameter and the head of an `impl`) and is removed by
+    /// β-reduction before a value's type is formed, so it never survives
+    /// into monomorphisation.
     Hole(u32),
     /// A function type `A -> B`: a first-class function / closure value. Unary
     /// (multi-argument via tuple or currying). The [`FnMode`] records how a
@@ -228,7 +228,7 @@ pub enum TyKind<'tcx> {
     /// The fourth component is the **environment type**: the (structural tuple)
     /// type of the values the closure captures, or `Unit` for a capture-free
     /// function. Carrying it on the type is what lets the closure's soundness
-    /// properties be decided structurally — escape (`freeRegions(env)`), drop,
+    /// properties be decided structurally: escape (`freeRegions(env)`), drop,
     /// `Copy`, and the `Send`/`Sync` markers all read it. The env does **not**
     /// yet participate in type equality/subsumption (it is informational until
     /// env-polymorphism lands), so `A -> B` still abstracts over captures.
@@ -300,9 +300,9 @@ impl<'tcx> Ty<'tcx> {
     }
 
     /// `true` if this type contains a constructor **hole** (`TyKind::Hole`),
-    /// i.e. it is (or embeds) a partial application (Calculus §4.5). Used to
-    /// assert that no hole leaks past instance elaboration into a value type or
-    /// monomorphisation.
+    /// i.e. it is (or embeds) a partial application (Calculus: Partial
+    /// application). Used to assert that no hole leaks past instance
+    /// elaboration into a value type or monomorphisation.
     pub fn has_hole(self) -> bool {
         match self.kind() {
             TyKind::Hole(_) => true,

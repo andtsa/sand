@@ -3,7 +3,7 @@
 // stdout: [21, 42, 7, 0]
 
 // The core library's `Result<T, E>` as a real `Functor`/`Applicative`/`Monad`
-// via partial application (`impl<E> … for Result<_, E>`, Calculus §4.5). The
+// via partial application (`impl<E> … for Result<_, E>`, Calculus: Partial application). The
 // success channel is mapped/chained; an `Err` short-circuits.
 
 def unwrap_or(r: Result<Int, Int>, d: Int): Int := match r {

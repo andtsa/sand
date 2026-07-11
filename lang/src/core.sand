@@ -111,7 +111,7 @@ typeclass Monad<F : Owned -> Owned> requires Applicative {
 
 // ============= Useful builtins ================
 
-// `Option<T>`: a value that may be absent — `Some(x)` or `None`. The canonical
+// `Option<T>`: a value that may be absent, `Some(x)` or `None`. The canonical
 // alternative to a sentinel value for "might not be there".
 type Option<T> = None | Some(T)
 
@@ -171,11 +171,11 @@ def flatten<T>(o: Option<Option<T>>): Option<T> := match o {
 // `Err(E)`. Threads an error value through code instead of diverging.
 //
 // `Result` is *binary*, but it still joins the `Functor`/`Applicative`/`Monad`
-// hierarchy via **partial application** (Calculus §4.5): fixing the error type
+// hierarchy via **partial application** (Calculus: Partial application): fixing the error type
 // `E` leaves the unary constructor `Result<_, E>` those classes require. The
 // instances operate on the success channel; the error rides along unchanged.
-// (`map_err` and `ok` below have no instance form — they act on the *error*
-// channel / project into `Option` — so they remain as helpers.)
+// (`map_err` and `ok` below have no instance form; they act on the *error*
+// channel / project into `Option`, so they remain as helpers.)
 type Result<T, E> = Ok(T) | Err(E)
 
 impl<E> Functor for Result<_, E> {

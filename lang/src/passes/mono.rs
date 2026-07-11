@@ -272,7 +272,7 @@ impl<'tcx> Mono<'tcx> {
             // A higher-kinded application `F<A>`: `F` is bound either to a bare
             // constructor (`Enum(er)`, all-holes) or to a *partial application*
             // (`App(er, slots)` with `Hole`s + fixed instance params). Either way,
-            // β-reduce (Calculus §4.5) to the full argument list, then specialise
+            // β-reduce (Calculus: Partial application) to the full argument list, then specialise
             // exactly like `App`.
             TyKind::ParamApp(id, args) => {
                 let args: Vec<Ty<'tcx>> = args

@@ -1,0 +1,13 @@
+//@TEST: fail
+// stage: ownership
+// message: includes "already borrowed"
+
+// Exclusivity: a `&mut` borrow requires exclusive access, but a shared borrow `r`
+// is still live (used after) when the `&mut` is taken.
+
+def main(): Int := {
+    let mut x = 5;
+    let r = &x;
+    let m = &mut x;   // conflicts with the still-live shared borrow `r`
+    *m + *r
+}

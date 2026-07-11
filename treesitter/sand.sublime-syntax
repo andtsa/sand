@@ -173,7 +173,7 @@ contexts:
           scope: punctuation.terminator.sand
           pop: true
 
-  # `extern def …;` — only the `extern` keyword here; the `def …` that follows
+  # `extern def …;`: only the `extern` keyword here; the `def …` that follows
   # is highlighted by function-def.
   extern-decl:
     - match: '\bextern\b'

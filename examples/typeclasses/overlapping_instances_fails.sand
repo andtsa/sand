@@ -2,7 +2,7 @@
 // stage: parse
 // message: includes "duplicate instance"
 
-// Coherence (Calculus §12.1): the blanket `Duo<_, E>` overlaps the specific
+// Coherence (Calculus: Typeclasses): the blanket `Duo<_, E>` overlaps the specific
 // `Duo<_, Int>` (a ground `Duo<X, Int>` matches both), so registering both is
 // rejected.
 

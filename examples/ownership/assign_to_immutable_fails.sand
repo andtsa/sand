@@ -1,0 +1,11 @@
+//@TEST: fail
+// stage: typecheck
+// message: includes "cannot assign to immutable variable"
+
+// A plain `let` binding is immutable; assigning to it requires `let mut`.
+
+def main(): Int := {
+    let x = 5;
+    x = 6;
+    x
+}

@@ -2,9 +2,9 @@
 // exit: 21
 // stdout: [21, 99]
 
-// A higher-kinded `impl` with an explicit hole (Calculus §4.5): `Functor` over
-// the *first* slot of the binary `Duo`, the second carried by `E`. Exercises the
-// full path — head elaboration, kind-check, dispatch (recovering `E` from the
+// A higher-kinded `impl` with an explicit hole (Calculus: Partial application):
+// `Functor` over the *first* slot of the binary `Duo`, the second carried by `E`.
+// Exercises the full path: head elaboration, kind-check, dispatch (recovering `E` from the
 // receiver), and monomorphisation.
 
 type Duo<A, B> = Two(A, B)

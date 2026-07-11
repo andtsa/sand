@@ -1,0 +1,10 @@
+//@TEST: fail
+// stage: parse
+// message: includes "must be applied to arguments"
+
+// A higher-kinded parameter `F : Owned -> Owned` is a constructor, not a type; it
+// must be applied (`F<T>`) rather than used bare.
+
+def f<F : Owned -> Owned>(x: F): Int := 0
+
+def main(): Int := 0

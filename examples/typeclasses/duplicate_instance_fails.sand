@@ -1,0 +1,16 @@
+//@TEST: fail
+// stage: parse
+// message: includes "duplicate instance"
+
+// Coherence: two identical instances for the same head are rejected.
+
+type Duo<A, B> = Two(A, B)
+
+impl Functor for Duo<_, Int> {
+    def fmap<A, B>(x: Duo<A, Int>, f: A -> B): Duo<B, Int> := match x { Duo#Two(a, e) => Duo#Two(f(a), e) }
+}
+impl Functor for Duo<_, Int> {
+    def fmap<A, B>(x: Duo<A, Int>, f: A -> B): Duo<B, Int> := match x { Duo#Two(a, e) => Duo#Two(f(a), e) }
+}
+
+def main(): Int := 0
