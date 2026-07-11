@@ -56,13 +56,33 @@ pub fn subst<'tcx>(ctx: &mut CompileCtx<'tcx>, ty: Ty<'tcx>, mapping: &Subst<'tc
         }
         // `F<A>`: substitute the arguments, then apply the constructor
         // `F` is bound to. A binding to the bare `Enum(er)` reconstructs the
-        // concrete `App(er, ...)`; a binding to another type-constructor parameter
-        // re-applies it; an absent binding leaves `F<A>` parametric.
+        // concrete `App(er, ...)`; a binding to a *partial application* (a
+        // constructor abstraction, Calculus §4.5) β-reduces; a binding to another
+        // type-constructor parameter re-applies it; an absent binding leaves
+        // `F<A>` parametric.
         TyKind::ParamApp(id, args) => {
             let args: Vec<Ty<'tcx>> = args.iter().map(|a| subst(ctx, *a, mapping)).collect();
             match mapping.get(id).copied() {
                 Some(bound) => match bound.kind() {
+                    // `F` bound to the bare constructor: every parameter is a hole,
+                    // so the application args are the full argument list.
                     TyKind::Enum(er) => ctx.intern_app(*er, args, Vec::new()),
+                    // `F` bound to a partial application `App(er, slots)` whose
+                    // `slots` hold `Hole`s (and possibly fixed instance params):
+                    // β-reduce — fill `Hole(i)` from `args[i]` and substitute the
+                    // fixed slots through `mapping` (Calculus §4.5, the β rule).
+                    TyKind::App(er, slots, regions) => {
+                        let er = *er;
+                        let regions = regions.to_vec();
+                        let slots: Vec<Ty<'tcx>> = slots
+                            .iter()
+                            .map(|s| match s.kind() {
+                                TyKind::Hole(i) => args[*i as usize],
+                                _ => subst(ctx, *s, mapping),
+                            })
+                            .collect();
+                        ctx.intern_app(er, slots, regions)
+                    }
                     TyKind::Param(g) => ctx.param_app_ty(*g, args),
                     _ => crate::internal_bug!(
                         "higher-kinded parameter bound to a non-constructor: {bound}"
@@ -107,6 +127,14 @@ pub fn unify<'tcx>(
                 Ok(())
             }
         },
+        // A hole `_` in a declared head (Calculus §4.5) is the class-operated
+        // slot: it matches anything and binds nothing. (Used when matching an
+        // `impl` head abstraction against a concrete receiver in
+        // `resolve_instance`.)
+        (TyKind::Hole(_), _) => Ok(()),
+        // A bare `Enum(Base)` head is the all-holes abstraction, so it matches any
+        // application of the same constructor (binding nothing).
+        (TyKind::Enum(de), TyKind::App(ae, ..)) if de == ae => Ok(()),
         (TyKind::Tuple(ds), TyKind::Tuple(acts)) if ds.len() == acts.len() => {
             for (d, a) in ds.iter().zip(*acts) {
                 unify(ctx, *d, *a, mapping)?;

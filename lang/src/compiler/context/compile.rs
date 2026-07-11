@@ -170,7 +170,12 @@ pub struct CompileCtx<'tcx> {
     /// 1).
     method_index: Map<String, TypeclassRef>,
     /// The one global, coherent instance set, keyed by `(class, head type)`.
-    instances: Map<(TypeclassRef, TypeHead<'tcx>), ImplDef<'tcx>>,
+    // Instances bucketed by `(class, head-constructor)`. A bucket holds more than
+    // one instance only for a higher-kinded class whose members fix different
+    // slots (`Functor for Result<_, Int>` vs `… <_, Bool>`); `register_instance`
+    // rejects *overlapping* heads, so resolution stays unambiguous (Calculus
+    // §12.1). Ground classes (`Copy`/`Clone`/…) always have at most one per key.
+    instances: Map<(TypeclassRef, TypeHead<'tcx>), Vec<ImplDef<'tcx>>>,
     /// Lang-item handles for the `Copy` / `Clone` classes (resolved by name
     /// when `core.sand` registers them), used to drive implicit-copy.
     copy_class: Option<TypeclassRef>,
@@ -588,6 +593,55 @@ impl<'tcx> CompileCtx<'tcx> {
                 Ty(arenas.alloc_ty(TyKind::ParamApp(*param, slice)))
             },
         )
+    }
+
+    /// Intern a partial-application **hole** `_ᵢ` (Calculus §4.5,
+    /// [`TyKind::Hole`]). Well-formed only inside a constructor-abstraction
+    /// head (the binding of a higher-kinded parameter, or an `impl` head).
+    pub fn hole_ty(&mut self, idx: u32) -> Ty<'tcx> {
+        self.intern_ty(TyKind::Hole(idx))
+    }
+
+    /// The **constructor kind** of a type viewed as a type constructor
+    /// (Calculus §4.5, generalised `K-App`): `Owned` when it is a
+    /// saturated, hole-free value type; otherwise the arrow `k_{h₁} → … →
+    /// k_{hₘ} → Owned` over the kinds of its holes, in slot order. Holes
+    /// are the explicit `Hole` arguments of an `App` *plus* the implicit
+    /// trailing holes of an under-saturated one (`args.len() < arity`). A
+    /// non-`App` type has no holes, so this reduces to its value kind
+    /// ([`kind_of`](Self::kind_of)).
+    pub fn constructor_kind(&mut self, ty: Ty<'tcx>) -> Kind {
+        // A bare `Enum(er)` is the all-holes abstraction (every parameter is a
+        // hole), equivalent to `App(er, [])`; anything else non-`App` is a value
+        // type with no holes.
+        let (er, args): (AdtRef<'tcx>, &[Ty<'tcx>]) = match ty.kind() {
+            TyKind::App(er, args, _) => (*er, args),
+            TyKind::Enum(er) => (*er, &[]),
+            _ => return self.kind_of(ty),
+        };
+        // Copy the declared parameter kinds out first, so the immutable
+        // `get_enum` borrow is released before `intern_kind` (needs `&mut self`).
+        let param_kinds: Vec<Kind> = self
+            .get_enum(er)
+            .type_params
+            .iter()
+            .map(|p| p.kind)
+            .collect();
+        let mut hole_kinds: Vec<Kind> = Vec::new();
+        for (i, a) in args.iter().enumerate() {
+            if matches!(a.kind(), TyKind::Hole(_)) && i < param_kinds.len() {
+                hole_kinds.push(param_kinds[i]);
+            }
+        }
+        // trailing under-saturation: the un-supplied parameters are implicit holes.
+        for &k in param_kinds.iter().skip(args.len()) {
+            hole_kinds.push(k);
+        }
+        // curry right-associatively over `Owned`.
+        hole_kinds
+            .into_iter()
+            .rev()
+            .fold(Kind::Owned, |acc, k| self.intern_kind(k, acc))
     }
 
     /// Intern the arrow kind `from -> to`, returning the canonical
@@ -1882,7 +1936,36 @@ impl<'tcx> CompileCtx<'tcx> {
         class: TypeclassRef,
         head: TypeHead<'tcx>,
     ) -> Option<&ImplDef<'tcx>> {
-        self.instances.get(&(class, head))
+        // The head-only lookup used by ground classes (`Copy`/`Clone`/superclass
+        // presence) and by the single-instance case. A higher-kinded bucket with
+        // several candidates is disambiguated by the receiver via
+        // [`resolve_instance`](Self::resolve_instance); this returns the first.
+        self.instances.get(&(class, head)).and_then(|v| v.first())
+    }
+
+    /// Resolve the instance for a `class` method call on a value of type
+    /// `value` (Calculus §12.1 resolution). Among the candidates bucketed
+    /// under `value`'s head constructor, returns the first whose head
+    /// abstraction **unifies** with `value` — its `Hole`s match the
+    /// class-operated slots, its fixed slots pin the rest. The returned
+    /// `for_ty` is what the class parameter `F` binds to (so `F<…>`
+    /// β-reduces at the call site), and the method map selects the concrete
+    /// impl functions. `None` if nothing matches.
+    pub fn resolve_instance(
+        &self,
+        class: TypeclassRef,
+        value: Ty<'tcx>,
+    ) -> Option<(Ty<'tcx>, Map<String, FunRef<'tcx>>)> {
+        use crate::passes::type_ast::generics::Subst;
+        use crate::passes::type_ast::generics::unify;
+        let head = self.type_head(value)?;
+        let bucket = self.instances.get(&(class, head))?;
+        bucket.iter().find_map(|idef| {
+            let mut probe = Subst::new();
+            unify(self, idef.for_ty, value, &mut probe)
+                .ok()
+                .map(|()| (idef.for_ty, idef.methods.clone()))
+        })
     }
 
     /// Enter the current function's `where T : C` constraints as assumptions
@@ -1928,18 +2011,25 @@ impl<'tcx> CompileCtx<'tcx> {
     pub fn instance_keys(&self) -> Vec<(TypeclassRef, TypeHead<'tcx>, Range)> {
         self.instances
             .values()
+            .flatten()
             .map(|d| (d.class, d.head, d.range))
             .collect()
     }
 
-    /// Register an instance. Returns `Err(existing range)` if an instance for
-    /// the same `(class, head)` already exists (coherence violation).
+    /// Register an instance. Returns `Err(existing range)` if its head
+    /// **overlaps** an already-registered instance in the same `(class,
+    /// head)` bucket — two heads overlap iff some ground type matches both
+    /// (Calculus §12.1 coherence). For ground classes this reduces to "at
+    /// most one instance per key"; for a higher-kinded class it also
+    /// permits disjoint instances (e.g. fixing a slot to `Int` vs `Bool`)
+    /// while rejecting a blanket-vs-specific clash.
     pub fn register_instance(&mut self, def: ImplDef<'tcx>) -> Result<(), Range> {
         let key = (def.class, def.head);
-        if let Some(existing) = self.instances.get(&key) {
+        let bucket = self.instances.entry(key).or_default();
+        if let Some(existing) = bucket.iter().find(|e| heads_overlap(e.for_ty, def.for_ty)) {
             return Err(existing.range);
         }
-        self.instances.insert(key, def);
+        bucket.push(def);
         Ok(())
     }
 
@@ -2076,6 +2166,27 @@ impl std::fmt::Display for TyDisplay<'_, '_> {
             TyKind::RefMut(_, inner) => write!(f, "&mut {}", self.ctx.display_ty(*inner)),
             TyKind::Region(inner, _) => write!(f, "{}", self.ctx.display_ty(*inner)),
             TyKind::Ptr(inner) => write!(f, "Ptr<{}>", self.ctx.display_ty(*inner)),
+            TyKind::Fn(arg, ret, _, _) => {
+                write!(
+                    f,
+                    "{} -> {}",
+                    self.ctx.display_ty(*arg),
+                    self.ctx.display_ty(*ret)
+                )
+            }
+            // A higher-kinded application `F<..>` or a partial-application hole
+            // (Calculus §4.5) — shown structurally with resolved names.
+            TyKind::ParamApp(id, args) => {
+                write!(f, "{}<", self.ctx.type_param_name(*id))?;
+                for (i, arg) in args.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", self.ctx.display_ty(*arg))?;
+                }
+                write!(f, ">")
+            }
+            TyKind::Hole(_) => write!(f, "_"),
             _ => write!(f, "{}", self.ty),
         }
     }
@@ -2139,6 +2250,44 @@ fn collect_region_bindings(
             }
         }
         _ => {}
+    }
+}
+
+/// Do two `impl` head abstractions (Calculus §4.5) **overlap** — is there a
+/// ground type matching both? `Hole`s (the class-operated slots) and `Param`s
+/// (an instance's own parameters) act as wildcards; fixed slots must match
+/// structurally, and a bare `Enum` (all-holes) blankets any application of the
+/// same constructor. Used by [`CompileCtx::register_instance`] for coherence.
+fn heads_overlap<'a>(a: Ty<'a>, b: Ty<'a>) -> bool {
+    match (a.kind(), b.kind()) {
+        // wildcards: a hole, an instance parameter, or a (never-expected here)
+        // higher-kinded application matches anything.
+        (TyKind::Hole(_), _) | (_, TyKind::Hole(_)) => true,
+        (TyKind::Param(_), _) | (_, TyKind::Param(_)) => true,
+        (TyKind::ParamApp(..), _) | (_, TyKind::ParamApp(..)) => true,
+        // a bare `Enum` is all-holes: it blankets any application of the same
+        // constructor (and another bare `Enum` of it).
+        (TyKind::Enum(e1), TyKind::Enum(e2)) => e1 == e2,
+        (TyKind::Enum(e1), TyKind::App(e2, ..)) | (TyKind::App(e1, ..), TyKind::Enum(e2)) => {
+            e1 == e2
+        }
+        (TyKind::App(e1, a1, _), TyKind::App(e2, a2, _)) => {
+            e1 == e2
+                && a1.len() == a2.len()
+                && a1.iter().zip(a2.iter()).all(|(x, y)| heads_overlap(*x, *y))
+        }
+        (TyKind::Tuple(x), TyKind::Tuple(y)) => {
+            x.len() == y.len() && x.iter().zip(y.iter()).all(|(p, q)| heads_overlap(*p, *q))
+        }
+        (TyKind::Ref(_, x), TyKind::Ref(_, y)) | (TyKind::RefMut(_, x), TyKind::RefMut(_, y)) => {
+            heads_overlap(*x, *y)
+        }
+        (TyKind::Ptr(x), TyKind::Ptr(y)) => heads_overlap(*x, *y),
+        (TyKind::Fn(a1, r1, _, _), TyKind::Fn(a2, r2, _, _)) => {
+            heads_overlap(*a1, *a2) && heads_overlap(*r1, *r2)
+        }
+        // primitives (`Int`/`Bool`/`Unit`/`Top`) and any exact match.
+        _ => a.type_eq(b),
     }
 }
 

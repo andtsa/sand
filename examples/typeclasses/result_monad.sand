@@ -1,0 +1,24 @@
+//@TEST: run
+// exit: 0
+// stdout: [21, 42, 7, 0]
+
+// The core library's `Result<T, E>` as a real `Functor`/`Applicative`/`Monad`
+// via partial application (`impl<E> … for Result<_, E>`, Calculus §4.5). The
+// success channel is mapped/chained; an `Err` short-circuits.
+
+def unwrap_or(r: Result<Int, Int>, d: Int): Int := match r {
+    Result#Ok(v) => v,
+    Result#Err(e) => d,
+}
+
+def main(): Int := {
+    let r: Result<Int, Int> = Result#Ok(20);
+    println(unwrap_or(fmap(r, fn (n: Int) -> n + 1), 0));              // fmap  -> 21
+    let s: Result<Int, Int> = Result#Ok(20);
+    println(unwrap_or(bind(s, fn (n: Int) -> Result#Ok(n + 22)), 0)); // bind  -> 42
+    let p: Result<Int, Int> = pure(7);                                // pure  -> 7
+    println(unwrap_or(p, 0));
+    let e: Result<Int, Int> = Result#Err(99);
+    println(unwrap_or(fmap(e, fn (n: Int) -> n + 1), 0));             // Err short-circuits -> 0
+    0
+}

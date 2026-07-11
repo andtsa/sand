@@ -1,0 +1,12 @@
+//@TEST: fail
+// stage: parse
+// message: includes "class parameter requires kind"
+
+// A bare binary constructor has kind `Owned -> Owned -> Owned`, but `Functor`
+// requires `Owned -> Owned` — one hole per arrow. Rejected by the head kind check.
+
+type Duo<A, B> = Two(A, B)
+
+impl Functor for Duo { }
+
+def main(): Int := 0

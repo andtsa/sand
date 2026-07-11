@@ -350,6 +350,13 @@ pub(crate) fn build_core_type<'run>(
                                 })?;
                         region_args.push(region);
                     }
+                    // A `_` hole is only meaningful in an `impl` head (built
+                    // manually by `build_impl`); anywhere else it is an error.
+                    Rule::hole => {
+                        return Err(AstError::HoleOutsideImplHead {
+                            range: Range::from(&child),
+                        });
+                    }
                     _ => arg_tys.push(build_type(ctx, child)?),
                 }
             }

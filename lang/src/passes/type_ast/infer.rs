@@ -808,13 +808,34 @@ pub(super) fn infer_method_call<'tcx>(
     let mut typed: Vec<Option<typed_hir::Expr<'tcx>>> = (0..args.len()).map(|_| None).collect();
     let is_fn_param = |i: usize| matches!(mdef.param_tys[i].kind(), TyKind::Fn(_, _, _, _));
 
+    // For a higher-kinded class, once `F` is resolved to a partial-application
+    // head (`Result<_, E>`), the method map of the *chosen* instance selects the
+    // impl functions (a disjoint bucket may hold several). `None` for the
+    // ground / single-instance path, which falls back to `lookup_instance`.
+    let mut resolved_methods: Option<Map<String, FunRef<'tcx>>> = None;
+
     // Pass 1: infer the non-function arguments and solve from them.
     for (i, a) in args.iter().enumerate() {
         if is_fn_param(i) {
             continue;
         }
         let typed_a = infer(ctx, env, a)?;
-        let _ = unify(ctx, mdef.param_tys[i], typed_a.ty, &mut mapping);
+        // Higher-kinded seeding (Calculus §12.1): if this argument applies the
+        // class parameter (`F<…>`) and `F` is still unsolved, resolve the instance
+        // from the actual constructor and bind `F` to its head abstraction. The
+        // β-reducing `subst` below then turns `F<A>` into the instance's concrete
+        // shape, so the unify recovers both the method args and the instance
+        // parameters (`E`). Needed whenever `F` is not a plain unary constructor.
+        if let TyKind::ParamApp(fid, _) = mdef.param_tys[i].kind()
+            && *fid == class_param
+            && !mapping.contains_key(&class_param)
+            && let Some((for_ty, methods)) = ctx.resolve_instance(class, typed_a.ty)
+        {
+            mapping.insert(class_param, for_ty);
+            resolved_methods = Some(methods);
+        }
+        let decl = subst(ctx, mdef.param_tys[i], &mapping);
+        let _ = unify(ctx, decl, typed_a.ty, &mut mapping);
         typed[i] = Some(typed_a);
     }
     // Return-type-driven dispatch: when the receiver `F` (or a result-only type
@@ -822,7 +843,19 @@ pub(super) fn infer_method_call<'tcx>(
     // of the call (e.g. `let x: Opt<Int> = pure(5)`, or a `bind` whose result
     // type is known from context).
     if let Some(exp) = expected {
-        let _ = unify(ctx, mdef.ret_ty, exp, &mut mapping);
+        // Higher-kinded seeding from the *result* type: `pure`'s `F` appears only
+        // in its return, so a partial-application instance can't be seeded from an
+        // argument — resolve it from the expected type instead (Calculus §12.1).
+        if let TyKind::ParamApp(fid, _) = mdef.ret_ty.kind()
+            && *fid == class_param
+            && !mapping.contains_key(&class_param)
+            && let Some((for_ty, methods)) = ctx.resolve_instance(class, exp)
+        {
+            mapping.insert(class_param, for_ty);
+            resolved_methods = Some(methods);
+        }
+        let decl = subst(ctx, mdef.ret_ty, &mapping);
+        let _ = unify(ctx, decl, exp, &mut mapping);
     }
     // Pass 2: check the function-typed arguments against their substituted
     // declared types so expected types flow into the continuation bodies. If a
@@ -837,7 +870,8 @@ pub(super) fn infer_method_call<'tcx>(
         } else {
             check(ctx, env, a, decl)?
         };
-        let _ = unify(ctx, mdef.param_tys[i], typed_a.ty, &mut mapping);
+        let redu = subst(ctx, mdef.param_tys[i], &mapping);
+        let _ = unify(ctx, redu, typed_a.ty, &mut mapping);
         typed[i] = Some(typed_a);
     }
     let arg_exprs: Vec<typed_hir::Expr<'tcx>> = typed
@@ -914,23 +948,22 @@ pub(super) fn infer_method_call<'tcx>(
         });
     }
 
-    let head = ctx
-        .type_head(receiver)
-        .ok_or_else(|| AstTypeError::TypeclassNoInstance {
-            class: class_name.clone(),
-            ty: receiver,
-            range: expr.range,
-            required_by: None,
-        })?;
-    let impl_fn = ctx
-        .lookup_instance(class, head)
-        .and_then(|idef| idef.methods.get(method).copied())
-        .ok_or(AstTypeError::TypeclassNoInstance {
-            class: class_name,
-            ty: receiver,
-            range: expr.range,
-            required_by: None,
-        })?;
+    // Select the impl function: the higher-kinded path already chose the exact
+    // instance (`resolved_methods`); the ground / single-instance path looks it up
+    // by the receiver's head constructor.
+    let impl_fn = match &resolved_methods {
+        Some(methods) => methods.get(method).copied(),
+        None => ctx
+            .type_head(receiver)
+            .and_then(|head| ctx.lookup_instance(class, head))
+            .and_then(|idef| idef.methods.get(method).copied()),
+    }
+    .ok_or(AstTypeError::TypeclassNoInstance {
+        class: class_name,
+        ty: receiver,
+        range: expr.range,
+        required_by: None,
+    })?;
 
     Ok(typed_hir::Expr {
         expr: typed_hir::Expression::Call {

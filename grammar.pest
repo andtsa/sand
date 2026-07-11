@@ -17,7 +17,10 @@ tuple_type = { "(" ~ type_ ~ ("," ~ type_)+ ~ ")" }
 // `Holder<'a>`, `Both<'a, Int>`. Region (lifetime) arguments come first, then
 // type arguments (the lifetimes-first convention; enforced in `build_type`).
 type_application = { identifier ~ "<" ~ type_app_arg ~ ("," ~ type_app_arg)* ~ ">" }
-type_app_arg = { lifetime | type_ }
+// A `hole` (`_`) is only *meaningful* in an `impl` head (a partial application,
+// Calculus §4.5); `build_type` rejects it in ordinary type positions.
+type_app_arg = { lifetime | hole | type_ }
+hole = { "_" }
 
 // a lifetime / region: `'r`, `'heap`, `'static`.
 // atomic so no internal whitespace is consumed between the tick and the name.
@@ -269,7 +272,9 @@ requires_clause  = { "requires" ~ identifier ~ ("," ~ identifier)* }
 typeclass_decl   = { "typeclass" ~ identifier ~ type_params ~ requires_clause? ~ "{" ~ typeclass_method* ~ "}" }
 
 // typeclass implementation: `impl Eq for Int { def eq(...) := ... }`.
-impl_decl = { "impl" ~ identifier ~ "for" ~ type_ ~ "{" ~ function* ~ "}" }
+// `impl<E> Functor for Result<_, E> { … }` — the optional `type_params` are the
+// instance's own parameters, in scope for the head's fixed slots and the methods.
+impl_decl = { "impl" ~ type_params? ~ identifier ~ "for" ~ type_ ~ "{" ~ function* ~ "}" }
 
 module = { "module" ~ identifier ~ ";"? }
 

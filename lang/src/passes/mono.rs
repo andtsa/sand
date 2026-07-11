@@ -269,9 +269,11 @@ impl<'tcx> Mono<'tcx> {
                 let env = self.mono_ty(ctx, *env, mapping);
                 ctx.closure_ty(a, r, *m, env)
             }
-            // A higher-kinded application `F<A>`: `F` is bound to a
-            // concrete constructor (bare `Enum(er)`); apply it to the
-            // monomorphised args and specialise, exactly like `App`.
+            // A higher-kinded application `F<A>`: `F` is bound either to a bare
+            // constructor (`Enum(er)`, all-holes) or to a *partial application*
+            // (`App(er, slots)` with `Hole`s + fixed instance params). Either way,
+            // β-reduce (Calculus §4.5) to the full argument list, then specialise
+            // exactly like `App`.
             TyKind::ParamApp(id, args) => {
                 let args: Vec<Ty<'tcx>> = args
                     .iter()
@@ -280,6 +282,20 @@ impl<'tcx> Mono<'tcx> {
                 match mapping.get(id).map(|t| t.kind()) {
                     Some(TyKind::Enum(er)) => {
                         let spec_er = self.request_enum(ctx, *er, args);
+                        ctx.enum_ty(spec_er)
+                    }
+                    // β-reduce the abstraction: fill `Hole(i)` from the (already
+                    // monomorphised) `args[i]`, monomorphise the fixed slots.
+                    Some(TyKind::App(er, slots, _)) => {
+                        let er = *er;
+                        let full: Vec<Ty<'tcx>> = slots
+                            .iter()
+                            .map(|s| match s.kind() {
+                                TyKind::Hole(i) => args[*i as usize],
+                                _ => self.mono_ty(ctx, *s, mapping),
+                            })
+                            .collect();
+                        let spec_er = self.request_enum(ctx, er, full);
                         ctx.enum_ty(spec_er)
                     }
                     other => internal_bug!(
@@ -806,8 +822,13 @@ fn mangle_ty<'tcx>(ctx: &CompileCtx<'tcx>, ty: Ty<'tcx>) -> String {
         TyKind::RefMut(_, inner) => format!("RefMut_{}", mangle_ty(ctx, *inner)),
         // Raw pointers survive monomorphisation (A); the element type is mangled.
         TyKind::Ptr(inner) => format!("Ptr_{}", mangle_ty(ctx, *inner)),
-        // `Param`/`ParamApp`/`App`/`Region` are substituted / erased before mangling.
-        TyKind::Param(_) | TyKind::ParamApp(..) | TyKind::App(..) | TyKind::Region(..) => {
+        // `Param`/`ParamApp`/`App`/`Region`/`Hole` are substituted / β-reduced /
+        // erased before mangling.
+        TyKind::Param(_)
+        | TyKind::ParamApp(..)
+        | TyKind::App(..)
+        | TyKind::Region(..)
+        | TyKind::Hole(_) => {
             internal_bug!("type argument is not concrete during mangling: {ty}")
         }
     }

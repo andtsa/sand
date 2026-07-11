@@ -1,0 +1,19 @@
+//@TEST: fail
+// stage: parse
+// message: includes "duplicate instance"
+
+// Coherence (Calculus §12.1): the blanket `Duo<_, E>` overlaps the specific
+// `Duo<_, Int>` (a ground `Duo<X, Int>` matches both), so registering both is
+// rejected.
+
+type Duo<A, B> = Two(A, B)
+
+impl<E> Functor for Duo<_, E> {
+    def fmap<A, B>(x: Duo<A, E>, f: A -> B): Duo<B, E> := match x { Duo#Two(a, e) => Duo#Two(f(a), e) }
+}
+
+impl Functor for Duo<_, Int> {
+    def fmap<A, B>(x: Duo<A, Int>, f: A -> B): Duo<B, Int> := match x { Duo#Two(a, n) => Duo#Two(f(a), n) }
+}
+
+def main(): Int := 0

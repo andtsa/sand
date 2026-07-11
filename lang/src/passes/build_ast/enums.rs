@@ -8,7 +8,6 @@ use crate::compiler::structure::Derivable;
 use crate::compiler::structure::HeapedStrategy;
 use crate::compiler::structure::ModuleRef;
 use crate::compiler::structure::Range;
-use crate::compiler::structure::TypeHead;
 use crate::passes::parse::Rule;
 
 /// Register one `type` declaration's skeleton (name, type/region params,
@@ -170,19 +169,6 @@ pub(crate) fn resolve_enum_payloads<'i, 'run>(
     }
     ctx.end_type_params();
     Ok(())
-}
-
-/// phase 2, build every function body, grouped by the module it is declared in
-/// (`module ...;` switches the current module). Enum / `use` declarations were
-/// already handled in phase 1.
-/// A display string for an instance head, used to mangle impl-method names.
-pub(crate) fn head_name<'a>(ctx: &CompileCtx<'a>, head: TypeHead<'a>) -> String {
-    match head {
-        TypeHead::Int => "Int".to_string(),
-        TypeHead::Bool => "Bool".to_string(),
-        TypeHead::Unit => "Unit".to_string(),
-        TypeHead::Enum(er) => ctx.get_enum(er).name.clone(),
-    }
 }
 
 /// Heap-strategy legality (Calculus, `K-HeapedRec`): a (mutually) recursive

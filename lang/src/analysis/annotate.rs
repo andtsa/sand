@@ -51,7 +51,7 @@ fn classify_capture_use<'tcx>(
     moved: &mut bool,
     mutated: &mut bool,
 ) {
-    let mut go = |e: &Expression<'tcx>, m: &mut bool, mu: &mut bool| {
+    let go = |e: &Expression<'tcx>, m: &mut bool, mu: &mut bool| {
         classify_capture_use(e, movable, all, m, mu)
     };
     match expr {
@@ -63,13 +63,13 @@ fn classify_capture_use<'tcx>(
         }
         // `&c` / `&mut c` of a capture is a *borrow*, not a move; `&mut c` mutates.
         Expression::Borrow(inner, mutable) => {
-            if let Expression::Var(v) = &inner.expr {
-                if all.contains(v) {
-                    if *mutable {
-                        *mutated = true;
-                    }
-                    return; // do not descend into the borrowed capture
+            if let Expression::Var(v) = &inner.expr
+                && all.contains(v)
+            {
+                if *mutable {
+                    *mutated = true;
                 }
+                return; // do not descend into the borrowed capture
             }
             go(&inner.expr, moved, mutated);
         }
@@ -113,10 +113,10 @@ fn classify_capture_use<'tcx>(
                         reference, value, ..
                     } => {
                         // `*c = …` through a captured `&mut` mutates on each call.
-                        if let Expression::Var(v) = &reference.expr {
-                            if all.contains(v) {
-                                *mutated = true;
-                            }
+                        if let Expression::Var(v) = &reference.expr
+                            && all.contains(v)
+                        {
+                            *mutated = true;
                         }
                         go(&reference.expr, moved, mutated);
                         go(&value.expr, moved, mutated);
