@@ -1,0 +1,11 @@
+//@TEST: fail
+// stage: typecheck
+// message: includes "requires a reference"
+
+// `*e` is only valid on a reference (`&T`/`&mut T`); dereferencing a plain `Int`
+// is a type error.
+
+def main(): Int := {
+    let x = 5;
+    *x
+}

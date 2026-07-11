@@ -124,7 +124,7 @@ Type  T  ::=  a                       -- type variable        Ty::Param   (Owned
 
 - A reference $\&'r T$ is a dedicated `Ty::Ref(Region, Ty)`.
 - An applied enum $F\langle\bar T ; \bar{'r}\rangle$ is `Ty::App(EnumRef, &[Ty], &[Region])`, carrying type *and* region arguments. Region arguments record a borrow that lives inside a payload, so `freeRegions` sees it (this closes escape-via-data; see the escape check). `Ty::Enum` is used only for fully non-parametric enums.
-- An **under-saturated** `Ty::App` — fewer type arguments than `F`'s arity, or an argument list containing holes `_` (`Ty::Hole`) — is a *partial application*: a type-constructor abstraction (§4.5). `a<T̄>` (`Ty::ParamApp`) is the application of a higher-kinded type *variable*. Both reduce away before monomorphisation, so a value's type is always saturated and hole-free.
+- An **under-saturated** `Ty::App` (fewer type arguments than `F`'s arity, or an argument list containing holes `_` via `Ty::Hole`) is a *partial application*: a type-constructor abstraction (§4.5). `a<T̄>` (`Ty::ParamApp`) is the application of a higher-kinded type *variable*. Both reduce away before monomorphisation, so a value's type is always saturated and hole-free.
 - `Ptr<T>` is the raw, `Copy`, region-free substrate pointer of the memory model; its element type erases to an opaque `ptr` at runtime.
 - The arrow $T_1 \to_{[k]} T_2$ carries the *ownership mode of the function itself*: $\to_{[\mathsf{Owned}]}$ consumes its argument (single-use), $\to_{[\mathsf{Borrowed}]}$ borrows it (reusable). It arrives with lambdas and
   is always `Owned` as a value.
@@ -168,7 +168,7 @@ Because monomorphisation erases generics and there is no concrete-type subtyping
 
 ### 4.5 Partial application and constructor holes
 
-A type constructor `F : k₁ → … → kₙ → Owned` need not be fully applied. Supplying fewer than `n` arguments, or putting **holes** `_` in argument positions, forms a *partial application* — a **constructor abstraction**
+A type constructor `F : k₁ → … → kₙ → Owned` need not be fully applied. Supplying fewer than `n` arguments, or putting **holes** `_` in argument positions, forms a *partial application*: a **constructor abstraction**
 
 ```
 Λ (X₁:k_{j₁} … Xₘ:k_{jₘ}). F<…>
@@ -191,7 +191,7 @@ So *currying* (omit trailing arguments) and *arbitrary holes* (an interior `_`) 
 (Λ X̄. F<T̄>) <S̄>   ↝   F<T̄[S̄ / X̄]>                                (β)
 ```
 
-`a<T̄>` (`Ty::ParamApp`) is the application of a higher-kinded type *variable*; once `a` is bound to an abstraction `Φ` — by monomorphisation, or when elaborating an `impl`'s methods (§12.1) — `a<T̄>` becomes `Φ<T̄>` and β-reduces. β is first-order, non-recursive substitution, hence **strongly normalising and confluent**; a *saturated* application (kind `Owned`) reduces to a unique hole-free `Ty::App`, which is exactly the normal form the later passes consume. **Holes never appear in a value's type** (values have kind `Owned`): they are confined to abstraction heads — the binding of a higher-kinded parameter, and the head of an `impl`.
+`a<T̄>` (`Ty::ParamApp`) is the application of a higher-kinded type *variable*; once `a` is bound to an abstraction `Φ` (by monomorphisation, or when elaborating an `impl`'s methods, §12.1) `a<T̄>` becomes `Φ<T̄>` and β-reduces. β is first-order, non-recursive substitution, hence **strongly normalising and confluent**; a *saturated* application (kind `Owned`) reduces to a unique hole-free `Ty::App`, which is exactly the normal form the later passes consume. **Holes never appear in a value's type** (values have kind `Owned`): they are confined to abstraction heads: the binding of a higher-kinded parameter, and the head of an `impl`.
 
 ---
 
@@ -343,7 +343,7 @@ the holes of T̄, left-to-right, occupy slots j₁ < … < jₘ
 Γ ⊢ Φ<S̄> : k      with      Φ<S̄> ≡ F<T̄[S̄/X̄]>
 ```
 
-`K-Hole` is checked **only** under a hole context (an abstraction head), so no closed (value) type contains a hole. `K-Beta` is the kinding counterpart of the β-rule of §4.5: it is the sole constructor-level computation, it is confluent and strongly normalising, and on a saturated use (`k = Owned`) it yields a hole-free `Ty::App` — preserving the invariant that monomorphisation only ever sees ground applied enums.
+`K-Hole` is checked **only** under a hole context (an abstraction head), so no closed (value) type contains a hole. `K-Beta` is the kinding counterpart of the β-rule of §4.5: it is the sole constructor-level computation, it is confluent and strongly normalising, and on a saturated use (`k = Owned`) it yields a hole-free `Ty::App`, preserving the invariant that monomorphisation only ever sees ground applied enums.
 
 ---
 
@@ -493,7 +493,7 @@ typeclass Monad<F : Owned -> Owned> requires Applicative {
 }
 ```
 
-**Instances for higher-kinded classes.** An `impl` of a class whose parameter is higher-kinded supplies a *constructor of that kind* — a partial application (§4.5). It is written either as a bare constructor (sugar for the all-holes abstraction) or with explicit holes whose remaining slots are fixed by the impl's own parameters:
+**Instances for higher-kinded classes.** An `impl` of a class whose parameter is higher-kinded supplies a *constructor of that kind*: a partial application (§4.5). It is written either as a bare constructor (sugar for the all-holes abstraction) or with explicit holes whose remaining slots are fixed by the impl's own parameters:
 
 ```sand
 impl Functor for Option            -- ≡ Functor for Option<_>
@@ -502,7 +502,7 @@ impl<E> Functor for Result<_, E>   -- map over the first slot; E is carried
 
 The head must have the class parameter's kind (`Result<_, E> : Owned → Owned`, one hole per arrow). Elaborating the methods binds the class parameter `F` to the head abstraction and brings the impl parameters (`E`) into scope, so each `F<A>` in a method signature β-reduces (§4.5): `fmap`'s type becomes `fmap<A,B>(x: Result<A,E>, f: A→B): Result<B,E>`, with `E` recovered per call.
 
-**Coherence and resolution (generalised).** Instances are bucketed by their head constructor `head(T) = F`. Within a bucket they must be **non-overlapping**, where two heads overlap iff their abstractions *unify* (a bare/all-holes head overlaps every other, so there is still at most one `Functor` instance per type). Resolving a call at a ground type `F<Ū>` selects the unique instance whose head unifies with `F<Ū>`, recovering the impl parameters (`E ↦ Ū` at the fixed slots) and the class operand at the holes, then β-reduces the method signature for monomorphisation. Because the normal form is unique (§4.5), resolution stays deterministic — coherence holds exactly as in the first-order, ground-headed case.
+**Coherence and resolution (generalised).** Instances are bucketed by their head constructor `head(T) = F`. Within a bucket they must be **non-overlapping**, where two heads overlap iff their abstractions *unify* (a bare/all-holes head overlaps every other, so there is still at most one `Functor` instance per type). Resolving a call at a ground type `F<Ū>` selects the unique instance whose head unifies with `F<Ū>`, recovering the impl parameters (`E ↦ Ū` at the fixed slots) and the class operand at the holes, then β-reduces the method signature for monomorphisation. Because the normal form is unique (§4.5), resolution stays deterministic: coherence holds exactly as in the first-order, ground-headed case.
 
 **Region restriction.** Holes abstract *type* parameters only; a higher-kinded head supplies its region parameters in full (or the constructor has none). So `freeRegions` (the escape check, §10) always sees complete region arguments, and partial application adds nothing the region analysis must reason about.
 

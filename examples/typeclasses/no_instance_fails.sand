@@ -1,0 +1,13 @@
+//@TEST: fail
+// stage: typecheck
+// message: includes "no instance of typeclass"
+
+// `clone` requires a `Clone` instance; the user type `Box` has none.
+
+type Box = Mk(Int)
+
+def main(): Int := {
+    let b = Box#Mk(1);
+    let c = clone(&b);
+    0
+}

@@ -1,0 +1,15 @@
+//@TEST: fail
+// stage: parse
+// message: includes "requires kind"
+
+// Adversarial (partial application): `Functor` needs a one-hole head
+// (`Owned -> Owned`), but `Duo<_, _>` leaves two holes: kind `Owned -> Owned ->
+// Owned`. Rejected by the head kind check.
+
+type Duo<A, B> = Two(A, B)
+
+impl Functor for Duo<_, _> {
+    def fmap<A, B>(x: Duo<A, B>, f: A -> B): Duo<B, B> := match x { Duo#Two(a, b) => Duo#Two(f(a), b) }
+}
+
+def main(): Int := 0

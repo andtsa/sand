@@ -1,0 +1,10 @@
+//@TEST: fail
+// stage: typecheck
+// message: includes "non-function type"
+
+// Only a function value may be applied; `x : Int` is not callable.
+
+def main(): Int := {
+    let x = 5;
+    x(3)
+}

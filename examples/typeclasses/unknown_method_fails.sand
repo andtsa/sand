@@ -1,0 +1,13 @@
+//@TEST: fail
+// stage: parse
+// message: includes "is not a method of typeclass"
+
+// An `impl` may only define methods declared by the class
+
+type Duo<A, B> = Two(A, B)
+
+impl<E> Functor for Duo<_, E> {
+    def wat<A, B>(x: Duo<A, E>): Int := 0
+}
+
+def main(): Int := 0

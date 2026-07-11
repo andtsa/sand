@@ -1,0 +1,17 @@
+//@TEST: fail
+// stage: ownership
+// message: includes "while it is borrowed"
+
+// A value may not be moved while a borrow of it is still live: `r` borrows `b`,
+// then `b` is moved into `unwrap`, then `r` is used: the move invalidates `r`.
+
+type Box = Mk(Int)
+
+def unwrap(b: Box): Int := match b { Box#Mk(n) => n }
+
+def main(): Int := {
+    let b = Box#Mk(1);
+    let r = &b;
+    let n = unwrap(b);               // move `b` while `r` is live
+    n + match r { Box#Mk(m) => *m }  // ...then use `r`
+}

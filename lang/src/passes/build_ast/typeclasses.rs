@@ -297,7 +297,7 @@ pub(crate) fn build_impl<'run>(
     let mut inner = child.into_inner();
 
     // Optional instance-level type parameters: `impl<E> …`. Allocated once (fixed
-    // ids) and shared by the head's fixed slots and every method — `build_function`
+    // ids) and shared by the head's fixed slots and every method; `build_function`
     // re-enters them as its ambient scope. Left as the current scope until the
     // methods are built.
     let mut peeked = inner.next().missing("typeclass name", range)?;
@@ -323,11 +323,11 @@ pub(crate) fn build_impl<'run>(
     let ty_pair = inner.next().missing("impl target type", range)?;
 
     // For a higher-kinded class (`class C<F : Owned -> Owned>`), the impl head is
-    // a *type constructor* — either a bare name (`impl C for Opt`, the all-holes
+    // a *type constructor*: either a bare name (`impl C for Opt`, the all-holes
     // abstraction) or a partial application with explicit holes (`impl<E> C for
-    // Result<_, E>`, Calculus §4.5). Build it as a constructor abstraction and
-    // check its kind against the class parameter. A non-higher-kinded class takes
-    // an ordinary value type as before.
+    // Result<_, E>`, Calculus: Partial application). Build it as a constructor
+    // abstraction and check its kind against the class parameter. A
+    // non-higher-kinded class takes an ordinary value type as before.
     let class_param = ctx.get_typeclass(tref).param;
     let class_kind = ctx.type_param_kind(class_param);
     let class_is_hk = matches!(class_kind, Kind::Arrow(_));
@@ -447,8 +447,8 @@ pub(crate) fn build_impl<'run>(
     Ok(())
 }
 
-/// Method-conformance check (Calculus §12.1): an impl method's signature must
-/// match the class method's declaration, once the class parameter `F` is
+/// Method-conformance check (Calculus: Typeclasses): an impl method's signature
+/// must match the class method's declaration, once the class parameter `F` is
 /// replaced by the instance head (`for_ty`, a partial application for a
 /// higher-kinded class) and the class method's generics are renamed to the impl
 /// method's (positionally). Compared modulo regions, so `&'a T` / `&'b T`
@@ -519,12 +519,12 @@ fn check_method_conformance<'run>(
 }
 
 /// A collision-free discriminator for an instance's mangled method names,
-/// derived from its head abstraction (Calculus §4.5). A bare `Enum`/ground type
-/// mangles to its name (so plain instances keep their existing names); a
-/// partial application appends its slots (`h` for a hole, the fixed type
-/// otherwise), so disjoint higher-kinded instances like `Foo<_, Int>` and
-/// `Foo<_, Bool>` get distinct method names instead of clashing on the bare
-/// constructor name.
+/// derived from its head abstraction (Calculus: Partial application). A bare
+/// `Enum`/ground type mangles to its name (so plain instances keep their
+/// existing names); a partial application appends its slots (`h` for a hole,
+/// the fixed type otherwise), so disjoint higher-kinded instances like `Foo<_,
+/// Int>` and `Foo<_, Bool>` get distinct method names instead of clashing on
+/// the bare constructor name.
 fn head_mangle<'a>(ctx: &CompileCtx<'a>, ty: Ty<'a>) -> String {
     match ty.kind() {
         TyKind::Enum(er) => ctx.get_enum(*er).name.clone(),
@@ -557,12 +557,12 @@ fn head_mangle<'a>(ctx: &CompileCtx<'a>, ty: Ty<'a>) -> String {
 }
 
 /// Elaborate a higher-kinded `impl` head into a constructor abstraction
-/// (Calculus §4.5) and its base enum. A bare name `Foo` is the all-holes
-/// abstraction (returned as the `Enum(er)` shorthand — `constructor_kind` reads
-/// its arrow from the enum's arity). `Foo<_, E>` becomes `App(er, [Hole(0),
-/// E])` with holes numbered by left-to-right appearance and the fixed slots
-/// resolved against the instance's parameters (in scope via the caller's
-/// `begin_type_params`).
+/// (Calculus: Partial application) and its base enum. A bare name `Foo` is the
+/// all-holes abstraction (returned as the `Enum(er)` shorthand;
+/// `constructor_kind` reads its arrow from the enum's arity). `Foo<_, E>`
+/// becomes `App(er, [Hole(0), E])` with holes numbered by left-to-right
+/// appearance and the fixed slots resolved against the instance's parameters
+/// (in scope via the caller's `begin_type_params`).
 fn build_impl_head<'run>(
     ctx: &mut CompileCtx<'run>,
     ty_pair: &Pair<Rule>,
@@ -579,7 +579,7 @@ fn build_impl_head<'run>(
     }
     let node_opt = core.clone().into_inner().next();
     match node_opt {
-        // `Foo<_, E>` — a partial application with explicit holes.
+        // `Foo<_, E>`: a partial application with explicit holes.
         Some(node) if node.as_rule() == Rule::type_application => {
             let mut parts = node.into_inner();
             let name = parts

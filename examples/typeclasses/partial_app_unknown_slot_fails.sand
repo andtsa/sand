@@ -1,0 +1,14 @@
+//@TEST: fail
+// stage: parse
+// message: includes "unknown type"
+
+// (partial application): a fixed slot of the head must name a type in
+// scope; `Zzz` is undefined.
+
+type Duo<A, B> = Two(A, B)
+
+impl Functor for Duo<_, Zzz> {
+    def fmap<A, B>(x: Duo<A, Zzz>, f: A -> B): Duo<B, Zzz> := match x { Duo#Two(a, e) => Duo#Two(f(a), e) }
+}
+
+def main(): Int := 0

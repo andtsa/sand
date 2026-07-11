@@ -1,0 +1,11 @@
+//@TEST: fail
+// stage: typecheck
+// message: includes "cannot mutably borrow immutable variable"
+
+// `&mut` requires the borrowed place to be declared mutable (`let mut`).
+
+def main(): Int := {
+    let x = 5;
+    let r = &mut x;
+    0
+}

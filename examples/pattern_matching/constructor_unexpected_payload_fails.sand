@@ -1,0 +1,10 @@
+//@TEST: fail
+// stage: typecheck
+// message: includes "payload mismatch"
+
+// Adversarial: `None` is nullary, so supplying it a payload is ill-formed.
+
+def main(): Int := match Option#None(5) {
+    Option#Some(x) => x,
+    Option#None => 0,
+}

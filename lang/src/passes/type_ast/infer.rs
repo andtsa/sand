@@ -820,7 +820,7 @@ pub(super) fn infer_method_call<'tcx>(
             continue;
         }
         let typed_a = infer(ctx, env, a)?;
-        // Higher-kinded seeding (Calculus §12.1): if this argument applies the
+        // Higher-kinded seeding (Calculus: Typeclasses): if this argument applies the
         // class parameter (`F<…>`) and `F` is still unsolved, resolve the instance
         // from the actual constructor and bind `F` to its head abstraction. The
         // β-reducing `subst` below then turns `F<A>` into the instance's concrete
@@ -845,7 +845,7 @@ pub(super) fn infer_method_call<'tcx>(
     if let Some(exp) = expected {
         // Higher-kinded seeding from the *result* type: `pure`'s `F` appears only
         // in its return, so a partial-application instance can't be seeded from an
-        // argument — resolve it from the expected type instead (Calculus §12.1).
+        // argument; resolve it from the expected type instead (Calculus: Typeclasses).
         if let TyKind::ParamApp(fid, _) = mdef.ret_ty.kind()
             && *fid == class_param
             && !mapping.contains_key(&class_param)
@@ -1310,7 +1310,7 @@ pub(super) fn infer<'tcx>(
             let mode = (*mode).max(inferred_mode);
 
             // The closure's environment type: the structural shape of what it
-            // captures (matching the runtime env packing in mono — no captures
+            // captures (matching the runtime env packing in mono: no captures
             // is `Unit`, one capture is that type, many is a tuple). Carrying it
             // on the `Fn` type is what lets the closure's escape/drop/`Copy`/
             // `Send`/`Sync` properties be decided structurally over the env.

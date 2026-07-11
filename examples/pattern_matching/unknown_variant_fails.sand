@@ -1,0 +1,9 @@
+//@TEST: fail
+// stage: qualify
+// message: includes "unknown variant"
+
+// `Option` has no variant `Nope`.
+
+def main(): Int := match Option#Nope {
+    Option#Nope => 0,
+}

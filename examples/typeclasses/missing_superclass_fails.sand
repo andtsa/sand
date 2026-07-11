@@ -1,0 +1,17 @@
+//@TEST: fail
+// stage: parse
+// message: includes "requires an instance of its superclass"
+
+// `Applicative requires Functor`: an `Applicative` instance is legal only if the
+// corresponding `Functor` instance exists for the same type.
+
+type Duo<A, B> = Two(A, B)
+
+impl<E> Applicative for Duo<_, E> {
+    def pure<A>(x: A): Duo<A, E> := Duo#Two(x, x)
+    def ap<A, B>(f: Duo<A -> B, E>, x: Duo<A, E>): Duo<B, E> := match f {
+        Duo#Two(g, e) => match x { Duo#Two(v, e2) => Duo#Two(g(v), e) },
+    }
+}
+
+def main(): Int := 0

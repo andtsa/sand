@@ -1,0 +1,12 @@
+//@TEST: fail
+// stage: parse
+// message: includes "is missing method"
+
+// An `impl` must supply (or inherit a default for) every class method; this one
+// omits `fmap`.
+
+type Duo<A, B> = Two(A, B)
+
+impl<E> Functor for Duo<_, E> { }
+
+def main(): Int := 0

@@ -166,15 +166,14 @@ pub struct CompileCtx<'tcx> {
     /// Class name -> ref. Global for now (class names are unique program-wide);
     /// `src_module` on the def carries ownership for the orphan rule.
     typeclass_names: Map<String, TypeclassRef>,
-    /// Method name -> its owning class (one class per method name, §decision
-    /// 1).
+    /// Method name -> its owning class (one class per method name).
     method_index: Map<String, TypeclassRef>,
     /// The one global, coherent instance set, keyed by `(class, head type)`.
     // Instances bucketed by `(class, head-constructor)`. A bucket holds more than
     // one instance only for a higher-kinded class whose members fix different
     // slots (`Functor for Result<_, Int>` vs `… <_, Bool>`); `register_instance`
-    // rejects *overlapping* heads, so resolution stays unambiguous (Calculus
-    // §12.1). Ground classes (`Copy`/`Clone`/…) always have at most one per key.
+    // rejects *overlapping* heads, so resolution stays unambiguous (Calculus:
+    // Typeclasses). Ground classes (`Copy`/`Clone`/…) always have at most one per key.
     instances: Map<(TypeclassRef, TypeHead<'tcx>), Vec<ImplDef<'tcx>>>,
     /// Lang-item handles for the `Copy` / `Clone` classes (resolved by name
     /// when `core.sand` registers them), used to drive implicit-copy.
@@ -595,16 +594,17 @@ impl<'tcx> CompileCtx<'tcx> {
         )
     }
 
-    /// Intern a partial-application **hole** `_ᵢ` (Calculus §4.5,
-    /// [`TyKind::Hole`]). Well-formed only inside a constructor-abstraction
-    /// head (the binding of a higher-kinded parameter, or an `impl` head).
+    /// Intern a partial-application **hole** `_ᵢ` (Calculus: Partial
+    /// application, [`TyKind::Hole`]). Well-formed only inside a
+    /// constructor-abstraction head (the binding of a higher-kinded
+    /// parameter, or an `impl` head).
     pub fn hole_ty(&mut self, idx: u32) -> Ty<'tcx> {
         self.intern_ty(TyKind::Hole(idx))
     }
 
     /// The **constructor kind** of a type viewed as a type constructor
-    /// (Calculus §4.5, generalised `K-App`): `Owned` when it is a
-    /// saturated, hole-free value type; otherwise the arrow `k_{h₁} → … →
+    /// (Calculus: Partial application, generalised `K-App`): `Owned` when it is
+    /// a saturated, hole-free value type; otherwise the arrow `k_{h₁} → … →
     /// k_{hₘ} → Owned` over the kinds of its holes, in slot order. Holes
     /// are the explicit `Hole` arguments of an `App` *plus* the implicit
     /// trailing holes of an under-saturated one (`args.len() < arity`). A
@@ -1944,9 +1944,9 @@ impl<'tcx> CompileCtx<'tcx> {
     }
 
     /// Resolve the instance for a `class` method call on a value of type
-    /// `value` (Calculus §12.1 resolution). Among the candidates bucketed
-    /// under `value`'s head constructor, returns the first whose head
-    /// abstraction **unifies** with `value` — its `Hole`s match the
+    /// `value` (Calculus: Typeclasses, resolution). Among the candidates
+    /// bucketed under `value`'s head constructor, returns the first whose
+    /// head abstraction **unifies** with `value`: its `Hole`s match the
     /// class-operated slots, its fixed slots pin the rest. The returned
     /// `for_ty` is what the class parameter `F` binds to (so `F<…>`
     /// β-reduces at the call site), and the method map selects the concrete
@@ -2018,9 +2018,9 @@ impl<'tcx> CompileCtx<'tcx> {
 
     /// Register an instance. Returns `Err(existing range)` if its head
     /// **overlaps** an already-registered instance in the same `(class,
-    /// head)` bucket — two heads overlap iff some ground type matches both
-    /// (Calculus §12.1 coherence). For ground classes this reduces to "at
-    /// most one instance per key"; for a higher-kinded class it also
+    /// head)` bucket: two heads overlap iff some ground type matches both
+    /// (Calculus: Typeclasses, coherence). For ground classes this reduces to
+    /// "at most one instance per key"; for a higher-kinded class it also
     /// permits disjoint instances (e.g. fixing a slot to `Int` vs `Bool`)
     /// while rejecting a blanket-vs-specific clash.
     pub fn register_instance(&mut self, def: ImplDef<'tcx>) -> Result<(), Range> {
@@ -2175,7 +2175,7 @@ impl std::fmt::Display for TyDisplay<'_, '_> {
                 )
             }
             // A higher-kinded application `F<..>` or a partial-application hole
-            // (Calculus §4.5) — shown structurally with resolved names.
+            // (Calculus: Partial application): shown structurally with resolved names.
             TyKind::ParamApp(id, args) => {
                 write!(f, "{}<", self.ctx.type_param_name(*id))?;
                 for (i, arg) in args.iter().enumerate() {
@@ -2253,11 +2253,12 @@ fn collect_region_bindings(
     }
 }
 
-/// Do two `impl` head abstractions (Calculus §4.5) **overlap** — is there a
-/// ground type matching both? `Hole`s (the class-operated slots) and `Param`s
-/// (an instance's own parameters) act as wildcards; fixed slots must match
-/// structurally, and a bare `Enum` (all-holes) blankets any application of the
-/// same constructor. Used by [`CompileCtx::register_instance`] for coherence.
+/// Do two `impl` head abstractions (Calculus: Partial application) **overlap**:
+/// is there a ground type matching both? `Hole`s (the class-operated slots) and
+/// `Param`s (an instance's own parameters) act as wildcards; fixed slots must
+/// match structurally, and a bare `Enum` (all-holes) blankets any application
+/// of the same constructor. Used by [`CompileCtx::register_instance`] for
+/// coherence.
 fn heads_overlap<'a>(a: Ty<'a>, b: Ty<'a>) -> bool {
     match (a.kind(), b.kind()) {
         // wildcards: a hole, an instance parameter, or a (never-expected here)

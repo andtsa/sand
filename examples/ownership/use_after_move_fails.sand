@@ -1,0 +1,17 @@
+//@TEST: fail
+// stage: ownership
+// message: includes "use of moved value"
+
+// Affinity: a non-`Copy` value is consumed by the first `unwrap` (moved into it),
+// so the second use is a use-after-move.
+
+type Box = Mk(Int)
+
+def unwrap(b: Box): Int := match b { Box#Mk(n) => n }
+
+def main(): Int := {
+    let x = Box#Mk(1);
+    let a = unwrap(x);
+    let b = unwrap(x);   // x already moved above
+    a + b
+}

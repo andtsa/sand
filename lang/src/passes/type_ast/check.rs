@@ -1289,7 +1289,7 @@ pub(super) fn check<'tcx>(
             let mode = (*mode).max(inferred_mode);
 
             // The (inferred) mode must be usable where the expected arrow mode is
-            // required — e.g. a closure that consumes a capture (`FnOnce`) cannot
+            // required: e.g. a closure that consumes a capture (`FnOnce`) cannot
             // be supplied where a reusable (`Fn`) closure is expected.
             if !mode.usable_as(*exp_mode) {
                 return Err(AstTypeError::TypeError {
@@ -1302,7 +1302,7 @@ pub(super) fn check<'tcx>(
 
             // Carry the closure's concrete environment type (matching the infer
             // path), so a checked lambda retains its captures even against an
-            // abstract expected arrow — this is what lets the function-return
+            // abstract expected arrow: this is what lets the function-return
             // escape check see a captured local borrow's region.
             let env_ty = match captures.as_slice() {
                 [] => ctx.types.unit,

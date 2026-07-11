@@ -37,7 +37,7 @@
   ")" @delimiter) @container
 
 ; (the lambda parameter list `fn (x: T)` is omitted: tree-sitter rejects
-;  `(lambda_expr "(" …)` as an "impossible pattern" — a static-analysis quirk of
+;  `(lambda_expr "(" …)` as an "impossible pattern": a static-analysis quirk of
 ;  the `(` position after `fn`.)
 
 ; constructor / tag payloads (expression position)

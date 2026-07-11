@@ -1,0 +1,9 @@
+//@TEST: fail
+// stage: typecheck
+// message: includes "expects a payload"
+
+// `Some` carries a payload, so a bare `Option#Some` (no argument) is ill-formed.
+
+def wrap(): Option<Int> := Option#Some
+
+def main(): Int := 0

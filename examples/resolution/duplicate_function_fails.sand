@@ -1,0 +1,10 @@
+//@TEST: fail
+// stage: qualify
+// message: includes "two functions with the same name"
+
+// Two top-level functions may not share a name.
+
+def f(): Int := 1
+def f(): Int := 2
+
+def main(): Int := 0

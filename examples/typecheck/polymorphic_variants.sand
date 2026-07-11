@@ -1,0 +1,12 @@
+//@TEST: run
+// exit: 0
+
+def check(x: Int): #one | #two | #other :=
+    if x < 0 then #one else if x > 0 then #two else #other
+
+def main(): Int :=
+    match check(0) {
+        #one => 1
+        #two => 2
+        #other => 0
+    }

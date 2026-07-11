@@ -1,0 +1,15 @@
+//@TEST: fail
+// stage: parse
+// message: includes "orphan instance"
+
+// Orphan rule: both `Functor` and `Option` are defined in the core library, so a
+// user module implementing one for the other is rejected (neither is local).
+
+impl Functor for Option {
+    def fmap<A, B>(x: Option<A>, f: A -> B): Option<B> := match x {
+        Option#Some(v) => Option#Some(f(v)),
+        Option#None => Option#None,
+    }
+}
+
+def main(): Int := 0

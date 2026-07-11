@@ -1,0 +1,7 @@
+//@TEST: fail
+// stage: qualify
+// message: includes "unbound variable"
+
+// `y` is never bound.
+
+def main(): Int := y
