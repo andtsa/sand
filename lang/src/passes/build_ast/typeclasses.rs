@@ -295,7 +295,22 @@ pub(crate) fn build_impl<'run>(
     ctx.set_build_module(*cur_module);
     let range = Range::from(&child);
     let mut inner = child.into_inner();
-    let class_pair = inner.next().missing("typeclass name", range)?;
+
+    // Optional instance-level type parameters: `impl<E> …`. Allocated once (fixed
+    // ids) and shared by the head's fixed slots and every method — `build_function`
+    // re-enters them as its ambient scope. Left as the current scope until the
+    // methods are built.
+    let mut peeked = inner.next().missing("typeclass name", range)?;
+    let impl_params: Vec<TypeParam> = if peeked.as_rule() == Rule::type_params {
+        let specs = collect_type_params(ctx, peeked.clone());
+        let params = ctx.begin_type_params(&specs);
+        peeked = inner.next().missing("typeclass name", range)?;
+        params
+    } else {
+        Vec::new()
+    };
+
+    let class_pair = peeked;
     let class_range = Range::from(&class_pair);
     let class_name = class_pair.as_str().to_string();
     let tref = ctx
@@ -306,18 +321,28 @@ pub(crate) fn build_impl<'run>(
         })?;
     ctx.record_type_ref(class_range, DefTarget::Typeclass(tref));
     let ty_pair = inner.next().missing("impl target type", range)?;
+
     // For a higher-kinded class (`class C<F : Owned -> Owned>`), the impl head is
-    // a *type constructor* (`impl C for Opt`), written as a bare generic-enum
-    // name, which `build_type` would reject as under-applied. Resolve it
-    // directly to the constructor's `TypeHead` instead.
+    // a *type constructor* — either a bare name (`impl C for Opt`, the all-holes
+    // abstraction) or a partial application with explicit holes (`impl<E> C for
+    // Result<_, E>`, Calculus §4.5). Build it as a constructor abstraction and
+    // check its kind against the class parameter. A non-higher-kinded class takes
+    // an ordinary value type as before.
     let class_param = ctx.get_typeclass(tref).param;
-    let class_is_hk = matches!(ctx.type_param_kind(class_param), Kind::Arrow(_));
+    let class_kind = ctx.type_param_kind(class_param);
+    let class_is_hk = matches!(class_kind, Kind::Arrow(_));
     let (for_ty, head) = if class_is_hk {
-        let cname = ty_pair.as_str().trim().to_string();
-        let er = ctx
-            .lookup_enum_current(&cname)
-            .ok_or(AstError::UnknownType { name: cname, range })?;
-        (ctx.enum_ty(er), TypeHead::Enum(er))
+        let (for_ty, er) = build_impl_head(ctx, &ty_pair, range)?;
+        let found = ctx.constructor_kind(for_ty);
+        if found != class_kind {
+            return Err(AstError::ImplHeadKindMismatch {
+                class: class_name,
+                expected: ctx.display_kind(class_kind),
+                found: ctx.display_kind(found),
+                range,
+            });
+        }
+        (for_ty, TypeHead::Enum(er))
     } else {
         let for_ty = build_type(ctx, ty_pair)?;
         let head = ctx
@@ -343,7 +368,7 @@ pub(crate) fn build_impl<'run>(
         });
     }
 
-    let head_str = head_name(ctx, head);
+    let head_str = head_mangle(ctx, for_ty);
     let mut methods: Map<String, FunRef> = Map::new();
     for fpair in inner {
         if fpair.as_rule() != Rule::function {
@@ -365,10 +390,24 @@ pub(crate) fn build_impl<'run>(
             });
         }
         let mangled = format!("{class_name}${head_str}${mname}");
-        let f = build_function(ctx, fpair, src, cur_module, Some(mangled))?;
+        let f = build_function(ctx, fpair, src, cur_module, Some(mangled), &impl_params)?;
+        // The impl method must conform to the class's declared signature (once
+        // `F` is the instance head and generics are renamed).
+        let mdef = ctx.get_typeclass(tref).methods[&mname].clone();
+        check_method_conformance(
+            ctx,
+            &class_name,
+            &mname,
+            &mdef,
+            for_ty,
+            class_param,
+            impl_params.len(),
+            &f,
+        )?;
         methods.insert(mname, f.name);
         funcs.push(f);
     }
+    ctx.end_type_params();
 
     // completeness: every method must end up implemented, by the impl or by
     // the class's default (a generic function built in `build_default_methods`).
@@ -395,6 +434,7 @@ pub(crate) fn build_impl<'run>(
         class: tref,
         for_ty,
         head,
+        impl_type_params: impl_params,
         methods,
         src_module: *cur_module,
         range,
@@ -405,6 +445,208 @@ pub(crate) fn build_impl<'run>(
             range,
         })?;
     Ok(())
+}
+
+/// Method-conformance check (Calculus §12.1): an impl method's signature must
+/// match the class method's declaration, once the class parameter `F` is
+/// replaced by the instance head (`for_ty`, a partial application for a
+/// higher-kinded class) and the class method's generics are renamed to the impl
+/// method's (positionally). Compared modulo regions, so `&'a T` / `&'b T`
+/// agree. Catches a wrong return type, swapped/wrong argument types, or a
+/// mismatched method-generic arity at the `impl` instead of at a later call
+/// site.
+#[allow(clippy::too_many_arguments)]
+fn check_method_conformance<'run>(
+    ctx: &mut CompileCtx<'run>,
+    class_name: &str,
+    method: &str,
+    mdef: &MethodDef<'run>,
+    for_ty: Ty<'run>,
+    class_param: crate::lang::types::TypeParamId,
+    ambient_len: usize,
+    f: &Function<'run>,
+) -> Result<(), AstError> {
+    use crate::passes::type_ast::generics::subst;
+
+    // Renaming: class param `F` -> the head abstraction; the class method's
+    // generics -> the impl method's own generics (those after the ambient impl
+    // params that `build_function` prepended).
+    let impl_own = &f.type_params[ambient_len..];
+    let mut sigma: Map<crate::lang::types::TypeParamId, Ty<'run>> = Map::new();
+    sigma.insert(class_param, for_ty);
+    let renameable = mdef.type_params.len() == impl_own.len();
+    if renameable {
+        for (c, i) in mdef.type_params.iter().zip(impl_own) {
+            let p = ctx.param_ty(i.id);
+            sigma.insert(c.id, p);
+        }
+    }
+
+    let expected_params: Vec<Ty<'run>> = mdef
+        .param_tys
+        .iter()
+        .map(|t| subst(ctx, *t, &sigma))
+        .collect();
+    let expected_ret = subst(ctx, mdef.ret_ty, &sigma);
+
+    let ok = renameable
+        && expected_params.len() == f.parameters.len()
+        && expected_params
+            .iter()
+            .zip(&f.parameters)
+            .all(|(e, p)| e.eq_modulo_regions(p.ty))
+        && expected_ret.eq_modulo_regions(f.ret_type);
+    if ok {
+        return Ok(());
+    }
+
+    let render = |ctx: &CompileCtx<'run>, params: &[Ty<'run>], ret: Ty<'run>| {
+        let ps = params
+            .iter()
+            .map(|t| ctx.display_ty(*t).to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("({ps}) -> {}", ctx.display_ty(ret))
+    };
+    let found_params: Vec<Ty<'run>> = f.parameters.iter().map(|p| p.ty).collect();
+    Err(AstError::MethodSignatureMismatch {
+        class: class_name.to_string(),
+        method: method.to_string(),
+        expected: render(ctx, &expected_params, expected_ret),
+        found: render(ctx, &found_params, f.ret_type),
+        range: f.range,
+    })
+}
+
+/// A collision-free discriminator for an instance's mangled method names,
+/// derived from its head abstraction (Calculus §4.5). A bare `Enum`/ground type
+/// mangles to its name (so plain instances keep their existing names); a
+/// partial application appends its slots (`h` for a hole, the fixed type
+/// otherwise), so disjoint higher-kinded instances like `Foo<_, Int>` and
+/// `Foo<_, Bool>` get distinct method names instead of clashing on the bare
+/// constructor name.
+fn head_mangle<'a>(ctx: &CompileCtx<'a>, ty: Ty<'a>) -> String {
+    match ty.kind() {
+        TyKind::Enum(er) => ctx.get_enum(*er).name.clone(),
+        TyKind::App(er, args, _) => {
+            let mut s = ctx.get_enum(*er).name.clone();
+            for a in args.iter() {
+                s.push('_');
+                s.push_str(&head_mangle(ctx, *a));
+            }
+            s
+        }
+        TyKind::Hole(_) => "h".to_string(),
+        TyKind::Param(id) => format!("p{}", id.0),
+        TyKind::Int => "Int".to_string(),
+        TyKind::Bool => "Bool".to_string(),
+        TyKind::Unit => "Unit".to_string(),
+        TyKind::Tuple(es) => {
+            let mut s = format!("Tup{}", es.len());
+            for e in es.iter() {
+                s.push('_');
+                s.push_str(&head_mangle(ctx, *e));
+            }
+            s
+        }
+        TyKind::Ref(_, t) => format!("Ref_{}", head_mangle(ctx, *t)),
+        TyKind::RefMut(_, t) => format!("RefMut_{}", head_mangle(ctx, *t)),
+        TyKind::Ptr(t) => format!("Ptr_{}", head_mangle(ctx, *t)),
+        _ => "T".to_string(),
+    }
+}
+
+/// Elaborate a higher-kinded `impl` head into a constructor abstraction
+/// (Calculus §4.5) and its base enum. A bare name `Foo` is the all-holes
+/// abstraction (returned as the `Enum(er)` shorthand — `constructor_kind` reads
+/// its arrow from the enum's arity). `Foo<_, E>` becomes `App(er, [Hole(0),
+/// E])` with holes numbered by left-to-right appearance and the fixed slots
+/// resolved against the instance's parameters (in scope via the caller's
+/// `begin_type_params`).
+fn build_impl_head<'run>(
+    ctx: &mut CompileCtx<'run>,
+    ty_pair: &Pair<Rule>,
+    range: Range,
+) -> Result<(Ty<'run>, AdtRef<'run>), AstError> {
+    // `type_` -> `core_type` -> (identifier | type_application).
+    let core = ty_pair
+        .clone()
+        .into_inner()
+        .next()
+        .missing("impl head type", range)?;
+    if core.as_rule() != Rule::core_type {
+        return Err(AstError::NonInstanceableType { range });
+    }
+    let node_opt = core.clone().into_inner().next();
+    match node_opt {
+        // `Foo<_, E>` — a partial application with explicit holes.
+        Some(node) if node.as_rule() == Rule::type_application => {
+            let mut parts = node.into_inner();
+            let name = parts
+                .next()
+                .missing("impl head constructor name", range)?
+                .as_str()
+                .to_string();
+            let er = ctx
+                .lookup_enum_current(&name)
+                .ok_or(AstError::UnknownType {
+                    name: name.clone(),
+                    range,
+                })?;
+            let arity = ctx.get_enum(er).type_params.len();
+            let mut slots: Vec<Ty<'run>> = Vec::new();
+            let mut hole_idx: u32 = 0;
+            for arg in parts {
+                let child = arg
+                    .into_inner()
+                    .next()
+                    .missing("impl head argument", range)?;
+                match child.as_rule() {
+                    Rule::hole => {
+                        slots.push(ctx.hole_ty(hole_idx));
+                        hole_idx += 1;
+                    }
+                    // Holes abstract type parameters only; a region argument on a
+                    // higher-kinded head is unsupported.
+                    Rule::lifetime => {
+                        return Err(AstError::RegionArgArityMismatch {
+                            name,
+                            expected: 0,
+                            found: 1,
+                            range,
+                        });
+                    }
+                    _ => slots.push(build_type(ctx, child)?),
+                }
+            }
+            if slots.len() != arity {
+                return Err(AstError::TypeArgArityMismatch {
+                    name,
+                    expected: arity,
+                    found: slots.len(),
+                    range,
+                });
+            }
+            Ok((ctx.intern_app(er, slots, Vec::new()), er))
+        }
+        // bare constructor `Foo` (a captured identifier, or the `core_type` leaf).
+        Some(node) if node.as_rule() == Rule::identifier => {
+            let name = node.as_str().to_string();
+            let er = ctx
+                .lookup_enum_current(&name)
+                .ok_or(AstError::UnknownType { name, range })?;
+            Ok((ctx.enum_ty(er), er))
+        }
+        None => {
+            let name = core.as_str().trim().to_string();
+            let er = ctx
+                .lookup_enum_current(&name)
+                .ok_or(AstError::UnknownType { name, range })?;
+            Ok((ctx.enum_ty(er), er))
+        }
+        // `&T`, tuples, primitives, … cannot be a higher-kinded constructor.
+        Some(_) => Err(AstError::NonInstanceableType { range }),
+    }
 }
 
 /// Final check: a `Copy` instance is sound only if every field/payload of the

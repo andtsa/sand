@@ -1,0 +1,12 @@
+//@TEST: fail
+// stage: parse
+// message: includes "hole is only allowed"
+
+// A `_` type hole is only meaningful in an `impl` head (a partial application);
+// anywhere else it is rejected.
+
+type Duo<A, B> = Two(A, B)
+
+def f(x: Duo<_, Int>): Int := 0
+
+def main(): Int := 0

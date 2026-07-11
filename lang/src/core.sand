@@ -170,13 +170,38 @@ def flatten<T>(o: Option<Option<T>>): Option<T> := match o {
 // `Result<T, E>`: a computation that either succeeds with `Ok(T)` or fails with
 // `Err(E)`. Threads an error value through code instead of diverging.
 //
-// NOTE: unlike `Option`, `Result` is *binary*, so it cannot join the
-// `Functor`/`Applicative`/`Monad` hierarchy: those classes are kinded
-// `Owned -> Owned` (one argument), and the language has no partial
-// type-constructor application to turn `Result<_, E>` into a unary constructor.
-// The helpers below stand in for the missing instances — `map_ok` is the `fmap`
-// over the success channel and `and_then` is its `bind`.
+// `Result` is *binary*, but it still joins the `Functor`/`Applicative`/`Monad`
+// hierarchy via **partial application** (Calculus §4.5): fixing the error type
+// `E` leaves the unary constructor `Result<_, E>` those classes require. The
+// instances operate on the success channel; the error rides along unchanged.
+// (`map_err` and `ok` below have no instance form — they act on the *error*
+// channel / project into `Option` — so they remain as helpers.)
 type Result<T, E> = Ok(T) | Err(E)
+
+impl<E> Functor for Result<_, E> {
+    def fmap<A, B>(x: Result<A, E>, f: A -> B): Result<B, E> := match x {
+        Result#Ok(v) => Result#Ok(f(v)),
+        Result#Err(e) => Result#Err(e),
+    }
+}
+
+impl<E> Applicative for Result<_, E> {
+    def pure<A>(x: A): Result<A, E> := Result#Ok(x)
+    def ap<A, B>(f: Result<A -> B, E>, x: Result<A, E>): Result<B, E> := match f {
+        Result#Ok(g) => match x {
+            Result#Ok(v) => Result#Ok(g(v)),
+            Result#Err(e) => Result#Err(e),
+        },
+        Result#Err(e) => Result#Err(e),
+    }
+}
+
+impl<E> Monad for Result<_, E> {
+    def bind<A, B>(x: Result<A, E>, f: A -> Result<B, E>): Result<B, E> := match x {
+        Result#Ok(v) => f(v),
+        Result#Err(e) => Result#Err(e),
+    }
+}
 
 def is_ok<T, E>(r: &Result<T, E>): Bool := match r {
     Result#Ok(_) => true,

@@ -210,6 +210,30 @@ pub enum AstError {
         param: String,
         range: Range,
     },
+
+    #[error("a `_` type hole is only allowed in an `impl` head (a partial application) at {range}")]
+    HoleOutsideImplHead { range: Range },
+
+    #[error(
+        "method '{method}' of this `impl` of '{class}' has signature `{found}`, but the class declares `{expected}` at {range}"
+    )]
+    MethodSignatureMismatch {
+        class: String,
+        method: String,
+        expected: String,
+        found: String,
+        range: Range,
+    },
+
+    #[error(
+        "the `impl` head for '{class}' has kind {found}, but the class parameter requires kind {expected} at {range}"
+    )]
+    ImplHeadKindMismatch {
+        class: String,
+        expected: String,
+        found: String,
+        range: Range,
+    },
 }
 
 pub(crate) trait AstExt<T> {

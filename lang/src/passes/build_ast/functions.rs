@@ -56,7 +56,7 @@ pub(crate) fn build_functions<'i, 'run>(
                     .get_mod_by_name(mod_span.as_str())
                     .unwrap_or_else(|| ctx.register_module(mod_span.as_str(), file));
             }
-            Rule::function => match build_function(ctx, child, src, &current_module, None) {
+            Rule::function => match build_function(ctx, child, src, &current_module, None, &[]) {
                 Ok(f) => funcs.push(f),
                 Err(e) => errors.push(e),
             },
@@ -95,6 +95,11 @@ pub(crate) fn build_function<'run>(
     src: &str,
     cur_module: &ModuleRef<'run>,
     name_override: Option<String>,
+    // Type parameters already in scope from an enclosing `impl<…>` head (the
+    // instance's own parameters). They are the base scope the function's own
+    // generics extend, and are prepended to its stored `type_params` so
+    // monomorphisation solves them too. Empty for a top-level `def`.
+    ambient_type_params: &[TypeParam],
 ) -> Result<Function<'run>, AstError> {
     // keep the build-module hint up to date so that anonymous tag-union types
     // declared in `build_type` are attributed to the right module.
@@ -134,16 +139,25 @@ pub(crate) fn build_function<'run>(
     // optional type and region parameters: `def f<'r, T, U>(...)`. Scoping them
     // here means `build_type` resolves `T`/`U` to `Ty::Param` and `'r` to its
     // region for the rest of this function's signature and body.
-    let (type_params, region_params) =
+    // The ambient `impl<…>` params form the base scope; the function's own
+    // generics extend it (fresh ids, same scope). For a top-level `def` the
+    // ambient set is empty, so this is equivalent to a plain `begin_type_params`.
+    let (own_type_params, region_params) =
         if inner.peek().map(|p| p.as_rule()) == Some(Rule::type_params) {
             let tp_pair = inner.next().missing("type parameters", range)?;
             let specs = collect_type_params(ctx, tp_pair.clone());
-            let type_params = ctx.begin_type_params(&specs);
+            ctx.enter_type_param_scope(ambient_type_params);
+            let own = ctx.extend_type_params(&specs);
             let region_params = ctx.begin_region_params(&collect_region_params(tp_pair));
-            (type_params, region_params)
+            (own, region_params)
         } else {
-            (ctx.begin_type_params(&[]), ctx.begin_region_params(&[]))
+            ctx.enter_type_param_scope(ambient_type_params);
+            (Vec::new(), ctx.begin_region_params(&[]))
         };
+    // Stored generics = ambient (`impl` params) ++ the function's own, so
+    // monomorphisation specialises over the instance parameters too.
+    let mut type_params = ambient_type_params.to_vec();
+    type_params.extend(own_type_params);
 
     // collect optional parameters (parameter or parameters)
     let mut parameters = Vec::new();

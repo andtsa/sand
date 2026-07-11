@@ -114,6 +114,51 @@ pub fn ast_error_to_diagnostics(
                 SandDiagnostic::error(file, *range, format!("unknown type '{name}'")),
             );
         }
+        AstError::HoleOutsideImplHead { range } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic::error(
+                    file,
+                    *range,
+                    "a `_` type hole is only allowed in an `impl` head".to_string(),
+                ),
+            );
+        }
+        AstError::MethodSignatureMismatch {
+            class,
+            method,
+            expected,
+            found,
+            range,
+        } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic::error(
+                    file,
+                    *range,
+                    format!(
+                        "method '{method}' of this `impl` of '{class}' has signature `{found}`, but the class declares `{expected}`"
+                    ),
+                ),
+            );
+        }
+        AstError::ImplHeadKindMismatch {
+            class,
+            expected,
+            found,
+            range,
+        } => {
+            diagnostics.add_one(
+                file,
+                SandDiagnostic::error(
+                    file,
+                    *range,
+                    format!(
+                        "the `impl` head for '{class}' has kind {found}, but the class parameter requires kind {expected}"
+                    ),
+                ),
+            );
+        }
         AstError::UnknownModule { module, range } => {
             diagnostics.add_one(
                 file,

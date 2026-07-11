@@ -1,0 +1,23 @@
+//@TEST: run
+// exit: 21
+// stdout: [21, 99]
+
+// A higher-kinded `impl` with an explicit hole (Calculus §4.5): `Functor` over
+// the *first* slot of the binary `Duo`, the second carried by `E`. Exercises the
+// full path — head elaboration, kind-check, dispatch (recovering `E` from the
+// receiver), and monomorphisation.
+
+type Duo<A, B> = Two(A, B)
+
+impl<E> Functor for Duo<_, E> {
+    def fmap<A, B>(x: Duo<A, E>, f: A -> B): Duo<B, E> := match x {
+        Duo#Two(a, e) => Duo#Two(f(a), e)
+    }
+}
+
+def parts(d: Duo<Int, Int>): Int := match d {
+    Duo#Two(a, e) => { println(a); println(e); a }
+}
+
+// map (+1) over the first slot; the second (99) rides along via `E`.
+def main(): Int := parts(fmap(Duo#Two(20, 99), fn (n: Int) -> n + 1))

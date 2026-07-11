@@ -76,8 +76,17 @@ pub struct TypeclassDef<'tcx> {
 #[derive(Clone, Debug)]
 pub struct ImplDef<'tcx> {
     pub class: TypeclassRef,
+    /// The head as a constructor abstraction (Calculus §4.5): a value type for
+    /// a ground class, or a partial application `App(er, [Hole..,
+    /// Param(E)..])` for a higher-kinded one. `Hole`s are the
+    /// class-operated slots; the fixed slots
+    /// mention [`Self::impl_type_params`].
     pub for_ty: Ty<'tcx>,
     pub head: TypeHead<'tcx>,
+    /// The instance's own parameters (the `E` in `impl<E> C for T<_, E>`),
+    /// shared by the head's fixed slots and every method. Empty for a plain
+    /// `impl`.
+    pub impl_type_params: Vec<TypeParam>,
     /// method name -> the concrete function implementing it for this instance.
     pub methods: Map<String, FunRef<'tcx>>,
     pub src_module: ModuleRef<'tcx>,

@@ -1,0 +1,17 @@
+//@TEST: fail
+// stage: parse
+// message: includes "class declares"
+
+// Method conformance (Calculus §12.1): the impl's `fmap` declares only one
+// generic (`<A>`, mapping `A -> A`), but `Functor` requires `fmap<A, B>` with
+// `A -> B` and an `F<B>` result. Rejected at the `impl`, not at a call site.
+
+type Duo<A, B> = Two(A, B)
+
+impl<E> Functor for Duo<_, E> {
+    def fmap<A>(x: Duo<A, E>, f: A -> A): Duo<A, E> := match x {
+        Duo#Two(a, e) => Duo#Two(f(a), e)
+    }
+}
+
+def main(): Int := 0

@@ -1,0 +1,18 @@
+//@TEST: run
+// exit: 0
+
+// Coherence permits *disjoint* higher-kinded instances: `Functor` over `Duo`'s
+// first slot with the second fixed to `Int` vs `Bool` never both match one
+// ground type, so both register (with distinct mangled method names).
+
+type Duo<A, B> = Two(A, B)
+
+impl Functor for Duo<_, Int> {
+    def fmap<A, B>(x: Duo<A, Int>, f: A -> B): Duo<B, Int> := match x { Duo#Two(a, n) => Duo#Two(f(a), n) }
+}
+
+impl Functor for Duo<_, Bool> {
+    def fmap<A, B>(x: Duo<A, Bool>, f: A -> B): Duo<B, Bool> := match x { Duo#Two(a, b) => Duo#Two(f(a), b) }
+}
+
+def main(): Int := 0

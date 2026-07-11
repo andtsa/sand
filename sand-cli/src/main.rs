@@ -19,6 +19,8 @@ pub mod error;
 pub mod fmt;
 pub mod run;
 
+use std::process::ExitCode;
+
 use clap::ArgAction;
 use clap::Parser;
 use clap::Subcommand;
@@ -61,7 +63,7 @@ pub enum SandCommand {
     Run(RunArgs),
 }
 
-fn main() -> Result<(), anyhow::Error> {
+fn main() -> Result<ExitCode, anyhow::Error> {
     let args = SandCLI::parse();
 
     let log_level = match args.verbose {
@@ -87,11 +89,17 @@ fn main() -> Result<(), anyhow::Error> {
     debug!(log_level = ?log_level);
     trace!("args: {args:?}");
 
-    match args.command {
-        SandCommand::Compile(compile_args) => compile(compile_args, args.dry)?,
-        SandCommand::Fmt(fmt_args) => fmt(fmt_args)?,
+    let exit_code = match args.command {
+        SandCommand::Compile(compile_args) => {
+            compile(compile_args, args.dry)?;
+            ExitCode::SUCCESS
+        }
+        SandCommand::Fmt(fmt_args) => {
+            fmt(fmt_args)?;
+            ExitCode::SUCCESS
+        }
         SandCommand::Run(run_args) => run(run_args, args.dry)?,
-    }
+    };
 
-    Ok(())
+    Ok(exit_code)
 }

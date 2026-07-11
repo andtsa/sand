@@ -1,8 +1,11 @@
 //! run the input files with the interpreter
 use std::path::PathBuf;
+use std::process::ExitCode;
 
 use clap::Args;
 use clap::clap_derive::ValueEnum;
+use lang::interpreter::mir_exit_code;
+use lang::interpreter::thir_exit_code;
 use lang::ir_types::mir::MirProgram;
 
 use crate::compile::load_and_check;
@@ -31,7 +34,7 @@ pub struct RunArgs {
     mode: InterpMode,
 }
 
-pub fn run(args: RunArgs, dry_run: bool) -> Result<(), CliError> {
+pub fn run(args: RunArgs, dry_run: bool) -> Result<ExitCode, CliError> {
     let span = tracing::info_span!("run subcommand");
     let _g = span.enter();
 
@@ -39,21 +42,21 @@ pub fn run(args: RunArgs, dry_run: bool) -> Result<(), CliError> {
 
     if args.print_ast {
         println!("{}", ast.dump(&ctx));
-        return Ok(());
+        return Ok(ExitCode::SUCCESS);
     }
     if dry_run {
-        return Ok(());
+        return Ok(ExitCode::SUCCESS);
     }
 
     // run code
     if args.mode == InterpMode::Hir {
-        ast.interpret(&ctx)?;
-        return Ok(());
+        let expr = ast.interpret(&ctx)?;
+        return Ok(thir_exit_code(&expr));
     }
 
     let mir = MirProgram::from_typed_program(&ast, &ctx);
 
-    mir.interpret(&ctx)?;
+    let val = mir.interpret(&ctx)?;
 
-    Ok(())
+    Ok(mir_exit_code(&val))
 }

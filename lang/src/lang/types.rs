@@ -208,6 +208,16 @@ pub enum TyKind<'tcx> {
     /// constructor for `F` (its `Subst` entry is the bare `Enum(er)`), turning
     /// `F<A>` into `App(er, A)`. Like `Param`, it never survives mono.
     ParamApp(TypeParamId, &'tcx [Ty<'tcx>]),
+    /// A **hole** in a partial application (Calculus §4.5): the `_` in an
+    /// abstraction head such as `Result<_, E>` (`Ty::App(er, [Hole(0), E])`).
+    /// The `u32` is the hole's positional index (`0..m-1`, in left-to-right
+    /// order of the `_`s), matching the argument order of the higher-kinded
+    /// parameter it abstracts. A hole is *only* well-formed inside a
+    /// constructor-abstraction value — the binding of a higher-kinded parameter
+    /// and the head of an `impl` — and is removed by β-reduction (§4.5) before
+    /// a value's type is formed, so it never survives into
+    /// monomorphisation.
+    Hole(u32),
     /// A function type `A -> B`: a first-class function / closure value. Unary
     /// (multi-argument via tuple or currying). The [`FnMode`] records how a
     /// call uses the closure's captured environment: sand's single
@@ -285,6 +295,25 @@ impl<'tcx> Ty<'tcx> {
             TyKind::Region(t, _) => t.has_param(),
             TyKind::Ref(_, t) | TyKind::RefMut(_, t) => t.has_param(),
             TyKind::Ptr(t) => t.has_param(),
+            _ => false,
+        }
+    }
+
+    /// `true` if this type contains a constructor **hole** (`TyKind::Hole`),
+    /// i.e. it is (or embeds) a partial application (Calculus §4.5). Used to
+    /// assert that no hole leaks past instance elaboration into a value type or
+    /// monomorphisation.
+    pub fn has_hole(self) -> bool {
+        match self.kind() {
+            TyKind::Hole(_) => true,
+            TyKind::Fn(a, r, _, env) => a.has_hole() || r.has_hole() || env.has_hole(),
+            TyKind::Tuple(elems) => elems.iter().any(|t| t.has_hole()),
+            TyKind::App(_, args, _) | TyKind::ParamApp(_, args) => {
+                args.iter().any(|t| t.has_hole())
+            }
+            TyKind::Region(t, _) | TyKind::Ref(_, t) | TyKind::RefMut(_, t) | TyKind::Ptr(t) => {
+                t.has_hole()
+            }
             _ => false,
         }
     }
@@ -507,6 +536,7 @@ impl fmt::Display for Ty<'_> {
             TyKind::Top => write!(f, "Top"),
             TyKind::Enum(er) => write!(f, "Enum({:?})", er),
             TyKind::Param(id) => write!(f, "Param({})", id.0),
+            TyKind::Hole(i) => write!(f, "_{i}"),
             TyKind::ParamApp(id, args) => {
                 write!(f, "Param({})<", id.0)?;
                 for (i, t) in args.iter().enumerate() {
